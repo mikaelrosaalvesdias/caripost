@@ -1,0 +1,4913 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MetaPorn — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0a14;
+      --bg2: #111120;
+      --card: #13132a;
+      --card2: #1a1a35;
+      --text: #e8e8ff;
+      --muted: #8585a8;
+      --line: #2a2a45;
+      --line2: #3a3a55;
+      --pri: #ff1744;
+      --pri2: #cc1038;
+      --bad: #ff4455;
+      --good: #00e676;
+      --accent: #ff6b6b;
+      --ok: #00e676;
+      --fg: #e8e8ff;
+      --border: #2a2a45;
+      --err: #ff4455;
+    }
+
+    @keyframes fadeSlideUp {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes gradientShift {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    @keyframes indeterminate {
+      0%   { left: -40%; width: 40%; }
+      50%  { left: 30%;  width: 50%; }
+      100% { left: 110%; width: 40%; }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scrollbar-width: thin;
+      scrollbar-color: #ff174440 #0a0a14;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #0a0a14;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #ff174440;
+      border-radius: 8px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #ff174470;
+    }
+
+    body {
+      background: #0a0a14;
+      background-image:
+        radial-gradient(ellipse at 15% 0%, rgba(255, 23, 68, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 85% 100%, rgba(90, 50, 255, 0.04) 0%, transparent 50%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: 'Inter', 'Outfit', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    ::selection {
+      background: #ff174440;
+      color: #fff;
+    }
+
+    /* ── TOPBAR ── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 24px;
+      height: 56px;
+      background: rgba(10, 10, 20, 0.85);
+      backdrop-filter: blur(24px) saturate(1.4);
+      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    .topbar::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 5%, #ff174480 30%, #7c3aed50 70%, transparent 95%);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .logo {
+      font-family: 'Space Grotesk', 'Bebas Neue', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      line-height: 1;
+      color: #e8e8ff;
+    }
+
+    .logo em {
+      color: var(--pri);
+      font-style: normal;
+      text-shadow: 0 0 24px #ff174450;
+    }
+
+    .sub {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      color: var(--muted);
+      text-transform: uppercase;
+      border-left: 1px solid var(--line);
+      padding-left: 10px;
+    }
+
+    .nav {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+    }
+
+    .nav a {
+      color: #8585a8;
+      text-decoration: none;
+      padding: 6px 14px;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      transition: all 0.2s ease;
+    }
+
+    .nav a:hover {
+      color: #e8e8ff;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .nav a.active {
+      color: #fff;
+      font-weight: 600;
+      background: linear-gradient(135deg, #ff1744, #cc1038);
+      box-shadow: 0 3px 14px #ff174430;
+    }
+
+    .nav a.docs {
+      border: 1px solid var(--line);
+      color: #8585a8;
+      margin-left: 4px;
+    }
+
+    .nav a.docs:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: #e8e8ff;
+    }
+
+    .health {
+      font-size: 11px;
+      font-weight: 500;
+      color: #8585a8;
+      padding: 4px 14px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .media-manager-toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      margin-bottom: 12px;
+    }
+
+    .media-manager-bulkbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .media-manager-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .media-manager-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .media-manager-main {
+      flex: 1;
+      min-width: 280px;
+    }
+
+    .media-manager-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: center;
+      min-width: 280px;
+    }
+
+    .media-manager-player {
+      min-height: 320px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.22);
+    }
+
+    .media-manager-status {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── CONTAINER ── */
+    .container {
+      max-width: 1300px;
+      margin: 0 auto;
+      padding: 28px 24px 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── CARDS ── */
+    .card {
+      background: rgba(19, 19, 42, 0.75);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+      transition: border-color 0.25s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .card+.card {
+      margin-top: 12px;
+    }
+
+    .split > .card {
+      margin-top: 0;
+    }
+
+    .card h2 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--pri);
+      margin-bottom: 16px;
+    }
+
+    .card h3 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #8585a8;
+      margin: 14px 0 6px;
+    }
+
+    .cardSub {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .cardSub summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: #8585a8;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: color 0.15s;
+    }
+
+    .cardSub summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .cardSub summary::before {
+      content: '▶';
+      font-size: 9px;
+      transition: transform 0.2s;
+    }
+
+    details[open]>.cardSub>summary::before {
+      transform: rotate(90deg);
+    }
+
+    .cardSub summary:hover {
+      color: #e8e8ff;
+    }
+
+    /* ── PAGE TITLES ── */
+    .page>h1 {
+      font-family: 'Space Grotesk', 'Bebas Neue', sans-serif;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #e8e8ff;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 2px solid #ff174430;
+    }
+
+    /* ── FORMS ── */
+    label {
+      display: block;
+      margin: 10px 0 5px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #8585a8;
+    }
+
+    /* label used as .btn must behave as button */
+    label.btn {
+      display: inline-flex;
+      margin: 0;
+      font-size: 13px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+      color: #c0c0dd;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(10, 10, 20, 0.7);
+      color: #e8e8ff;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-family: 'Inter', 'Outfit', sans-serif;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    /* Hidden file inputs inside buttons */
+    input[type="file"][style*="display:none"],
+    input[type="file"][style*="display: none"] {
+      width: auto;
+    }
+
+    .btn input[type="file"] {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+      opacity: 0;
+    }
+
+    .check-item input[type="checkbox"] {
+      width: auto;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: var(--pri);
+      box-shadow: 0 0 0 3px #ff174418;
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: #55557a;
+    }
+
+    select option {
+      background: #13132a;
+      color: #e8e8ff;
+    }
+
+    textarea {
+      resize: vertical;
+    }
+
+    /* ── LAYOUT ── */
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    .row.wrap {
+      flex-wrap: wrap;
+    }
+
+    .col {
+      min-width: 100px;
+    }
+
+    .col.grow,
+    .grow {
+      flex: 1;
+      min-width: 90px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 960px) {
+      .split {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ── BUTTONS ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+      color: #c0c0dd;
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: 'Inter', 'Outfit', sans-serif;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s ease;
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--line2);
+      color: #e8e8ff;
+      transform: translateY(-1px);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .btn.primary {
+      background: linear-gradient(135deg, #ff1744, #cc1038);
+      border-color: transparent;
+      color: #fff;
+      font-weight: 600;
+      box-shadow: 0 3px 14px #ff174428;
+    }
+
+    .btn.primary:hover {
+      box-shadow: 0 5px 22px #ff174440;
+      transform: translateY(-2px);
+    }
+
+    /* ── BADGES ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 11px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--line);
+      color: #c0c0dd;
+    }
+
+    .badge.good {
+      background: #00e67615;
+      border-color: #00e67630;
+      color: #00e676;
+    }
+
+    .badge.bad {
+      background: #ff174415;
+      border-color: #ff174430;
+      color: #ff4455;
+    }
+
+    /* ── TOKEN ROWS ── */
+    .tokenRow {
+      display: grid;
+      grid-template-columns: 110px 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 13px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .tokenRow:last-child {
+      border-bottom: none;
+    }
+
+    /* ── ITEMS ── */
+    .item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 14px;
+      border-radius: 8px;
+      background: rgba(10, 10, 20, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      margin-bottom: 4px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .item:hover {
+      border-color: var(--line2);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* ── HINT ── */
+    .hint {
+      color: #8585a8;
+      font-size: 12px;
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+
+    /* ── AJUDA FLUTUANTE ── */
+    .help-float {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .help-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      background: linear-gradient(135deg, #7c3aed, #5b21b6);
+      color: #fff;
+      border: none;
+      border-radius: 50px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4);
+      transition: all 0.3s ease;
+      white-space: nowrap;
+    }
+
+    .help-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 28px rgba(124, 58, 237, 0.6);
+    }
+
+    .help-btn svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .help-panel {
+      position: fixed;
+      bottom: 80px;
+      right: 24px;
+      width: 420px;
+      max-width: calc(100vw - 48px);
+      max-height: calc(100vh - 120px);
+      background: rgba(19, 19, 42, 0.98);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(124, 58, 237, 0.3);
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+      display: none;
+      z-index: 9998;
+      animation: fadeSlideUp 0.3s ease;
+    }
+
+    .help-panel.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .help-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(91, 33, 182, 0.1));
+      border-bottom: 1px solid rgba(124, 58, 237, 0.2);
+    }
+
+    .help-panel-header h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: #e8e8ff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .help-panel-header h3 svg {
+      width: 20px;
+      height: 20px;
+      color: #a78bfa;
+    }
+
+    .help-panel-close {
+      background: none;
+      border: none;
+      color: #8585a8;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+
+    .help-panel-close:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e8e8ff;
+    }
+
+    .help-panel-content {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .help-section {
+      margin-bottom: 20px;
+    }
+
+    .help-section:last-child {
+      margin-bottom: 0;
+    }
+
+    .help-section h4 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #a78bfa;
+      margin: 0 0 10px 0;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(124, 58, 237, 0.2);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .help-section h4 svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .help-section p, .help-section li {
+      font-size: 13px;
+      line-height: 1.6;
+      color: #c0c0dd;
+      margin-bottom: 8px;
+    }
+
+    .help-section ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .help-section li {
+      margin-bottom: 6px;
+    }
+
+    .help-section .warning {
+      background: rgba(255, 23, 68, 0.15);
+      border: 1px solid rgba(255, 23, 68, 0.3);
+      border-radius: 8px;
+      padding: 12px;
+      margin: 10px 0;
+    }
+
+    .help-section .warning p {
+      color: #ff6b6b;
+      margin: 0;
+    }
+
+    .help-section .tip {
+      background: rgba(0, 230, 118, 0.1);
+      border: 1px solid rgba(0, 230, 118, 0.2);
+      border-radius: 8px;
+      padding: 12px;
+      margin: 10px 0;
+    }
+
+    .help-section .tip p {
+      color: #00e676;
+      margin: 0;
+    }
+
+    .help-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin: 10px 0;
+    }
+
+    .help-table th, .help-table td {
+      padding: 8px 10px;
+      text-align: left;
+      border: 1px solid rgba(124, 58, 237, 0.2);
+    }
+
+    .help-table th {
+      background: rgba(124, 58, 237, 0.15);
+      color: #a78bfa;
+      font-weight: 600;
+    }
+
+    .help-table td {
+      color: #c0c0dd;
+    }
+
+    .help-code {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #fbbf24;
+    }
+
+    @keyframes fadeSlideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Ajuste para páginas com overflow */
+    .page {
+      position: relative;
+    }
+
+    /* ── PROGRESS BAR ── */
+    .op-progress-wrap {
+      display: none;
+      margin-top: 10px;
+    }
+
+    .op-progress-track {
+      height: 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .op-progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #ff1744, #ff6090, #ff1744);
+      background-size: 200% 100%;
+      animation: gradientShift 2s ease infinite;
+      transition: width 0.35s ease;
+    }
+
+    .op-progress-label {
+      font-size: 11px;
+      color: #8585a8;
+      margin-top: 4px;
+    }
+
+    /* ── COMPARE CONFIG GRID ── */
+    .cmp-cfg-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 180px;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    @media (max-width: 720px) {
+      .cmp-cfg-grid { grid-template-columns: 1fr 1fr; }
+      .cmp-cfg-params { grid-column: 1 / -1; }
+    }
+    .cmp-cfg-col h3, .cmp-cfg-params h3 {
+      margin: 0 0 10px 0;
+      font-size: 13px;
+      color: var(--muted, #94a3b8);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    /* ── COMPARE PROGRESS BAR ── */
+    .cmp-prog-bar-track {
+      height: 5px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .cmp-prog-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #3b82f6, #7c3aed, #3b82f6);
+      background-size: 200% 100%;
+      animation: cmpBarSlide 1.8s linear infinite;
+      width: 45%;
+      position: absolute;
+      top: 0;
+      left: -50%;
+    }
+    @keyframes cmpBarSlide {
+      0%   { left: -50%; }
+      100% { left: 110%; }
+    }
+    .cmp-prog-providers {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .cmp-prog-provider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .cmp-prog-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #94a3b8;
+      flex-shrink: 0;
+    }
+    .cmp-prog-dot.running {
+      background: #3b82f6;
+      animation: cmpDotPulse .9s ease-in-out infinite alternate;
+    }
+    .cmp-prog-dot.done   { background: #22c55e; animation: none; }
+    .cmp-prog-dot.error  { background: #ef4444; animation: none; }
+    @keyframes cmpDotPulse {
+      from { opacity: .3; transform: scale(.8); }
+      to   { opacity: 1;  transform: scale(1.2); }
+    }
+    .cmp-prog-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .cmp-prog-name {
+      font-size: 12px;
+      font-weight: 700;
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cmp-prog-detail {
+      font-size: 11px;
+      color: #64748b;
+    }
+    .cmp-prog-tokens {
+      font-size: 12px;
+      font-weight: 700;
+      color: #3b82f6;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .cmp-prog-elapsed {
+      text-align: right;
+      font-size: 11px;
+      color: #475569;
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── OUTPUT ── */
+    .output {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: rgba(10, 10, 20, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      padding: 14px;
+      min-height: 120px;
+      max-height: 520px;
+      overflow: auto;
+      font-family: 'Inter', 'Outfit', sans-serif;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #e8e8ff;
+    }
+
+    /* ── CLICKABLE FRAME ── */
+    .clickable-frame {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .clickable-frame:hover {
+      border-color: var(--pri);
+      box-shadow: 0 0 14px #ff174420;
+    }
+
+    /* ── HIDDEN ── */
+    .hidden {
+      display: none !important;
+    }
+
+    /* ── TABS ── */
+    .tabs {
+      display: flex;
+      margin: 14px 0 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .tab {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #8585a8;
+      padding: 7px 14px;
+      margin-bottom: -1px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: 'Inter', 'Outfit', sans-serif;
+      transition: all 0.2s ease;
+    }
+
+    .tab:hover {
+      color: #e8e8ff;
+    }
+
+    .tab.active {
+      color: #e8e8ff;
+      border-bottom-color: var(--pri);
+    }
+
+    /* ── PAGES ── */
+    .page {
+      display: none;
+    }
+
+    .page.active {
+      display: block;
+      animation: fadeSlideUp 0.3s ease both;
+    }
+
+    /* ── CHECKS ── */
+    .checks {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #c0c0dd;
+      text-transform: none;
+      letter-spacing: 0;
+      margin: 0;
+    }
+
+    .check-item input {
+      width: auto;
+      accent-color: var(--pri);
+    }
+
+    /* ── CHANGELOG ── */
+    .changelog {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .cl-entry {
+      border-left: 2px solid var(--line);
+      padding-left: 14px;
+    }
+
+    .cl-entry.latest {
+      border-color: var(--pri);
+    }
+
+    .cl-version {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #8585a8;
+      margin-bottom: 2px;
+    }
+
+    .cl-entry.latest .cl-version {
+      color: #e8e8ff;
+    }
+
+    .cl-date {
+      font-size: 11px;
+      color: #8585a8;
+      margin-bottom: 6px;
+    }
+
+    .cl-items {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .cl-items li {
+      font-size: 13px;
+      color: #8585a8;
+      padding-left: 20px;
+      position: relative;
+    }
+
+    .cl-items li::before {
+      content: "·";
+      position: absolute;
+      left: 0;
+    }
+
+    .cl-items li.fix::before {
+      content: "🐛";
+      font-size: 11px;
+    }
+
+    .cl-items li.feat::before {
+      content: "✨";
+      font-size: 11px;
+    }
+
+    .cl-items li.chore::before {
+      content: "⚙️";
+      font-size: 11px;
+    }
+
+    .version-badge {
+      position: fixed;
+      left: 14px;
+      bottom: 14px;
+      font-size: 10px;
+      font-family: monospace;
+      color: #55557a;
+      z-index: 300;
+      pointer-events: none;
+    }
+
+    /* ── TOAST ── */
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      max-width: 380px;
+      padding: 13px 18px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(19, 19, 42, 0.92);
+      backdrop-filter: blur(20px);
+      color: #e8e8ff;
+      font-size: 13px;
+      z-index: 400;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      animation: fadeSlideUp 0.25s ease both;
+    }
+
+    .toast.good {
+      border-color: #00e67635;
+    }
+
+    .toast.bad {
+      border-color: #ff174435;
+    }
+
+    /* ── RUNS LAYOUT ── */
+    .runs-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    @media (max-width: 860px) {
+      .runs-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .runs-sidebar {
+      position: sticky;
+      top: 68px;
+      max-height: calc(100vh - 88px);
+      overflow-y: auto;
+    }
+
+    .run-item {
+      padding: 11px 12px;
+      border-radius: 8px;
+      background: rgba(10, 10, 20, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      margin-bottom: 4px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .run-item:hover {
+      border-color: var(--line2);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .run-item.active {
+      border-color: var(--pri);
+      background: #ff174410;
+      box-shadow: 0 0 12px #ff174418;
+    }
+
+    .run-item-id {
+      font-size: 11px;
+      font-family: monospace;
+      color: #8585a8;
+    }
+
+    .run-item-date {
+      font-size: 11px;
+      color: #8585a8;
+    }
+
+    .run-item-snippet {
+      font-size: 12px;
+      color: #c0c0dd;
+      margin-top: 3px;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .run-item-status {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-top: 3px;
+    }
+
+    .run-item-status.ok {
+      color: #00e676;
+    }
+
+    .run-item-status.err {
+      color: #ff4455;
+    }
+
+    .run-detail-empty {
+      padding: 60px 20px;
+      text-align: center;
+      color: #8585a8;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+    }
+
+    .detail-section {
+      margin-bottom: 12px;
+    }
+
+    .frames-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .frames-grid img {
+      width: 100%;
+      height: 84px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .frames-grid img:hover {
+      border-color: var(--pri);
+      box-shadow: 0 0 10px #ff174420;
+      transform: scale(1.02);
+    }
+
+    .tag-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--line);
+      color: #8585a8;
+    }
+
+    /* ── REFERENCE CARDS ── */
+    .refs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 10px;
+    }
+
+    .ref-card {
+      background: rgba(19, 19, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.25s ease;
+    }
+
+    .ref-card.deselected {
+      opacity: .35;
+    }
+
+    .ref-card:not(.deselected):hover {
+      border-color: var(--line2);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    }
+
+    .ref-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px 0;
+    }
+
+    .ref-checkbox-wrap {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .ref-checkbox-wrap input[type=checkbox] {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--pri);
+      cursor: pointer;
+    }
+
+    .ref-ext-link {
+      font-size: 12px;
+      color: #8585a8;
+      text-decoration: none;
+      padding: 2px 4px;
+      border-radius: 4px;
+      transition: color 0.15s;
+    }
+
+    .ref-ext-link:hover {
+      color: #e8e8ff;
+    }
+
+    .ref-media {
+      position: relative;
+      cursor: pointer;
+      background: #000;
+      margin: 6px 10px 0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .ref-thumb {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+    }
+
+    .ref-play-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, .5);
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+    }
+
+    .ref-media:hover .ref-play-overlay {
+      opacity: 1;
+    }
+
+    .ref-play-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--pri);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: #fff;
+      box-shadow: 0 3px 12px #ff174440;
+    }
+
+    .ref-body {
+      padding: 8px 10px 10px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ref-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: #c0c0dd;
+      text-decoration: none;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+
+    .ref-title:hover {
+      color: #e8e8ff;
+    }
+
+    .ref-meta {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+
+    .ref-meta span {
+      font-size: 11px;
+      color: #8585a8;
+    }
+
+    .ref-tags {
+      font-size: 11px;
+      color: #8585a8;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .refs-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .refs-actions h2 {
+      margin: 0;
+      flex: 1;
+    }
+
+    /* ── CRIAÇÃO ── */
+    .criacao-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    @media (max-width: 860px) {
+      .criacao-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .criacao-sidebar {
+      position: sticky;
+      top: 68px;
+      max-height: calc(100vh - 88px);
+      overflow-y: auto;
+    }
+
+    .criacao-run-item {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(10, 10, 20, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      margin-bottom: 4px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .criacao-run-item:hover {
+      border-color: var(--line2);
+    }
+
+    .criacao-run-item.active {
+      border-color: var(--pri);
+      background: #ff174410;
+    }
+
+    .criacao-run-thumb {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      border-radius: 6px;
+      display: block;
+      margin-bottom: 5px;
+      background: #0a0a14;
+    }
+
+    .criacao-run-id {
+      font-size: 11px;
+      color: #8585a8;
+      font-family: monospace;
+    }
+
+    .criacao-run-date {
+      font-size: 11px;
+      color: #8585a8;
+    }
+
+    .post-thumb-wrap {
+      position: relative;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .post-thumb-img {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+    }
+
+    .post-thumb-badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: linear-gradient(135deg, #ff1744, #cc1038);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 5px;
+    }
+
+    .post-logo-canvas {
+      border-radius: 6px;
+      max-width: 100%;
+      display: block;
+    }
+
+    .post-field {
+      margin-bottom: 12px;
+    }
+
+    .post-field label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #8585a8;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .post-field .output {
+      max-height: 140px;
+    }
+
+    .post-tags-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .sched-item {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(10, 10, 20, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      margin-bottom: 4px;
+    }
+
+    .sched-status {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .sched-status.pending {
+      color: #ffab00;
+    }
+
+    .sched-status.notified {
+      color: #00e676;
+    }
+
+    .sched-status.cancelled {
+      color: #8585a8;
+    }
+
+    .criacao-empty {
+      color: #8585a8;
+      font-size: 13px;
+      padding: 20px 0;
+      text-align: center;
+    }
+
+    /* ── WIZARD ── */
+    .wizard-progress {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    @media (max-width: 860px) {
+      .wizard-progress {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .wizard-step {
+      border: 1px solid var(--line);
+      background: rgba(10, 10, 20, 0.5);
+      color: #8585a8;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .wizard-step:hover {
+      border-color: var(--line2);
+      color: #c0c0dd;
+    }
+
+    .wizard-step.active {
+      border-color: var(--pri);
+      color: #e8e8ff;
+      background: #ff174410;
+      box-shadow: 0 0 10px #ff174415;
+    }
+
+    .wizard-step.done {
+      border-color: #00e67630;
+      color: #00e676;
+    }
+
+    .wizard-nav {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .wizard-frames-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .wizard-frame {
+      display: block;
+      width: 100%;
+      border: 2px solid transparent;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      padding: 0;
+      background: rgba(10, 10, 20, 0.5);
+      transition: all 0.2s ease;
+    }
+
+    .wizard-frame:hover {
+      border-color: var(--line2);
+    }
+
+    .wizard-frame.selected {
+      border-color: var(--pri);
+      box-shadow: 0 0 10px #ff174420;
+    }
+
+    .wizard-frame img {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      display: block;
+    }
+
+    .wizard-frame span {
+      display: block;
+      font-size: 10px;
+      padding: 3px 6px;
+      color: #8585a8;
+    }
+
+    .logo-preview-wrap {
+      position: relative;
+      width: 100%;
+      max-width: 500px;
+      aspect-ratio: 16/9;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: repeating-conic-gradient(#13132a 0% 25%, #1a1a35 0% 50%) 0 0 / 20px 20px;
+      user-select: none;
+      touch-action: none;
+    }
+
+    .logo-preview-bg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      transition: opacity .2s;
+    }
+
+    .logo-preview-bg.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .logo-studio {
+      display: grid;
+      grid-template-columns: minmax(360px, 1.25fr) minmax(320px, .75fr);
+      gap: 14px;
+      margin-top: 16px;
+      align-items: stretch;
+    }
+
+    .logo-studio.is-disabled {
+      opacity: .68;
+    }
+
+    .logo-stage-card,
+    .logo-control-card {
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at 20% 10%, rgba(0, 229, 255, .10), transparent 34%),
+        radial-gradient(circle at 90% 70%, rgba(255, 23, 68, .10), transparent 32%),
+        rgba(13, 13, 30, .82);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, .28);
+    }
+
+    .logo-stage-card {
+      padding: 14px;
+    }
+
+    .logo-control-card {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .logo-studio-head,
+    .logo-control-head,
+    .logo-stage-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .logo-studio-head strong,
+    .logo-control-head strong {
+      display: block;
+      color: #f2f4ff;
+      font-family: 'Space Grotesk', sans-serif;
+      letter-spacing: .2px;
+    }
+
+    .logo-studio-head span,
+    .logo-control-head span,
+    .logo-stage-footer span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+
+    .logo-stage-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .logo-stage-actions .btn {
+      font-size: 11px;
+      padding: 4px 9px;
+    }
+
+    .logo-stage-preview {
+      max-width: none;
+      margin-top: 12px;
+      border-radius: 16px;
+      border-color: rgba(0, 229, 255, .22);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .035), 0 18px 50px rgba(0, 0, 0, .34);
+    }
+
+    .logo-stage-preview::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(255, 255, 255, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, .045) 1px, transparent 1px);
+      background-size: 33.333% 33.333%;
+      opacity: .45;
+    }
+
+    .logo-stage-footer {
+      margin-top: 9px;
+    }
+
+    .logo-stage-footer #logoXYReadout {
+      color: #9beeff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .logo-control-block {
+      padding: 10px;
+      border: 1px solid rgba(255, 255, 255, .07);
+      border-radius: 14px;
+      background: rgba(4, 4, 16, .42);
+    }
+
+    .logo-control-block > label,
+    .logo-slider-row label {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 0 8px;
+      color: #a9abc8;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .9px;
+    }
+
+    .logo-slider-row label b {
+      color: #9beeff;
+      font-weight: 700;
+    }
+
+    .logo-pos-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .logo-pos-btn,
+    .logo-nudge-btn {
+      border: 1px solid rgba(255, 255, 255, .09);
+      border-radius: 12px;
+      color: #dfe6ff;
+      background: linear-gradient(180deg, rgba(35, 36, 60, .92), rgba(16, 17, 34, .9));
+      min-height: 46px;
+      cursor: pointer;
+      transition: transform .12s ease, border-color .12s ease, background .12s ease, box-shadow .12s ease;
+    }
+
+    .logo-pos-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+    }
+
+    .logo-pos-btn b {
+      color: #9beeff;
+      font-size: 17px;
+      line-height: 1;
+    }
+
+    .logo-pos-btn span,
+    .logo-nudge-btn {
+      font-size: 10.5px;
+      font-weight: 650;
+    }
+
+    .logo-pos-btn:hover:not(:disabled),
+    .logo-nudge-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      border-color: rgba(0, 229, 255, .45);
+      box-shadow: 0 8px 24px rgba(0, 229, 255, .08);
+    }
+
+    .logo-pos-btn.active,
+    .logo-nudge-btn.strong {
+      border-color: rgba(0, 229, 255, .7);
+      background: linear-gradient(180deg, rgba(0, 229, 255, .24), rgba(20, 27, 52, .95));
+      color: #ffffff;
+    }
+
+    .logo-pos-btn:disabled,
+    .logo-nudge-btn:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+    }
+
+    .logo-nudge-pad {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .logo-nudge-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 7px;
+    }
+
+    .logo-nudge-row .btn {
+      min-width: 0;
+      padding: 7px 8px;
+      font-size: 11px;
+    }
+
+    .logo-field-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .logo-field-grid span {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .7px;
+    }
+
+    .logo-field-grid input {
+      width: 100%;
+      height: 38px;
+      padding: 0 9px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, .10);
+      background: rgba(3, 3, 12, .72);
+      color: #f2f4ff;
+      font-weight: 700;
+    }
+
+    .logo-slider-row + .logo-slider-row {
+      margin-top: 12px;
+    }
+
+    .logo-slider-row input[type="range"] {
+      width: 100%;
+      accent-color: #00e5ff;
+    }
+
+    @media (max-width: 1100px) {
+      .logo-studio {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .logo-field-grid,
+      .logo-nudge-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    /* ── SRT EDITOR ── */
+    .srt-editor-wrap {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: rgba(10, 10, 20, 0.5);
+      margin-top: 10px;
+    }
+
+    .srt-editor-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      background: rgba(19, 19, 42, 0.6);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      flex-wrap: wrap;
+    }
+
+    .srt-editor-toolbar .srt-stats {
+      font-size: 11px;
+      color: #8585a8;
+      margin-left: auto;
+    }
+
+    .srt-find-panel {
+      display: none;
+      padding: 8px 10px;
+      background: rgba(10, 10, 20, 0.5);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .srt-find-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+
+    .srt-find-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .srt-find-input {
+      flex: 1;
+      min-width: 150px;
+      max-width: 260px;
+      padding: 4px 8px;
+      background: rgba(19, 19, 42, 0.6);
+      color: #e8e8ff;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      font-size: 13px;
+      font-family: monospace;
+    }
+
+    .srt-find-input:focus {
+      outline: none;
+      border-color: var(--pri);
+    }
+
+    .srt-match-count {
+      font-size: 11px;
+      color: #8585a8;
+      min-width: 50px;
+      text-align: center;
+    }
+
+    .srt-match-count.no-match {
+      color: var(--bad);
+    }
+
+    .srt-find-opt {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #8585a8;
+      cursor: pointer;
+    }
+
+    .srt-editor-textarea {
+      width: 100%;
+      min-height: 240px;
+      background: transparent;
+      color: #e8e8ff;
+      border: none;
+      outline: none;
+      padding: 10px 12px;
+      font-family: 'Courier New', monospace;
+      font-size: 12.5px;
+      line-height: 1.55;
+      resize: vertical;
+      display: block;
+    }
+
+    .srt-statusbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 10px;
+      background: rgba(19, 19, 42, 0.6);
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 10.5px;
+      color: #8585a8;
+    }
+
+    .logo-preview-overlay {
+      position: absolute;
+      width: 20%;
+      left: 0;
+      top: 0;
+      pointer-events: auto;
+      cursor: grab;
+      will-change: transform, width, opacity;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .logo-preview-overlay:active {
+      cursor: grabbing;
+    }
+
+    .logo-preview-overlay.composited-proxy {
+      opacity: 0 !important;
+    }
+
+    .burn-logo-preview-overlay.active,
+    .teaser-logo-preview-overlay.active {
+      outline: 2px solid #ff1744cc;
+      outline-offset: 1px;
+    }
+
+    .teaser-logo-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: rgba(10, 10, 20, 0.5);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .teaser-logo-item.active {
+      border-color: var(--pri);
+      background: #ff174410;
+    }
+
+    @media (max-width: 860px) {
+      .logo-preview-wrap {
+        max-width: 100%;
+      }
+    }
+
+    /* ── XV PLAYER ── */
+    .xv-player-wrap {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16/9;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 12px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .xv-player-wrap video,
+    .xv-player-wrap img:not(.xv-logo-overlay) {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .xv-logo-overlay {
+      position: absolute;
+      bottom: 3%;
+      right: 2%;
+      width: 18%;
+      opacity: .85;
+      pointer-events: none;
+      display: none;
+    }
+
+    .xv-no-video-badge {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, .55);
+      color: #8585a8;
+      font-size: 13px;
+      text-align: center;
+      padding: 16px;
+    }
+
+    .xv-mock-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: #e8e8ff;
+    }
+
+    .xv-mock-meta {
+      font-size: 12px;
+      color: #8585a8;
+      margin-bottom: 8px;
+    }
+
+    .xv-mock-desc {
+      font-size: 13px;
+      color: #c0c0dd;
+      line-height: 1.6;
+      margin-bottom: 10px;
+      max-height: 100px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .xv-mock-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .xv-mock-tags a {
+      font-size: 11px;
+      color: var(--pri);
+      background: #ff174410;
+      border: 1px solid #ff174425;
+      border-radius: 5px;
+      padding: 2px 8px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+
+    .xv-mock-tags a:hover {
+      background: #ff174420;
+    }
+
+    .xv-section-label {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--pri);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .list .item {
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(10, 10, 20, 0.5);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    @media (max-width: 768px) {
+      .topbar {
+        padding: 0 14px;
+        height: 50px;
+      }
+
+      .logo {
+        font-size: 18px !important;
+      }
+
+      .nav a {
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+
+      .container {
+        padding: 18px 14px 70px;
+      }
+
+      .card {
+        padding: 16px;
+      }
+
+      .tokenRow {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ── APP REDESIGN ── */
+    :root {
+      --bg: #071224;
+      --bg2: #0c1830;
+      --card: rgba(18, 30, 56, 0.76);
+      --card2: rgba(24, 39, 70, 0.88);
+      --text: #edf4ff;
+      --muted: #8fa9cd;
+      --line: rgba(138, 170, 221, 0.14);
+      --line2: rgba(122, 203, 255, 0.28);
+      --pri: #20d5ff;
+      --pri2: #0fb7f3;
+      --accent: #8d63ff;
+      --good: #2fda9b;
+      --ok: #2fda9b;
+      --bad: #ff5f7d;
+      --err: #ff5f7d;
+      --border: rgba(138, 170, 221, 0.14);
+      --shadow-app: 0 28px 90px rgba(0, 0, 0, 0.36);
+    }
+
+    body {
+      background:
+        radial-gradient(circle at 8% 10%, rgba(34, 183, 255, 0.12) 0%, transparent 24%),
+        radial-gradient(circle at 86% 16%, rgba(133, 74, 255, 0.12) 0%, transparent 28%),
+        radial-gradient(circle at 50% 120%, rgba(61, 32, 130, 0.18) 0%, transparent 36%),
+        linear-gradient(180deg, #071224 0%, #050c1c 100%);
+      color: var(--text);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, transparent 0%, rgba(110, 157, 255, 0.035) 50%, transparent 100%),
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0 1px, transparent 1px 4px);
+      opacity: 0.3;
+      mix-blend-mode: screen;
+      z-index: -1;
+    }
+
+    body.sidebar-open {
+      overflow: hidden;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr);
+      min-height: 100vh;
+      position: relative;
+    }
+
+    .sidebar-backdrop {
+      display: none;
+    }
+
+    .app-sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px 18px;
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      background:
+        linear-gradient(180deg, rgba(13, 23, 43, 0.95) 0%, rgba(8, 16, 31, 0.98) 100%);
+      backdrop-filter: blur(20px) saturate(1.1);
+      -webkit-backdrop-filter: blur(20px) saturate(1.1);
+      box-shadow: inset -1px 0 0 rgba(255,255,255,0.03);
+      overflow-y: auto;
+      z-index: 120;
+    }
+
+    .sidebar-header {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 8px 10px 12px;
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sidebar-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 34px;
+      line-height: 1;
+      letter-spacing: -4px;
+      background:
+        linear-gradient(135deg, rgba(47, 229, 255, 0.18), rgba(141, 99, 255, 0.18)),
+        rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: transparent;
+      -webkit-background-clip: padding-box, border-box;
+      box-shadow:
+        0 0 24px rgba(47, 229, 255, 0.12),
+        inset 0 1px 0 rgba(255,255,255,0.1);
+      position: relative;
+    }
+
+    .sidebar-mark::before {
+      content: "∞";
+      background: linear-gradient(135deg, #2fe5ff 0%, #4db8ff 36%, #8d63ff 70%, #bf62ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      text-shadow: 0 0 18px rgba(74, 203, 255, 0.22);
+    }
+
+    .sidebar-logo {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -1px;
+      color: #f7fbff;
+      line-height: 1.05;
+    }
+
+    .sidebar-sub {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .sidebar-search-wrap {
+      position: relative;
+    }
+
+    .sidebar-search {
+      width: 100%;
+      height: 42px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(145, 177, 231, 0.14);
+      background: rgba(255,255,255,0.035);
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .sidebar-search::placeholder {
+      color: rgba(196, 212, 240, 0.42);
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding: 6px 10px 18px;
+    }
+
+    .nav-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .nav-section-label {
+      padding: 0 8px;
+      color: rgba(164, 185, 223, 0.72);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+    }
+
+    .nav a {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 11px 12px;
+      border-radius: 14px;
+      border: 1px solid transparent;
+      color: rgba(219, 231, 255, 0.82);
+      text-decoration: none;
+      background: transparent;
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+    }
+
+    .nav a:hover {
+      color: #f6fbff;
+      background: rgba(255, 255, 255, 0.045);
+      border-color: rgba(125, 172, 255, 0.12);
+      transform: translateX(2px);
+    }
+
+    .nav a.active {
+      color: #ffffff;
+      background:
+        linear-gradient(135deg, rgba(27, 214, 255, 0.22) 0%, rgba(103, 83, 255, 0.16) 100%);
+      border-color: rgba(64, 219, 255, 0.34);
+      box-shadow:
+        0 10px 28px rgba(17, 34, 66, 0.34),
+        inset 0 1px 0 rgba(255,255,255,0.1);
+      transform: translateX(0);
+    }
+
+    .nav-icon {
+      flex: 0 0 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 1px;
+      color: rgba(95, 228, 255, 0.92);
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .nav a.active .nav-icon {
+      color: #cfffff;
+      text-shadow: 0 0 18px rgba(64, 219, 255, 0.28);
+    }
+
+    .nav-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .nav-title {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .nav-caption {
+      color: rgba(154, 177, 218, 0.7);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .sidebar-docs,
+    .sidebar-version {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 42px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 12px;
+    }
+
+    .sidebar-docs {
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+    }
+
+    .sidebar-docs:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(64, 219, 255, 0.24);
+      transform: translateY(-1px);
+    }
+
+    .sidebar-version {
+      color: var(--muted);
+    }
+
+    .app-main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 110;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 76px;
+      padding: 16px 28px;
+      background: rgba(7, 16, 33, 0.72);
+      backdrop-filter: blur(22px) saturate(1.1);
+      -webkit-backdrop-filter: blur(22px) saturate(1.1);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: 0 6px 28px rgba(0, 0, 0, 0.18);
+    }
+
+    .topbar::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, rgba(38, 205, 255, 0.36) 35%, rgba(129, 88, 255, 0.28) 68%, transparent 100%);
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .sidebar-toggle {
+      display: none;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .topbar-context {
+      min-width: 0;
+    }
+
+    .topbar-eyebrow {
+      color: rgba(156, 181, 228, 0.76);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      margin-bottom: 4px;
+    }
+
+    .topbar-title {
+      color: #f7fbff;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.55rem;
+      font-weight: 700;
+      letter-spacing: -0.6px;
+      line-height: 1.05;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .right {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .health {
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .session-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    .session-logout {
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,95,125,0.24);
+      background: rgba(255,95,125,0.08);
+      color: #ffd1da;
+      font-size: .78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.18s ease, border-color 0.18s ease;
+    }
+
+    .session-logout:hover {
+      background: rgba(255,95,125,0.14);
+      border-color: rgba(255,95,125,0.36);
+    }
+
+    .container {
+      max-width: none;
+      margin: 0;
+      padding: 24px 28px 86px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .page > h1 {
+      margin-bottom: 12px;
+      padding-bottom: 0;
+      border-bottom: 0;
+      color: rgba(154, 179, 224, 0.8);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+    }
+
+    .card {
+      background:
+        linear-gradient(180deg, rgba(20, 31, 58, 0.84) 0%, rgba(13, 23, 45, 0.86) 100%);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: var(--shadow-app);
+      backdrop-filter: blur(18px) saturate(1.08);
+      -webkit-backdrop-filter: blur(18px) saturate(1.08);
+    }
+
+    .card:hover {
+      border-color: rgba(64, 219, 255, 0.14);
+    }
+
+    .card h2 {
+      color: #67dfff;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      margin-bottom: 14px;
+    }
+
+    .card h3 {
+      color: rgba(171, 195, 236, 0.82);
+    }
+
+    .cardSub {
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .cardSub summary {
+      color: rgba(171, 195, 236, 0.78);
+    }
+
+    .ae-toggle {
+      padding: 6px 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      color: rgba(180,180,200,0.7);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .ae-toggle:hover {
+      border-color: rgba(100,220,255,0.3);
+      color: #cde;
+    }
+    .ae-toggle.active {
+      border-color: rgba(0, 220, 220, 0.5);
+      background: rgba(0, 220, 220, 0.1);
+      color: #7ef0f0;
+    }
+
+    label {
+      color: rgba(174, 196, 235, 0.86);
+    }
+
+    input,
+    textarea,
+    select {
+      border-radius: 12px;
+      border: 1px solid rgba(151, 176, 224, 0.12);
+      background: rgba(255,255,255,0.035);
+      color: #edf4ff;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: rgba(64, 219, 255, 0.4);
+      box-shadow: 0 0 0 4px rgba(64, 219, 255, 0.08);
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: rgba(175, 192, 224, 0.38);
+    }
+
+    select option {
+      background: #0f1c35;
+      color: #edf4ff;
+    }
+
+    .btn {
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.045);
+      color: #d7e5ff;
+      padding: 9px 18px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .btn:hover {
+      background: rgba(255,255,255,0.07);
+      border-color: rgba(64, 219, 255, 0.16);
+      color: #ffffff;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    .btn.primary {
+      background: linear-gradient(90deg, #17d8f5 0%, #20d5ff 50%, #17d8f5 100%);
+      border-color: transparent;
+      color: #0f2236;
+      box-shadow:
+        0 0 22px rgba(32, 213, 255, 0.22),
+        inset 0 1px 0 rgba(255,255,255,0.26);
+    }
+
+    .btn.primary:hover {
+      box-shadow:
+        0 0 34px rgba(32, 213, 255, 0.3),
+        0 14px 28px rgba(0, 0, 0, 0.26);
+    }
+
+    .badge {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(255,255,255,0.08);
+      color: #d7e5ff;
+    }
+
+    .item,
+    .media-manager-row {
+      border-radius: 14px;
+      border-color: rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .item:hover {
+      border-color: rgba(64, 219, 255, 0.16);
+      background: rgba(255,255,255,0.045);
+    }
+
+    .hint,
+    .op-progress-label {
+      color: var(--muted);
+    }
+
+    .output,
+    .media-manager-player {
+      background: rgba(255,255,255,0.03);
+      border-color: rgba(255,255,255,0.06);
+    }
+
+    .tabs {
+      border-bottom-color: rgba(255,255,255,0.06);
+    }
+
+    .tab {
+      color: rgba(171, 195, 236, 0.76);
+    }
+
+    .tab.active {
+      color: #f7fbff;
+      border-bottom-color: var(--pri);
+    }
+
+    .op-progress-track {
+      background: rgba(255,255,255,0.06);
+    }
+
+    .op-progress-fill {
+      background: linear-gradient(90deg, #13cff9, #8161ff, #13cff9);
+      background-size: 200% 100%;
+    }
+
+    .version-badge {
+      display: none !important;
+    }
+
+    .help-btn {
+      background: linear-gradient(135deg, #18d4ff 0%, #755dff 100%);
+      box-shadow: 0 8px 24px rgba(38, 205, 255, 0.22);
+    }
+
+    .help-btn:hover {
+      box-shadow: 0 12px 32px rgba(38, 205, 255, 0.28);
+    }
+
+    .help-panel {
+      background: rgba(11, 22, 43, 0.96);
+      border-color: rgba(64, 219, 255, 0.16);
+      box-shadow: 0 18px 56px rgba(0, 0, 0, 0.42);
+    }
+
+    .help-panel-header {
+      background: linear-gradient(135deg, rgba(24, 212, 255, 0.14), rgba(117, 93, 255, 0.12));
+      border-bottom-color: rgba(64, 219, 255, 0.12);
+    }
+
+    .help-panel-header h3,
+    .help-section h4 {
+      color: #8ee7ff;
+    }
+
+    @media (max-width: 1080px) {
+      .app-shell {
+        grid-template-columns: 268px minmax(0, 1fr);
+      }
+
+      .container {
+        padding-inline: 22px;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .app-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: min(88vw, 320px);
+        transform: translateX(-104%);
+        transition: transform 0.24s ease;
+        box-shadow: 24px 0 80px rgba(0,0,0,0.36);
+      }
+
+      body.sidebar-open .app-sidebar {
+        transform: translateX(0);
+      }
+
+      .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(3, 8, 20, 0.56);
+        backdrop-filter: blur(3px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        z-index: 115;
+      }
+
+      body.sidebar-open .sidebar-backdrop {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .sidebar-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .topbar {
+        min-height: 70px;
+        padding: 14px 18px;
+      }
+
+      .topbar-title {
+        font-size: 1.28rem;
+      }
+
+      .container {
+        padding: 20px 18px 84px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .right {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .topbar-left {
+        width: 100%;
+      }
+
+      .health,
+      .session-badge {
+        width: auto;
+      }
+    }
+
+    /* ── LOGIN SCREEN ── */
+    #loginScreen {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(61, 32, 130, 0.18) 0%, rgba(7, 13, 31, 0.04) 26%, transparent 34%),
+        radial-gradient(circle at 20% 0%, rgba(42, 175, 255, 0.08) 0%, transparent 28%),
+        radial-gradient(circle at 100% 100%, rgba(112, 52, 255, 0.08) 0%, transparent 34%),
+        linear-gradient(180deg, #081226 0%, #050c1c 100%);
+      isolation: isolate;
+    }
+
+    #loginScreen::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0%, rgba(86, 142, 255, 0.08) 50%, transparent 100%),
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 4px);
+      mix-blend-mode: screen;
+      opacity: 0.18;
+      pointer-events: none;
+    }
+
+    #loginScreen.hidden { display: none; }
+
+    .login-shell {
+      position: relative;
+      width: min(100%, 520px);
+      padding: 36px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-rings {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      width: 560px;
+      height: 560px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, transparent 0 124px, rgba(33, 190, 255, 0.42) 124px 127px, transparent 127px 162px, rgba(146, 67, 255, 0.34) 162px 165px, transparent 165px),
+        radial-gradient(circle, rgba(10, 19, 39, 0.65) 0 118px, transparent 118px);
+      filter: blur(0.3px);
+      opacity: 0.95;
+      pointer-events: none;
+    }
+
+    .login-circuit {
+      position: absolute;
+      width: 440px;
+      height: 440px;
+      opacity: 0.22;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, transparent 0 18%, rgba(87, 132, 255, 0.9) 18% 18.5%, transparent 18.5% 100%),
+        linear-gradient(0deg, transparent 0 28%, rgba(87, 132, 255, 0.85) 28% 28.5%, transparent 28.5% 100%),
+        linear-gradient(90deg, transparent 0 46%, rgba(87, 132, 255, 0.85) 46% 46.5%, transparent 46.5% 100%),
+        linear-gradient(0deg, transparent 0 61%, rgba(87, 132, 255, 0.8) 61% 61.5%, transparent 61.5% 100%),
+        linear-gradient(90deg, transparent 0 70%, rgba(87, 132, 255, 0.78) 70% 70.5%, transparent 70.5% 100%),
+        linear-gradient(0deg, transparent 0 79%, rgba(87, 132, 255, 0.8) 79% 79.5%, transparent 79.5% 100%);
+      border-radius: 34px;
+      filter: drop-shadow(0 0 16px rgba(87, 132, 255, 0.25));
+    }
+
+    .login-circuit.left {
+      left: max(-80px, calc(50% - 520px));
+      top: calc(50% - 210px);
+      transform: rotate(180deg);
+    }
+
+    .login-circuit.right {
+      right: max(-70px, calc(50% - 520px));
+      top: calc(50% - 240px);
+    }
+
+    .login-box {
+      position: relative;
+      width: min(100%, 362px);
+      padding: 30px 34px 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      border-radius: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.42);
+      background:
+        linear-gradient(180deg, rgba(34, 43, 71, 0.82) 0%, rgba(16, 22, 43, 0.9) 100%);
+      box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.56),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        0 0 0 1px rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(22px) saturate(1.25);
+      -webkit-backdrop-filter: blur(22px) saturate(1.25);
+      overflow: hidden;
+    }
+
+    .login-box::before {
+      content: "";
+      position: absolute;
+      inset: -15% -10%;
+      background:
+        radial-gradient(circle at 18% 20%, rgba(0, 214, 255, 0.18) 0%, transparent 24%),
+        radial-gradient(circle at 85% 78%, rgba(156, 74, 255, 0.2) 0%, transparent 28%);
+      pointer-events: none;
+    }
+
+    .login-brand-wrap {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 4px;
+      text-align: left;
+    }
+
+    .login-mark {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 54px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -4px;
+      background: linear-gradient(135deg, #2fe5ff 0%, #4db8ff 38%, #8b55ff 68%, #bf62ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      text-shadow: 0 0 18px rgba(74, 203, 255, 0.24);
+      transform: translateY(-3px);
+    }
+
+    .login-brand {
+      color: #f7f9ff;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.95rem;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -1.2px;
+    }
+
+    .login-subtitle {
+      margin-top: 8px;
+      color: rgba(233, 240, 255, 0.82);
+      font-size: 0.84rem;
+      text-align: center;
+    }
+
+    .login-field {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .login-field label {
+      color: rgba(240, 244, 255, 0.9);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .login-field input {
+      width: 100%;
+      height: 42px;
+      padding: 0 14px;
+      border-radius: 11px;
+      border: 1px solid rgba(224, 234, 255, 0.62);
+      background: rgba(20, 27, 48, 0.72);
+      color: #f4f7ff;
+      font-size: 0.98rem;
+      outline: none;
+      box-shadow:
+        inset 0 1px 1px rgba(255, 255, 255, 0.06),
+        0 8px 20px rgba(0, 0, 0, 0.18);
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+
+    .login-field input::placeholder {
+      color: rgba(214, 221, 238, 0.48);
+    }
+
+    .login-field input:focus {
+      border-color: rgba(74, 219, 255, 0.9);
+      background: rgba(17, 25, 46, 0.88);
+      box-shadow:
+        inset 0 1px 1px rgba(255, 255, 255, 0.08),
+        0 0 0 4px rgba(55, 202, 255, 0.08),
+        0 12px 24px rgba(0, 0, 0, 0.24);
+    }
+
+    .login-links {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: flex-end;
+      margin-top: -4px;
+      margin-bottom: 4px;
+    }
+
+    .login-link {
+      border: none;
+      background: transparent;
+      padding: 0;
+      color: #47d7ff;
+      font-size: 0.94rem;
+      cursor: pointer;
+      transition: color 0.18s ease, opacity 0.18s ease;
+    }
+
+    .login-link:hover {
+      color: #8be8ff;
+    }
+
+    .login-btn {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 48px;
+      border: none;
+      border-radius: 12px;
+      background: linear-gradient(90deg, #17d8f5 0%, #20d5ff 48%, #17d8f5 100%);
+      color: #112033;
+      font-size: 1.04rem;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow:
+        0 0 24px rgba(31, 221, 255, 0.32),
+        inset 0 1px 0 rgba(255, 255, 255, 0.28);
+      transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+    }
+
+    .login-btn:hover {
+      transform: translateY(-1px);
+      box-shadow:
+        0 0 34px rgba(31, 221, 255, 0.38),
+        0 10px 28px rgba(9, 197, 235, 0.18);
+      filter: saturate(1.06);
+    }
+
+    .login-btn:disabled {
+      opacity: 0.62;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: 0 0 20px rgba(31, 221, 255, 0.16);
+    }
+
+    .login-footer {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: center;
+      margin-top: 4px;
+    }
+
+    .login-footer button {
+      border: none;
+      background: transparent;
+      color: rgba(248, 249, 255, 0.9);
+      font-size: 0.98rem;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      cursor: pointer;
+      opacity: 0.92;
+      transition: opacity 0.18s ease, color 0.18s ease;
+    }
+
+    .login-footer button:hover {
+      color: #ffffff;
+      opacity: 1;
+    }
+
+    .login-error {
+      position: relative;
+      z-index: 1;
+      display: none;
+      border-radius: 12px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 104, 125, 0.32);
+      background: rgba(255, 76, 100, 0.12);
+      color: #ffd7de;
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+
+    .login-error.visible { display: block; }
+
+    @media (max-width: 640px) {
+      .login-shell {
+        width: 100%;
+        padding: 24px 14px;
+      }
+
+      .login-rings {
+        width: 420px;
+        height: 420px;
+      }
+
+      .login-circuit {
+        display: none;
+      }
+
+      .login-box {
+        width: min(100%, 360px);
+        padding: 28px 22px 24px;
+        border-radius: 22px;
+      }
+
+      .login-brand-wrap {
+        gap: 10px;
+      }
+
+      .login-mark {
+        font-size: 46px;
+      }
+
+      .login-brand {
+        font-size: 1.72rem;
+      }
+    }
+    /* ── USER MANAGEMENT ── */
+    .user-table { width: 100%; border-collapse: collapse; }
+    .user-table th, .user-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); font-size: .85rem; }
+    .user-table th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; }
+    .role-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .75rem; font-weight: 700; text-transform: uppercase;
+    }
+    .role-badge.admin  { background: rgba(255,23,68,.2);  color: var(--pri); }
+    .role-badge.editor { background: rgba(0,230,118,.15); color: var(--good); }
+    .role-badge.viewer { background: rgba(133,133,168,.15); color: var(--muted); }
+    .perm-chip {
+      display: inline-block; padding: 2px 7px; margin: 2px; border-radius: 4px;
+      background: var(--card2); border: 1px solid var(--line); font-size: .72rem; color: var(--muted);
+    }
+    #usersSection { display: none; }
+    /* modal de usuário */
+    #userModal {
+      position: fixed; inset: 0; z-index: 8000;
+      background: rgba(0,0,0,.7); display: none;
+      align-items: center; justify-content: center;
+    }
+    #userModal.open { display: flex; }
+    .user-modal-box {
+      background: var(--card); border: 1px solid var(--line2);
+      border-radius: 14px; padding: 32px; width: 100%; max-width: 520px;
+      max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+    }
+    .user-modal-box h3 { margin: 0; font-size: 1.1rem; }
+    .perm-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    }
+    .perm-grid label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: .82rem; color: var(--text); cursor: pointer;
+    }
+    .perm-grid input[type=checkbox] { accent-color: var(--pri); }
+  </style>
+</head>
+
+<body>
+  <!-- TELA DE LOGIN -->
+  <div id="loginScreen">
+    <div class="login-circuit left"></div>
+    <div class="login-circuit right"></div>
+    <div class="login-rings"></div>
+    <div class="login-shell">
+      <div class="login-box">
+        <div class="login-brand-wrap">
+          <div class="login-mark" aria-hidden="true">∞</div>
+          <div>
+            <div class="login-brand">MetaPorn</div>
+            <div class="login-subtitle">Plataforma de Agência</div>
+          </div>
+        </div>
+        <div class="login-error" id="loginError"></div>
+        <div class="login-field">
+          <label>Usuário</label>
+          <input id="loginUsername" type="text" placeholder="seu usuário" autocomplete="username" />
+        </div>
+        <div class="login-field">
+          <label>Senha</label>
+          <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <div class="login-links">
+          <button
+            type="button"
+            class="login-link"
+            onclick="toast('Fale com o administrador para redefinir sua senha.', 'bad')">
+            Esqueceu a senha?
+          </button>
+        </div>
+        <button class="login-btn" id="loginBtn" onclick="doLogin()">Entrar</button>
+        <div class="login-footer">
+          <button
+            type="button"
+            onclick="toast('Solicite um usuário ao administrador da plataforma.', 'good')">
+            Solicitar acesso
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DE USUÁRIO -->
+  <div id="userModal">
+    <div class="user-modal-box">
+      <h3 id="userModalTitle">Novo Usuário</h3>
+      <input type="hidden" id="userModalId" />
+      <div class="login-field">
+        <label>Usuário</label>
+        <input id="userModalUsername" type="text" placeholder="nome de usuário" />
+      </div>
+      <div class="login-field">
+        <label id="userModalPassLabel">Senha</label>
+        <input id="userModalPassword" type="password" placeholder="••••••••" />
+      </div>
+      <div class="login-field">
+        <label>Papel (Role)</label>
+        <select id="userModalRole" onchange="userModalRoleChange()">
+          <option value="admin">Admin — acesso total</option>
+          <option value="editor">Editor — todos os módulos exceto settings</option>
+          <option value="viewer" selected>Viewer — somente leitura</option>
+        </select>
+      </div>
+      <div class="login-field">
+        <label>Permissões customizadas <span style="color:var(--muted);font-weight:400">(vazio = usar defaults do role)</span></label>
+        <div class="perm-grid" id="userModalPerms"></div>
+      </div>
+      <div class="login-field">
+        <label>Status</label>
+        <select id="userModalActive">
+          <option value="1">Ativo</option>
+          <option value="0">Inativo</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn" onclick="closeUserModal()">Cancelar</button>
+        <button class="btn primary" onclick="saveUserModal()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL LOG DE ATIVIDADE -->
+  <div id="activityLogModal" style="position:fixed;inset:0;z-index:8100;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center">
+    <div style="background:var(--card);border:1px solid var(--line2);border-radius:14px;padding:28px;width:100%;max-width:640px;max-height:85vh;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h3 id="activityLogTitle" style="margin:0;font-size:1rem">Log de Atividade</h3>
+        <button onclick="closeActivityLog()" style="background:transparent;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer">✕</button>
+      </div>
+      <div id="activityLogList" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;min-height:120px"></div>
+    </div>
+  </div>
+
+  <!-- MODAL RESET SENHA -->
+  <div id="resetPasswordModal" style="position:fixed;inset:0;z-index:8200;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center">
+    <div style="background:var(--card);border:1px solid var(--line2);border-radius:14px;padding:28px;width:100%;max-width:380px;display:flex;flex-direction:column;gap:16px">
+      <h3 id="resetPasswordTitle" style="margin:0;font-size:1rem">Resetar Senha</h3>
+      <input type="hidden" id="resetPasswordUserId" />
+      <div class="login-field">
+        <label>Nova Senha</label>
+        <input id="resetPasswordValue" type="password" placeholder="mínimo 4 caracteres" />
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn" onclick="closeResetPassword()">Cancelar</button>
+        <button class="btn primary" onclick="saveResetPassword()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-shell">
+    <aside class="app-sidebar" id="appSidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <div class="sidebar-mark" aria-hidden="true"></div>
+          <div>
+            <div class="sidebar-logo">MetaPorn</div>
+            <div class="sidebar-sub">Painel operacional da agência</div>
+          </div>
+        </div>
+        <div class="sidebar-search-wrap">
+          <input id="navSearch" class="sidebar-search" type="text" placeholder="Buscar módulo..." oninput="filterSidebarNav()" />
+        </div>
+      </div>
+
+      <nav class="nav" id="mainNav">
+        <div class="nav-section" data-section="inteligencia">
+          <div class="nav-section-label">Inteligência e Mídia</div>
+          <a href="#analyze" data-route="analyze"><span class="nav-icon">◎</span><span class="nav-copy"><span class="nav-title">Analyze</span><span class="nav-caption">Transcrição, análise e prompt</span></span></a>
+          <a href="#compare" data-route="compare"><span class="nav-icon">◈</span><span class="nav-copy"><span class="nav-title">Compare</span><span class="nav-caption">Comparação entre modelos</span></span></a>
+          <a href="#runs" data-route="runs"><span class="nav-icon">▣</span><span class="nav-copy"><span class="nav-title">Runs</span><span class="nav-caption">Histórico técnico e resultados</span></span></a>
+          <a href="#media" data-route="media"><span class="nav-icon">◫</span><span class="nav-copy"><span class="nav-title">Arquivos</span><span class="nav-caption">Originais, burns e teasers</span></span></a>
+          <a href="#referencia" data-route="referencia"><span class="nav-icon">✦</span><span class="nav-copy"><span class="nav-title">Referência</span><span class="nav-caption">Pesquisa e benchmarking</span></span></a>
+          <a href="#autoeditor" data-route="autoeditor"><span class="nav-icon">◉</span><span class="nav-copy"><span class="nav-title">AutoEditor</span><span class="nav-caption">Cortes automáticos com IA</span></span></a>
+          <a href="#videoenhancer" data-route="videoenhancer"><span class="nav-icon">✦</span><span class="nav-copy"><span class="nav-title">Video Enhancer</span><span class="nav-caption">Upscale de qualidade com IA</span></span></a>
+        </div>
+
+        <div class="nav-section" data-section="operacao">
+          <div class="nav-section-label">Operação e Distribuição</div>
+          <a href="#criacao" data-route="criacao"><span class="nav-icon">◆</span><span class="nav-copy"><span class="nav-title">Criação</span><span class="nav-caption">Montagem de posts e teaser</span></span></a>
+          <a href="#telegram" data-route="telegram"><span class="nav-icon">✈</span><span class="nav-copy"><span class="nav-title">Telegram</span><span class="nav-caption">Fila, grupos e disparos</span></span></a>
+          <a href="#publisher" data-route="publisher"><span class="nav-icon">⬢</span><span class="nav-copy"><span class="nav-title">Publicar</span><span class="nav-caption">Distribuição nas plataformas</span></span></a>
+          <a href="#calendar" data-route="calendar"><span class="nav-icon">◌</span><span class="nav-copy"><span class="nav-title">Agenda</span><span class="nav-caption">Calendário editorial</span></span></a>
+        </div>
+
+        <div class="nav-section" data-section="gestao">
+          <div class="nav-section-label">Gestão de Agência</div>
+          <a href="#creators" data-route="creators"><span class="nav-icon">◍</span><span class="nav-copy"><span class="nav-title">Criadores</span><span class="nav-caption">Cadastro, perfis e contas</span></span></a>
+          <a href="#trends" data-route="trends"><span class="nav-icon">↗</span><span class="nav-copy"><span class="nav-title">Tendências</span><span class="nav-caption">Radar e briefings</span></span></a>
+          <a href="#financial" data-route="financial"><span class="nav-icon">◔</span><span class="nav-copy"><span class="nav-title">Financeiro</span><span class="nav-caption">Receita, payout e visão da agência</span></span></a>
+          <a href="#dmca" data-route="dmca"><span class="nav-icon">⛨</span><span class="nav-copy"><span class="nav-title">DMCA</span><span class="nav-caption">Monitoramento e proteção</span></span></a>
+          <a href="#settings" data-route="settings"><span class="nav-icon">⚙</span><span class="nav-copy"><span class="nav-title">Settings</span><span class="nav-caption">Tokens, usuários e sistema</span></span></a>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a class="sidebar-docs" href="/docs" target="_blank" rel="noreferrer">
+          <span>Docs da API</span>
+          <span>↗</span>
+        </a>
+        <div class="sidebar-version">
+          <span>Build atual</span>
+          <strong>v1.14.5</strong>
+        </div>
+      </div>
+    </aside>
+
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleSidebar(false)"></div>
+
+    <div class="app-main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="Abrir menu">☰</button>
+          <div class="topbar-context">
+            <div class="topbar-eyebrow" id="currentPageEyebrow">Painel MetaPorn</div>
+            <div class="topbar-title" id="currentPageTitle">Analyze</div>
+          </div>
+        </div>
+        <div class="right">
+          <div class="health" id="healthBadge">API: …</div>
+          <div id="sessionUserBadge" class="session-badge" style="display:none">
+            <span id="sessionUsername" style="color:var(--text);font-weight:600"></span>
+            <button class="session-logout" onclick="doLogout()">Sair</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="container">
+
+    <!-- SETTINGS -->
+    <section id="page-settings" class="page">
+      <h1>Settings</h1>
+      <section class="card">
+        <h2>API Key (Admin)</h2>
+        <div class="hint" style="margin-bottom:12px;">A key fica só no seu navegador (sessionStorage). Usada em todas as
+          chamadas à API.</div>
+        <div class="row wrap" style="margin-top:0;">
+          <div class="col grow">
+            <label>X-API-Key</label>
+            <input id="apiKey" type="password" placeholder="cole sua API key aqui" />
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button id="btnSaveApiKey" class="btn primary">Salvar</button>
+          </div>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Tokens de API</h2>
+        <div class="hint" style="margin-bottom:14px;">Tokens salvos no servidor. Nunca exibimos o valor — apenas o
+          status.</div>
+        <div id="tokensTable"></div>
+      </section>
+      <section class="card">
+        <h2>Diagnóstico Vision API (xAI)</h2>
+        <div class="hint" style="margin-bottom:12px;">
+          Testa cada modelo xAI com um pixel mínimo e retorna os erros HTTP completos para enviar ao suporte xAI.
+        </div>
+        <button class="btn" onclick="runVisionDiagnostic()" id="btnVisionDiag">🔬 Executar Diagnóstico</button>
+        <div id="visionDiagResult" style="margin-top:12px;display:none;">
+          <div id="visionDiagStatus" style="font-weight:bold;margin-bottom:8px;"></div>
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <button class="btn" onclick="copyVisionDiag()">📋 Copiar JSON</button>
+            <span id="visionDiagCopied" style="align-self:center;color:var(--ok);display:none;">Copiado!</span>
+          </div>
+          <pre id="visionDiagJson"
+            style="background:var(--bg2);padding:12px;border-radius:6px;font-size:11px;overflow:auto;max-height:400px;white-space:pre-wrap;"></pre>
+        </div>
+      </section>
+      <!-- USUÁRIOS — visível só para admin -->
+      <section class="card" id="usersSection">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <h2 style="margin:0">Usuários do Sistema</h2>
+          <div style="display:flex;gap:8px">
+            <button class="btn" onclick="openActivityLog(null,'Todos os usuários')" style="font-size:.82rem">📋 Log Geral</button>
+            <button class="btn primary" onclick="openUserModal()">+ Novo Usuário</button>
+          </div>
+        </div>
+        <div class="hint" style="margin-bottom:14px">Gerencie quem tem acesso à plataforma e quais abas cada um pode ver.</div>
+        <table class="user-table">
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Papel</th>
+              <th>Abas permitidas</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody"></tbody>
+        </table>
+      </section>
+
+      <section class="card" id="changelogCard">
+        <h2>Changelog</h2>
+        <div id="changelogList" class="changelog"></div>
+      </section>
+    </section>
+
+    <!-- ANALYZE -->
+    <section id="page-analyze" class="page">
+      <h1>Analyze</h1>
+      <div class="split">
+        <section class="card">
+          <h2>Entrada</h2>
+
+          <details class="cardSub" open>
+            <summary>Upload de vídeo (direto para storage)</summary>
+            <div class="row wrap" style="gap:8px;margin-bottom:6px;">
+              <button class="btn" onclick="toggleUploadList()" id="btnShowUploads">📂 Selecionar do servidor</button>
+              <span style="align-self:center;color:var(--muted);font-size:12px;">ou</span>
+              <label class="btn" style="cursor:pointer;">
+                📤 Fazer upload
+                <input id="anVideoFile" type="file" accept="video/*" style="display:none" onchange="uploadVideo()" />
+              </label>
+            </div>
+            <div id="anUploadList" class="hidden"
+              style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;">
+            </div>
+            <div class="hint">object_key: <span id="anObjectKey">-</span></div>
+            <div class="hint">url: <span id="anVideoUrl">-</span></div>
+            <div class="hint" id="anUploadStatus">status: -</div>
+            <div class="op-progress-wrap" id="anTranscribeProgressWrap">
+              <div class="op-progress-track">
+                <div class="op-progress-fill" id="anTranscribeProgressFill"></div>
+              </div>
+              <div class="op-progress-label" id="anTranscribeProgressLabel"></div>
+            </div>
+          </details>
+
+          <label>Transcrição (texto original)</label>
+          <textarea id="anTranscript" rows="14" placeholder="Cole aqui a transcrição bruta…"></textarea>
+
+          <div class="row wrap">
+            <div class="col grow">
+              <label>Idioma</label>
+              <select id="anLang">
+                <option value="auto">auto</option>
+                <option value="pt-BR">pt-BR</option>
+                <option value="en">en</option>
+                <option value="es">es</option>
+              </select>
+            </div>
+            <div class="col">
+              <label>Limit</label>
+              <input id="anLimit" type="number" value="20" min="1" max="200" />
+            </div>
+          </div>
+
+          <details class="cardSub">
+            <summary>Referências e Filtros Avançados</summary>
+            <label>Sites de Referência</label>
+            <div class="checks">
+              <label class="check-item"><input type="checkbox" name="ref_site" value="xvideos" checked> Xvideos</label>
+              <label class="check-item"><input type="checkbox" name="ref_site" value="pornhub"> Pornhub</label>
+              <label class="check-item"><input type="checkbox" name="ref_site" value="xnxx"> XNXX</label>
+              <label class="check-item"><input type="checkbox" name="ref_site" value="onlyfans"> OnlyFans</label>
+            </div>
+
+            <div class="row wrap" style="gap:8px;">
+              <div class="grow">
+                <label>Atriz / Ator <span class="hint" style="font-size:10px;">(abre página da atriz
+                    diretamente)</span></label>
+                <input id="refActor" type="text" placeholder="Ex: Mônica Matos, Mia Khalifa…">
+              </div>
+              <div>
+                <label>Qtd Atores</label>
+                <select id="refActorCount">
+                  <option value="">Qualquer</option>
+                  <option value="1">Solo (1)</option>
+                  <option value="2">Casal (2)</option>
+                  <option value="3">Trio (3)</option>
+                  <option value="4">Quarteto (4)</option>
+                  <option value="5+">Gangbang (5+)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row wrap" style="gap:8px;">
+              <div class="grow">
+                <label>País <span class="hint" style="font-size:10px;">(mapeado para keyword do XVideos)</span></label>
+                <input id="refCountry" type="text" list="refCountryList" placeholder="Brasil, Japão, EUA, France…">
+                <datalist id="refCountryList">
+                  <option value="Brasil">
+                  <option value="Argentina">
+                  <option value="Colombia">
+                  <option value="Mexico">
+                  <option value="EUA">
+                  <option value="UK">
+                  <option value="France">
+                  <option value="Espanha">
+                  <option value="Italia">
+                  <option value="Russia">
+                  <option value="Japão">
+                  <option value="Coreia">
+                  <option value="China">
+                  <option value="India">
+                  <option value="Latina">
+                </datalist>
+              </div>
+              <div class="grow">
+                <label>Categoria / Tag</label>
+                <input id="refCategory" type="text" placeholder="Teen, MILF, BBW, Amateur…">
+              </div>
+            </div>
+
+            <div>
+              <label>Canal / Studio <span class="hint" style="font-size:10px;">(abre página do canal
+                  diretamente)</span></label>
+              <input id="refStudio" type="text" placeholder="Ex: Reality Kings, Bangbros…">
+            </div>
+
+            <label>Duração <span class="hint" style="font-size:10px;">(filtro nativo do XVideos)</span></label>
+            <select id="refDurRange" style="width:100%;margin-bottom:8px;">
+              <option value="">Qualquer duração</option>
+              <option value="1-3">Curto (1–3 min)</option>
+              <option value="3-10">Médio (3–10 min)</option>
+              <option value="10-20">Longo (10–20 min)</option>
+              <option value="20+">Muito longo (20 min+)</option>
+            </select>
+
+            <label>Pós-filtros <span class="hint" style="font-size:10px;">(filtram os resultados
+                retornados)</span></label>
+            <div class="row wrap" style="gap:8px;">
+              <div class="grow">
+                <label style="font-size:11px;">Views mín.</label>
+                <input id="refViewsMin" type="number" placeholder="Ex: 10000" min="0">
+              </div>
+              <div class="grow">
+                <label style="font-size:11px;">Views máx.</label>
+                <input id="refViewsMax" type="number" placeholder="Ex: 5000000" min="0">
+              </div>
+              <div class="grow">
+                <label style="font-size:11px;">Curtidas mín.</label>
+                <input id="refLikesMin" type="number" placeholder="Ex: 500" min="0">
+              </div>
+            </div>
+          </details>
+
+          <details class="cardSub">
+            <summary>Análise de Screenshot (IA Vision)</summary>
+            <label>Upload de Screenshot</label>
+            <input id="scrFile" type="file" accept="image/*" />
+            <div class="row">
+              <button id="btnScrAnalyze" class="btn primary">Analisar com IA</button>
+            </div>
+            <div id="scrResult" class="hint hidden"
+              style="margin-top:10px; color:var(--text); padding:12px; background:var(--bg2); border-radius:8px; border:1px solid var(--line);">
+              <b>IA:</b> <span id="scrDesc">-</span><br>
+              <b>Tags:</b> <span id="scrTags">-</span>
+            </div>
+          </details>
+
+          <details class="cardSub">
+            <summary>Metadata do Vídeo (opcional)</summary>
+            <div class="row wrap">
+              <div class="col">
+                <label>duration_seconds</label>
+                <input id="anDur" type="number" min="0" step="0.01" placeholder="0" />
+              </div>
+              <div class="col">
+                <label>width</label>
+                <input id="anW" type="number" min="0" step="1" placeholder="0" />
+              </div>
+              <div class="col">
+                <label>height</label>
+                <input id="anH" type="number" min="0" step="1" placeholder="0" />
+              </div>
+              <div class="col">
+                <label>fps</label>
+                <input id="anFps" type="number" min="0" step="0.01" placeholder="0" />
+              </div>
+            </div>
+          </details>
+
+          <div class="row" style="margin-top:16px;">
+            <button id="btnAnalyze" class="btn primary">Analisar</button>
+            <button id="btnAnalyzeClear" class="btn">Limpar</button>
+          </div>
+          <div class="op-progress-wrap" id="anAnalyzeProgressWrap">
+            <div class="op-progress-track">
+              <div class="op-progress-fill" id="anAnalyzeProgressFill"></div>
+            </div>
+            <div class="op-progress-label" id="anAnalyzeProgressLabel"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Resultado</h2>
+          <div class="row wrap">
+            <div class="col grow">
+              <div class="hint">run_id: <span id="anRunId">-</span></div>
+            </div>
+            <div class="col" style="display:flex;gap:6px;">
+              <button id="btnCopyPrompt" class="btn">Copiar prompt</button>
+              <button id="btnToCompare" class="btn">→ Compare</button>
+            </div>
+          </div>
+          <div class="tabs">
+            <button class="tab active" data-tab="prompt">Prompt</button>
+            <button class="tab" data-tab="srt">SRT</button>
+            <button class="tab" data-tab="vision">Visão IA</button>
+            <button class="tab" data-tab="json">JSON</button>
+          </div>
+          <pre id="anPrompt" class="output" style="margin-top:12px;"></pre>
+          <div id="anSrtMain" class="hidden">
+            <div class="row" style="margin-bottom:10px;">
+              <button id="btnDownloadSrt" class="btn">Baixar .SRT</button>
+            </div>
+            <pre id="anSrt" class="output"></pre>
+          </div>
+          <div id="anVision" class="output hidden">
+            <div id="anVisionFrames"
+              style="display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; margin-bottom:15px;">
+            </div>
+            <div id="anVisionAnalysis" class="hint"
+              style="color:var(--text); font-size:13px; border-top:1px solid var(--line); padding-top:12px;"></div>
+          </div>
+          <pre id="anJson" class="output hidden"></pre>
+        </section>
+      </div>
+    </section>
+
+    <!-- COMPARE -->
+    <section id="page-compare" class="page">
+      <h1>Compare</h1>
+      <section class="card">
+        <h2>Configuração</h2>
+        <label>Prompt (markdown)</label>
+        <textarea id="cmpPrompt" rows="10" placeholder="Cole o prompt aqui…"></textarea>
+
+        <div class="cmp-cfg-grid">
+          <div class="cmp-cfg-col">
+            <h3>Provider A</h3>
+            <label>provider</label>
+            <select id="cmpProvA">
+              <option value="openrouter" selected>OpenRouter</option>
+            </select>
+            <label>model</label>
+            <select id="cmpModelA"></select>
+          </div>
+          <div class="cmp-cfg-col">
+            <h3>Provider B</h3>
+            <label>provider</label>
+            <select id="cmpProvB">
+              <option value="openrouter" selected>OpenRouter</option>
+            </select>
+            <label>model</label>
+            <select id="cmpModelB"></select>
+          </div>
+          <div class="cmp-cfg-params">
+            <h3>Params</h3>
+            <label>temperature</label>
+            <input id="cmpTemp" type="number" step="0.1" value="0.7" />
+            <label>max_tokens</label>
+            <input id="cmpMax" type="number" step="1" value="1200" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:16px;">
+          <button id="btnCompare" class="btn primary">Iniciar comparação</button>
+          <button id="btnCompareClear" class="btn">Limpar</button>
+        </div>
+
+        <!-- BARRA DE PROGRESSO DETALHADA -->
+        <div id="cmpProgressWrap" style="display:none;margin-top:14px;">
+          <div class="cmp-prog-bar-track">
+            <div class="cmp-prog-bar-fill" id="cmpProgBarFill"></div>
+          </div>
+          <div class="cmp-prog-providers">
+            <div class="cmp-prog-provider" id="cmpProgA">
+              <div class="cmp-prog-dot" id="cmpProgDotA"></div>
+              <div class="cmp-prog-info">
+                <span class="cmp-prog-name" id="cmpProgNameA">Provider A</span>
+                <span class="cmp-prog-detail" id="cmpProgDetailA">aguardando…</span>
+              </div>
+              <span class="cmp-prog-tokens" id="cmpProgTokensA">0 tok</span>
+            </div>
+            <div class="cmp-prog-provider" id="cmpProgB">
+              <div class="cmp-prog-dot" id="cmpProgDotB"></div>
+              <div class="cmp-prog-info">
+                <span class="cmp-prog-name" id="cmpProgNameB">Provider B</span>
+                <span class="cmp-prog-detail" id="cmpProgDetailB">aguardando…</span>
+              </div>
+              <span class="cmp-prog-tokens" id="cmpProgTokensB">0 tok</span>
+            </div>
+          </div>
+          <div class="cmp-prog-elapsed" id="cmpProgElapsed">00:00</div>
+        </div>
+
+        <div class="hint" style="margin-top:8px;">Stream SSE com fallback automático para endpoint não-stream.</div>
+      </section>
+
+      <div class="split" style="margin-top:16px;">
+        <section class="card">
+          <h2>Provider A</h2>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div class="hint" id="cmpStatusA">status: -</div>
+            <button class="btn" id="btnCopyA">Copiar</button>
+          </div>
+          <pre id="cmpOutA" class="output"></pre>
+          <button class="btn primary" style="margin-top:8px;width:100%;" onclick="useCmpVersion(0)">↳ Usar esta versão no Criação</button>
+        </section>
+        <section class="card">
+          <h2>Provider B</h2>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div class="hint" id="cmpStatusB">status: -</div>
+            <button class="btn" id="btnCopyB">Copiar</button>
+          </div>
+          <pre id="cmpOutB" class="output"></pre>
+          <button class="btn primary" style="margin-top:8px;width:100%;" onclick="useCmpVersion(1)">↳ Usar esta versão no Criação</button>
+        </section>
+      </div>
+    </section>
+
+    <!-- RUNS -->
+    <section id="page-runs" class="page">
+      <h1>Runs</h1>
+      <div class="runs-layout">
+
+        <div class="runs-sidebar">
+          <div class="card" style="padding:14px;">
+            <div class="row" style="margin-top:0;">
+              <div class="col grow">
+                <label>Limit</label>
+                <input id="runsLimit" type="number" value="50" min="1" max="500" />
+              </div>
+              <div class="col">
+                <label>&nbsp;</label>
+                <button id="btnRunsReload" class="btn primary">↺</button>
+              </div>
+            </div>
+            <div id="runsList" style="margin-top:12px;"></div>
+          </div>
+        </div>
+
+        <div id="runsDetail">
+          <div class="run-detail-empty">
+            Selecione um run na lista para ver detalhes
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ARQUIVOS -->
+    <section id="page-media" class="page">
+      <h1>Gerenciamento de Arquivos</h1>
+      <section class="card">
+        <h2>Receber do Google Drive do Criador</h2>
+        <div class="hint" style="margin-bottom:12px;">
+          Este é o fluxo principal: escolher o criador, listar os arquivos da pasta compartilhada dele no Google Drive
+          e importar para o servidor da agência.
+        </div>
+        <div class="row wrap" style="gap:10px;align-items:flex-end;">
+          <div class="col grow" style="min-width:280px;">
+            <label>Criador</label>
+            <select id="mediaDriveCreatorSelect"
+              style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="">Selecione um criador</option>
+            </select>
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button id="btnMediaDriveIntakeReload" class="btn primary">↺ Listar arquivos</button>
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button id="btnMediaDriveImportSelected" class="btn">Importar selecionados</button>
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button id="btnMediaDriveClearSelected" class="btn">Limpar seleção</button>
+          </div>
+        </div>
+        <div class="hint" id="mediaDriveIntakeStatus" style="margin-top:10px;">Selecione um criador para listar os arquivos do Drive.</div>
+        <div class="hint" id="mediaDriveIntakeSelectionStats" style="margin-top:6px;">0 selecionado(s)</div>
+        <div id="mediaDriveIntakeList"
+          style="margin-top:12px;max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+          <div class="criacao-empty" style="padding:24px;">Nenhum arquivo carregado ainda.</div>
+        </div>
+      </section>
+
+      <div class="split">
+        <section class="card">
+          <h2>Configuração do Google Drive</h2>
+          <div class="hint" style="margin-bottom:12px;">
+            Esta configuração global funciona como fallback e também para envio/bkp de originais, queimados e teasers.
+            Se o criador tiver pasta e credenciais próprias, o recebimento usa a configuração dele.
+          </div>
+          <div class="row wrap" style="gap:10px;align-items:flex-end;">
+            <div class="col grow">
+              <label>Pasta ID</label>
+              <input id="mediaDriveFolderId" type="text" placeholder="Cole o ID da pasta do Google Drive" />
+            </div>
+            <div class="col">
+              <label>&nbsp;</label>
+              <button id="btnMediaDriveSave" class="btn primary">Salvar config</button>
+            </div>
+            <div class="col">
+              <label>&nbsp;</label>
+              <button id="btnMediaDriveReload" class="btn">↺ Atualizar</button>
+            </div>
+          </div>
+          <label style="margin-top:12px;">JSON da Service Account</label>
+          <textarea id="mediaDriveServiceAccount" rows="8"
+            placeholder='Cole aqui o JSON completo da service account'></textarea>
+          <div class="hint" id="mediaDriveStatus" style="margin-top:10px;">Google Drive: carregando…</div>
+        </section>
+
+        <section class="card">
+          <h2>Player</h2>
+          <div class="media-manager-player">
+            <div id="mediaPreviewEmpty" class="criacao-empty">Selecione um arquivo para abrir no player.</div>
+            <video id="mediaPreviewVideo" class="hidden"
+              style="width:100%;max-height:460px;background:#000;border-radius:10px;" controls preload="metadata"
+              playsinline></video>
+            <div class="hint" id="mediaPreviewMeta" style="margin-top:10px;">-</div>
+          </div>
+        </section>
+      </div>
+
+      <section class="card" style="margin-top:16px;">
+        <div class="media-manager-toolbar">
+          <div class="col grow" style="min-width:260px;">
+            <label>Buscar</label>
+            <input id="mediaManagerSearch" type="text" placeholder="Nome do arquivo, run, data..." />
+          </div>
+          <div class="col">
+            <label>Limite por tipo</label>
+            <input id="mediaManagerLimit" type="number" value="80" min="10" max="300" />
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button id="btnMediaRefresh" class="btn primary">↺ Recarregar</button>
+          </div>
+        </div>
+
+        <div class="media-manager-bulkbar">
+          <button id="btnMediaSelectFiltered" class="btn">Selecionar filtrados</button>
+          <button id="btnMediaClearSelection" class="btn">Limpar seleção</button>
+          <button id="btnMediaBulkDrive" class="btn">Drive em lote</button>
+          <button id="btnMediaBulkDelete" class="btn">Excluir em lote</button>
+          <span class="hint" id="mediaManagerSelectionStats">0 selecionado(s)</span>
+        </div>
+
+        <div class="tabs" style="margin-bottom:12px;">
+          <button id="btnMediaTabAll" class="tab active" onclick="setMediaManagerCategory('all')">Todos</button>
+          <button id="btnMediaTabUploads" class="tab" onclick="setMediaManagerCategory('uploads')">Originais</button>
+          <button id="btnMediaTabBurns" class="tab" onclick="setMediaManagerCategory('burns')">Queimados</button>
+          <button id="btnMediaTabTeasers" class="tab" onclick="setMediaManagerCategory('teasers')">Teasers</button>
+        </div>
+
+        <div class="hint" id="mediaManagerStats" style="margin-bottom:12px;">Carregando biblioteca…</div>
+        <div id="mediaManagerList" class="media-manager-grid"></div>
+      </section>
+    </section>
+
+    <!-- REFERÊNCIA -->
+    <section id="page-referencia" class="page">
+      <h1>Referência XVideos</h1>
+      <section class="card">
+        <h2>Busca</h2>
+        <div class="row wrap" style="gap:10px;align-items:flex-end;">
+          <div class="col">
+            <label>Tipo</label>
+            <select id="refSearchType" onchange="updateRefSearchType()">
+              <option value="search">Busca Geral</option>
+              <option value="pornstar">Atriz / Pornstar</option>
+              <option value="channel">Canal / Studio</option>
+            </select>
+          </div>
+          <div class="col grow">
+            <label id="refSearchLabel">Query / Termo</label>
+            <input id="refSearchQuery" type="text" placeholder="Ex: brasileira, Monica Matos, Reality Kings…" />
+          </div>
+          <div class="col" id="refSortCol">
+            <label>Sort</label>
+            <select id="refSearchSort">
+              <option value="views">Views</option>
+              <option value="relevance">Relevância</option>
+              <option value="date">Data</option>
+            </select>
+          </div>
+          <div class="col">
+            <label>Limit</label>
+            <input id="refSearchLimit" type="number" value="20" min="1" max="100" style="width:70px;" />
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button class="btn primary" id="btnRefSearch" onclick="doRefSearch()">Buscar</button>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px;" id="refSearchHint">Busca geral com filtros nativos do XVideos</div>
+      </section>
+      <div id="refSearchResults" style="margin-top:16px;"></div>
+    </section>
+
+    <!-- TELEGRAM -->
+    <section id="page-telegram" class="page">
+      <div id="telegramPageContent">
+        <div class="criacao-empty">Carregando...</div>
+      </div>
+    </section>
+
+    <!-- CRIAÇÃO -->
+    <section id="page-criacao" class="page">
+      <h1>Criação de Posts</h1>
+      <div class="criacao-layout">
+
+        <div class="criacao-sidebar">
+          <div class="card" style="padding:14px;">
+            <div class="row" style="margin-top:0;">
+              <div class="col grow"><label>Limit</label>
+                <input id="criacaoLimit" type="number" value="30" min="1" max="200" style="width:70px;">
+              </div>
+              <div class="col"><button id="btnCriacaoReload" class="btn primary">↺</button></div>
+            </div>
+            <div id="criacaoRunList" style="margin-top:12px;"></div>
+          </div>
+        </div>
+
+        <div id="criacaoDetail">
+          <div class="criacao-empty">Selecione um run na lista para gerar o post</div>
+        </div>
+
+      </div>
+
+      <div class="detail-section card" style="margin-top:24px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <h2>Posts agendados</h2>
+          <button class="btn" onclick="loadScheduledPosts()">↺ Atualizar</button>
+        </div>
+        <div id="schedList">
+          <div class="criacao-empty">Nenhum agendamento ainda.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CREATORS -->
+    <section id="page-creators" class="page">
+      <h1>Gestão de Criadores</h1>
+      <div class="row" style="margin-bottom:16px;gap:10px;">
+        <button class="btn primary" onclick="creatorsShowAddForm()">+ Novo Criador</button>
+        <div class="col grow">
+          <input id="creatorsSearch" type="text" placeholder="Buscar por nome..." oninput="creatorsFilter()" style="width:100%;max-width:320px"/>
+        </div>
+        <select id="creatorsStatusFilter" onchange="creatorsFilter()" style="height:36px;padding:0 10px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px">
+          <option value="">Todos</option>
+          <option value="active">Ativo</option>
+          <option value="trial">Trial</option>
+          <option value="paused">Pausado</option>
+          <option value="churned">Churned</option>
+        </select>
+      </div>
+      <div id="creatorsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px"></div>
+      <div id="creatorsEmpty" class="hidden" style="color:#555;text-align:center;padding:40px">Nenhum criador cadastrado.</div>
+
+      <!-- Creator Detail Modal -->
+      <div id="creatorModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center">
+        <div style="background:#111;border:1px solid #333;border-radius:12px;padding:24px;max-width:700px;width:95%;max-height:90vh;overflow-y:auto;position:relative">
+          <button onclick="creatorsCloseModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:#aaa;font-size:20px;cursor:pointer">✕</button>
+          <div id="creatorModalContent"></div>
+        </div>
+      </div>
+
+      <!-- Add/Edit Form -->
+      <div id="creatorFormPanel" class="hidden card" style="margin-top:24px">
+        <h2 id="creatorFormTitle">Novo Criador</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
+          <div><label>Nome Artístico *</label><input id="cf_name" type="text" placeholder="Ex: Anny Brown" oninput="creatorsMaybeFillSlug()"/></div>
+          <div><label>Email *</label><input id="cf_email" type="email" placeholder="anny@email.com"/></div>
+          <div>
+            <label>Slug do Portal</label>
+            <input id="cf_slug" type="text" placeholder="Ex: anny-brown" oninput="creatorsSlugEdited()"/>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+              <div class="hint" id="cf_slug_hint" style="flex:1;min-width:0">URL pública: será gerada automaticamente.</div>
+              <button type="button" class="btn" id="cf_slug_copy_btn" style="font-size:11px;padding:3px 8px;display:none" onclick="creatorsCopyPortalLink(document.getElementById('cf_slug').value.trim())">📋 Copiar link</button>
+              <button type="button" class="btn" id="cf_slug_preview_btn" style="font-size:11px;padding:3px 8px;display:none" onclick="creatorsPreviewPortal(document.getElementById('cf_slug').value.trim())">👁 Visualizar</button>
+            </div>
+          </div>
+          <div><label>WhatsApp</label><input id="cf_whatsapp" type="text" placeholder="+5511999999999"/></div>
+          <div><label>Status</label>
+            <select id="cf_status" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="trial">Trial</option>
+              <option value="active">Ativo</option>
+              <option value="paused">Pausado</option>
+            </select>
+          </div>
+          <div><label>Comissão da Agência (%)</label><input id="cf_commission" type="number" value="25" min="0" max="100" step="1"/></div>
+          <div><label>Idioma do Conteúdo</label><input id="cf_lang" type="text" value="pt-BR"/></div>
+          <div style="grid-column:1/-1"><label>Categorias Preferidas (separadas por vírgula)</label><input id="cf_categories" type="text" placeholder="Amateur, Brazilian, MILF"/></div>
+          <div style="grid-column:1/-1"><label>Tags Habituais (separadas por vírgula)</label><input id="cf_tags" type="text" placeholder="brasileira, amadora, anal"/></div>
+          <div style="grid-column:1/-1">
+            <label>Canais de Referência (um por linha — URL do canal XVideos ou Pornhub)</label>
+            <textarea id="cf_reference_channels" rows="3" style="width:100%;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;padding:8px;font-family:monospace;font-size:12px" placeholder="https://www.xvideos.com/channels/canal-exemplo&#10;https://www.pornhub.com/model/nome-modelo"></textarea>
+            <div class="hint">Canais de outros criadores para inspiração e análise de tendências.</div>
+          </div>
+          <div style="grid-column:1/-1">
+            <label>Canal Próprio do Criador (um por linha — para analisar o perfil dele)</label>
+            <textarea id="cf_own_channel_urls" rows="2" style="width:100%;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;padding:8px;font-family:monospace;font-size:12px" placeholder="https://www.xvideos.com/channels/meu-canal&#10;https://www.pornhub.com/model/meu-perfil"></textarea>
+            <div class="hint">O Trend Radar analisa esses canais para entender o que JÁ funciona para este criador.</div>
+          </div>
+          <div style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:14px;margin-top:4px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:14px;">Perfil de Produção (para briefings personalizados)</div>
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <div>
+                <label style="display:block;margin-bottom:8px;font-size:12px;color:#999">Tipos de cena</label>
+                <div style="display:flex;flex-wrap:wrap;gap:8px" id="cf_filming_setups_group">
+                  <button type="button" data-val="solo" onclick="togglePill(this,'cf_filming_setups_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Solo</button>
+                  <button type="button" data-val="couple" onclick="togglePill(this,'cf_filming_setups_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Casal</button>
+                  <button type="button" data-val="small_group" onclick="togglePill(this,'cf_filming_setups_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Grupo pequeno</button>
+                  <button type="button" data-val="large_group" onclick="togglePill(this,'cf_filming_setups_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Orgia / grupo grande</button>
+                </div>
+              </div>
+              <div>
+                <label style="display:block;margin-bottom:8px;font-size:12px;color:#999">Locais disponíveis</label>
+                <div style="display:flex;flex-wrap:wrap;gap:8px" id="cf_location_types_group">
+                  <button type="button" data-val="home" onclick="togglePill(this,'cf_location_types_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Casa</button>
+                  <button type="button" data-val="hotel" onclick="togglePill(this,'cf_location_types_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Hotel / Motel</button>
+                  <button type="button" data-val="studio" onclick="togglePill(this,'cf_location_types_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Estúdio</button>
+                  <button type="button" data-val="outdoor" onclick="togglePill(this,'cf_location_types_group')" style="padding:6px 14px;border-radius:20px;border:1px solid #444;background:#1a1a1a;color:#aaa;font-size:13px;cursor:pointer;transition:all .15s">Ar livre</button>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div>
+                  <label>Nível de Produção</label>
+                  <select id="cf_production_level" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+                    <option value="amateur">Amador</option>
+                    <option value="semi-pro">Semi-profissional</option>
+                    <option value="professional">Profissional</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Descrição dos Performers <span style="color:#555;font-size:11px">(para thumbnail IA)</span></label>
+                  <input id="cf_performer_description" type="text" placeholder="Ex: morena 25 anos, corpo atlético, tatuagem no braço"/>
+                </div>
+                <div style="grid-column:1/-1">
+                  <label>O que NÃO faz <span style="color:#555;font-size:11px">(anal, rosto, etc.)</span></label>
+                  <input id="cf_production_constraints" type="text" placeholder="Ex: não faz anal, não aparece rosto, não faz cenas com mais de 2 pessoas"/>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:14px;margin-top:4px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px;">Acesso ao Portal do Criador</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div>
+                <label>Senha do Portal <span style="color:#555;font-size:11px">(deixe em branco para não alterar)</span></label>
+                <input id="cf_portal_password" type="password" placeholder="Nova senha de acesso ao portal" autocomplete="new-password"/>
+                <div class="hint">O criador usa email + esta senha para acessar <strong>criador.metaporn.com.br</strong></div>
+              </div>
+              <div>
+                <label>Confirmar Senha</label>
+                <input id="cf_portal_password2" type="password" placeholder="Repita a senha"/>
+              </div>
+            </div>
+          </div>
+          <div style="grid-column:1/-1"><label>Notas</label><textarea id="cf_notes" rows="2" style="width:100%;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;padding:8px"></textarea></div>
+          <div style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:14px;margin-top:4px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px;">Personalização do Portal do Criador</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div><label>Nome da Marca</label><input id="cf_portal_brand_name" type="text" placeholder="Ex: Raposinha Club"/></div>
+              <div><label>Título Principal</label><input id="cf_portal_headline" type="text" placeholder="Ex: Seu espaço exclusivo"/></div>
+              <div style="grid-column:1/-1"><label>Subtítulo</label><input id="cf_portal_tagline" type="text" placeholder="Ex: Vídeos, ganhos, agenda e tendências em um só lugar."/></div>
+              <div><label>Cor Primária</label><input id="cf_portal_primary_color" type="color" value="#67e8f9" style="height:42px;padding:4px"/></div>
+              <div><label>Cor Secundária</label><input id="cf_portal_secondary_color" type="color" value="#8b5cf6" style="height:42px;padding:4px"/></div>
+              <div><label>Cor de Destaque</label><input id="cf_portal_accent_color" type="color" value="#22d3ee" style="height:42px;padding:4px"/></div>
+              <div><label>Cor da Superfície</label><input id="cf_portal_surface_color" type="color" value="#0f172a" style="height:42px;padding:4px"/></div>
+              <div><label>Cor do Texto</label><input id="cf_portal_text_color" type="color" value="#e2e8f0" style="height:42px;padding:4px"/></div>
+              <div>
+                <label>Logo do Portal</label>
+                <input id="cf_portal_logo_file" type="file" accept="image/*" onchange="creatorsPortalLogoSelected(this)" />
+              </div>
+              <div style="display:flex;align-items:end;gap:8px;">
+                <button class="btn" type="button" onclick="creatorsClearPortalLogo()">Remover logo</button>
+                <div class="hint" id="cf_portal_logo_status">Sem logo personalizada.</div>
+              </div>
+              <div style="grid-column:1/-1">
+                <div id="cf_portal_preview" style="border:1px solid var(--border);border-radius:14px;padding:16px;background:linear-gradient(135deg,#08111f,#111827);display:flex;gap:14px;align-items:center;">
+                  <img id="cf_portal_logo_preview" alt="Preview da logo" style="width:60px;height:60px;object-fit:contain;border-radius:14px;background:rgba(255,255,255,.05);padding:8px;display:none" />
+                  <div>
+                    <div id="cf_portal_preview_brand" style="font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#67e8f9">MetaPorn Agency</div>
+                    <div id="cf_portal_preview_headline" style="font-size:22px;font-weight:700;color:#fff;margin-top:4px">Creator Portal</div>
+                    <div id="cf_portal_preview_tagline" style="font-size:13px;color:#cbd5e1;margin-top:6px">Personalize a experiência visual do criador.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:16px;gap:8px">
+          <button class="btn primary" onclick="creatorsSave()">💾 Salvar</button>
+          <button class="btn" onclick="creatorsHideForm()">Cancelar</button>
+        </div>
+        <div id="cf_error" class="hidden" style="color:var(--pri);margin-top:8px;font-size:13px"></div>
+      </div>
+    </section>
+
+    <!-- PUBLISHER -->
+    <section id="page-autoeditor" class="page">
+      <h1>AutoEditor</h1>
+      <div class="split">
+        <section class="card">
+          <h2>Configuração</h2>
+
+          <details class="cardSub" open>
+            <summary>Vídeo Fonte</summary>
+            <div class="row wrap" style="gap:8px;margin-bottom:6px;">
+              <button class="btn" onclick="aeToggleUploadList()" id="btnAeUploads">📂 Selecionar do servidor</button>
+              <span style="align-self:center;color:var(--muted);font-size:12px;">ou</span>
+              <label class="btn" style="cursor:pointer;">
+                📤 Fazer upload
+                <input id="aeVideoFile" type="file" accept="video/*" style="display:none" onchange="aeUploadVideo()" />
+              </label>
+            </div>
+            <div id="aeUploadList" class="hidden"
+              style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;">
+            </div>
+            <div class="row wrap" style="gap:8px;align-items:center;margin-bottom:6px;">
+              <div class="hint">fontes: <span id="aeObjectKey">0 vídeos</span></div>
+              <button class="btn" style="font-size:11px;padding:4px 10px;" onclick="aeClearSelection()">Limpar seleção</button>
+            </div>
+            <div id="aeSelectedSources" style="display:grid;gap:6px;margin-bottom:6px;"></div>
+            <div class="hint" id="aeVideoInfo">Nenhum vídeo selecionado</div>
+          </details>
+
+          <details class="cardSub" open>
+            <summary>Quantidade de Cenas</summary>
+            <div class="row wrap">
+              <div class="col grow">
+                <label>Máx. cenas no corte</label>
+                <input id="aeMaxScenes" type="number" value="60" min="2" max="150" />
+              </div>
+            </div>
+            <div class="hint" style="margin-top:4px;">A IA seleciona automaticamente as melhores cenas por qualidade. Sem meta de duração.</div>
+          </details>
+
+          <details class="cardSub" open>
+            <summary>Transições</summary>
+            <label>Modo</label>
+            <select id="aeTransitionMode" onchange="aeUpdateTransitionUI()"
+              style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="smart" selected>Smart (detecta ponto natural, aplica fade quando necessário)</option>
+              <option value="always_crossfade">Sempre crossfade</option>
+              <option value="none">Corte seco (sem transição)</option>
+            </select>
+            <div id="aeTransitionOptions" style="margin-top:8px;">
+              <div class="row wrap" style="margin-top:8px;">
+                <div class="col">
+                  <label>Crossfade vídeo (seg)</label>
+                  <input id="aeCrossfadeVideo" type="number" value="0.5" min="0.2" max="2.0" step="0.1" />
+                </div>
+                <div class="col">
+                  <label>Crossfade áudio (seg)</label>
+                  <input id="aeCrossfadeAudio" type="number" value="0.3" min="0.1" max="2.0" step="0.1" />
+                </div>
+                <div class="col">
+                  <label>Tipo visual</label>
+                  <select id="aeTransitionType"
+                    style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+                    <option value="fade" selected>Fade</option>
+                    <option value="dissolve">Dissolve</option>
+                    <option value="wiperight">Wipe →</option>
+                    <option value="wipeleft">Wipe ←</option>
+                    <option value="slideright">Slide →</option>
+                    <option value="slideleft">Slide ←</option>
+                  </select>
+                </div>
+              </div>
+              <div id="aeSmartOptions">
+                <div class="col" style="margin-top:8px;">
+                  <label>Tolerância corte natural (seg)</label>
+                  <input id="aeSmartTolerance" type="number" value="1.5" min="0.5" max="5.0" step="0.5" />
+                </div>
+                <div class="hint" style="margin-top:4px;">
+                  No modo Smart, busca ponto de mudança de cena dentro desta tolerância.
+                  Se encontrar, faz corte seco. Se não, aplica crossfade.
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="cardSub">
+            <summary>Qualidade de Saída</summary>
+            <div class="row wrap">
+              <div class="col">
+                <label>CRF</label>
+                <select id="aeCrf"
+                  style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+                  <option value="18">Alta (CRF 18)</option>
+                  <option value="23" selected>Média (CRF 23)</option>
+                  <option value="28">Baixa (CRF 28)</option>
+                </select>
+              </div>
+              <div class="col">
+                <label>Resolução máx.</label>
+                <select id="aeMaxHeight"
+                  style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+                  <option value="2160">4K</option>
+                  <option value="1080" selected>1080p</option>
+                  <option value="720">720p</option>
+                </select>
+              </div>
+              <div class="col">
+                <label>FPS máx.</label>
+                <select id="aeMaxFps"
+                  style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+                  <option value="60">60</option>
+                  <option value="30" selected>30</option>
+                  <option value="24">24</option>
+                </select>
+              </div>
+            </div>
+          </details>
+
+          <details class="cardSub">
+            <summary>Áudio</summary>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+              <button type="button" id="aeAudioNormBtn" class="ae-toggle active" onclick="aeToggle('aeAudioNormBtn')">Normalizar volume</button>
+              <button type="button" id="aeAudioDenoiseBtn" class="ae-toggle active" onclick="aeToggle('aeAudioDenoiseBtn')">Remover ruído</button>
+            </div>
+          </details>
+
+          <details class="cardSub" open>
+            <summary>Prompt do Grok ✎</summary>
+            <div style="font-size:11px;color:var(--muted);margin:6px 0 8px;">
+              Instruções enviadas ao Grok para seleção de cenas. Use <code>{n_sources}</code> e <code>{n_sources_minus1}</code> como variáveis.
+            </div>
+            <textarea id="aePromptEditor" rows="14" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;background:#0d0d0d;color:#cdd6f4;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:8px;resize:vertical;" placeholder="Carregando…"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <button class="btn primary" onclick="aeSavePrompt()">💾 Salvar prompt</button>
+              <button class="btn" onclick="aeResetPrompt()">↺ Resetar padrão</button>
+            </div>
+            <div id="aePromptStatus" style="margin-top:6px;font-size:11px;color:var(--muted);"></div>
+          </details>
+
+          <!-- inputs hidden mantidos para não quebrar o JS de envio -->
+          <input type="hidden" id="aeSceneThreshold" value="0.25" />
+          <input type="hidden" id="aeMinScene" value="3" />
+          <input type="hidden" id="aeMaxScene" value="150" />
+          <input type="hidden" id="aeSkipTranscriptionBtn" class="ae-toggle active" />
+
+          <details class="cardSub">
+            <summary>Criador (opcional)</summary>
+            <select id="aeCreator"
+              style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="">Nenhum (uso interno)</option>
+            </select>
+            <div class="col" style="margin-top:8px;">
+              <label>Título (dica para a IA)</label>
+              <input id="aeTitleHint" type="text" placeholder="Ex: Raposinha Compilação Anal" />
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+              <button type="button" id="aeDeleteSourceBtn" class="ae-toggle" onclick="aeToggle('aeDeleteSourceBtn')">Excluir original após sucesso</button>
+            </div>
+          </details>
+
+          <div class="row" style="margin-top:16px;gap:8px;">
+            <button id="btnAeStart" class="btn primary" onclick="aeStartJob()">🎬 Iniciar AutoEditor</button>
+            <button class="btn" onclick="aeLoadJobs()">↺ Atualizar jobs</button>
+          </div>
+          <div class="op-progress-wrap" id="aeProgressWrap">
+            <div class="op-progress-track">
+              <div class="op-progress-fill" id="aeProgressFill"></div>
+            </div>
+            <div class="op-progress-label" id="aeProgressLabel"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Resultado</h2>
+          <div id="aeResultEmpty" class="hint" style="color:var(--muted);text-align:center;padding:40px;">
+            Nenhum job selecionado. Inicie um AutoEditor ou selecione um job na lista.
+          </div>
+          <div id="aeResultContent" class="hidden">
+            <video id="aePreviewVideo"
+              style="width:100%;max-height:460px;background:#000;border-radius:10px;"
+              controls preload="metadata" playsinline></video>
+            <div id="aeResultMeta" class="hint" style="margin-top:10px;"></div>
+            <div id="aeVisionSummary" class="hint" style="margin-top:10px;"></div>
+            <div class="row" style="margin-top:12px;gap:8px;">
+              <button class="btn primary" onclick="aeDownloadResult()">⬇ Download</button>
+              <button class="btn" onclick="aeCopyObjectKey()">📋 Copiar key</button>
+              <button class="btn" id="btnAeRecut" onclick="aeRecut()">✂️ Re-cut</button>
+            </div>
+            <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px;">
+              <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:8px;">
+                Cenas Selecionadas
+              </h3>
+              <div id="aeScenesList" style="max-height:200px;overflow-y:auto;"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="card" style="margin-top:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h2>Jobs Recentes</h2>
+          <button class="btn" onclick="aeLoadJobs()">↺ Atualizar</button>
+        </div>
+        <div id="aeJobsList">
+          <div style="color:var(--muted);text-align:center;padding:20px;">Carregando...</div>
+        </div>
+      </section>
+
+    </section>
+
+    <!-- VIDEO ENHANCER -->
+    <section id="page-videoenhancer" class="page">
+      <h1>Video Enhancer</h1>
+      <div class="split">
+        <section class="card">
+          <h2>Melhoria de Qualidade</h2>
+
+          <details class="cardSub" open>
+            <summary>Vídeo de Entrada</summary>
+            <div class="row wrap" style="gap:8px;margin-bottom:6px;">
+              <button class="btn" onclick="veToggleUploadList()" id="btnVeUploads">📂 Selecionar do servidor</button>
+              <span style="align-self:center;color:var(--muted);font-size:12px;">ou</span>
+              <label class="btn" style="cursor:pointer;">
+                📤 Fazer upload
+                <input id="veVideoFile" type="file" accept="video/*" style="display:none" onchange="veUploadFile()" />
+              </label>
+            </div>
+            <div id="veUploadList" class="hidden"
+              style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;">
+            </div>
+            <div class="hint" id="veSelectedHint">Nenhum vídeo selecionado</div>
+          </details>
+
+          <details class="cardSub" open>
+            <summary>Resolução de Saída</summary>
+            <select id="veResolution"
+              style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="720p" selected>720p — escala 2× (~2GB VRAM)</option>
+              <option value="1080p">1080p — escala 4× (~4GB VRAM)</option>
+            </select>
+            <div class="hint" style="margin-top:6px;">Usa Video2X com RealESRGAN. Quanto maior a resolução, maior o tempo de processamento.</div>
+          </details>
+
+          <div id="veStatus" style="display:none;margin-top:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span id="veStatusText" style="font-size:13px;color:var(--muted);">Aguardando…</span>
+              <span id="veStatusPct" style="font-size:13px;font-weight:600;">0%</span>
+            </div>
+            <div style="background:#1a1a1a;border-radius:4px;height:8px;overflow:hidden;">
+              <div id="veProgressBar" style="background:var(--accent,#7c3aed);height:100%;width:0%;transition:width 0.4s;"></div>
+            </div>
+            <div id="veOutputInfo" style="margin-top:10px;display:none;">
+              <div style="padding:10px;background:#0f2f0f;border:1px solid #2a4a2a;border-radius:6px;font-size:12px;">
+                <div style="color:#4caf50;font-weight:600;margin-bottom:4px;">✓ Concluído</div>
+                <div id="veOutputPath" style="color:var(--muted);word-break:break-all;margin-bottom:8px;"></div>
+                <div id="veOutputSize" style="color:var(--muted);margin-bottom:10px;"></div>
+                <div id="veOutputActions" class="row" style="gap:8px;"></div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn primary" style="margin-top:16px;width:100%;" onclick="veEnhance()" id="veBtn">
+            ✦ Melhorar Vídeo
+          </button>
+
+          <div id="veInstallWarning" style="display:none;margin-top:10px;padding:10px;background:#2f1a0f;border:1px solid #5a3020;border-radius:6px;font-size:12px;color:#f97316;">
+            Video2X não encontrado. <code>pip install video2x</code>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Como Funciona</h2>
+          <div style="font-size:13px;color:var(--muted);line-height:1.7;">
+            <p style="margin:0 0 10px;">O Video Enhancer usa <strong>Video2X</strong> com o modelo <strong>RealESRGAN</strong> para aumentar a resolução e qualidade de vídeos.</p>
+            <p style="margin:0 0 10px;"><strong>720p</strong> — escala o vídeo 2×. Requer ~2GB de VRAM.<br>
+            <strong>1080p</strong> — escala o vídeo 4×. Requer ~4GB de VRAM.</p>
+            <p style="margin:0 0 10px;">O processamento roda em background. Use "Jobs Recentes" para acompanhar o progresso.</p>
+            <p style="margin:0;"><strong>Formatos aceitos:</strong> mp4, mov, webm, avi, mkv</p>
+          </div>
+        </section>
+      </div>
+
+      <section class="card" style="margin-top:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h2>Jobs Recentes</h2>
+          <div class="row" style="gap:8px;">
+            <button class="btn" onclick="veCheckInstall()">⚙ Verificar Video2X</button>
+            <button class="btn" onclick="veLoadJobs()">↺ Atualizar</button>
+          </div>
+        </div>
+        <div id="veJobsList">
+          <div style="color:var(--muted);text-align:center;padding:20px;">Carregando...</div>
+        </div>
+      </section>
+    </section>
+
+    <!-- PUBLISHER -->
+    <section id="page-publisher" class="page">
+      <h1>Publicação Automática</h1>
+      <div class="card">
+        <h2>Publicar Vídeo</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
+          <div>
+            <label>Criador</label>
+            <select id="pub_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="">Selecione...</option>
+            </select>
+          </div>
+          <div><label>S3 Object Key do Vídeo</label><input id="pub_video_key" type="text" placeholder="autoeditor/video.mp4"/></div>
+          <div><label>Título</label><input id="pub_title" type="text" placeholder="Título SEO otimizado"/></div>
+          <div><label>Categoria</label><input id="pub_category" type="text" value="Amateur"/></div>
+          <div style="grid-column:1/-1"><label>Descrição</label><textarea id="pub_desc" rows="3" style="width:100%;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;padding:8px"></textarea></div>
+          <div style="grid-column:1/-1"><label>Tags (separadas por vírgula)</label><input id="pub_tags" type="text" placeholder="amateur, brazilian, anal"/></div>
+          <div style="grid-column:1/-1">
+            <label>Plataformas</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="pub_plat" value="xvideos"/> XVideos</label>
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="pub_plat" value="pornhub"/> Pornhub</label>
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="pub_plat" value="xnxx"/> XNXX</label>
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="pub_plat" value="xhamster"/> xHamster</label>
+            </div>
+          </div>
+        </div>
+        <button class="btn primary" style="margin-top:16px" onclick="publisherPublish()">🚀 Publicar Agora</button>
+        <div id="pub_status" style="margin-top:12px;color:#aaa;font-size:13px"></div>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>Verificar Status do Job</h2>
+        <div class="row" style="gap:8px">
+          <input id="pub_job_id" type="text" placeholder="job_id..." style="flex:1"/>
+          <button class="btn" onclick="publisherCheckStatus()">Verificar</button>
+        </div>
+        <div id="pub_job_result" style="margin-top:12px;font-size:13px"></div>
+      </div>
+    </section>
+
+    <!-- TRENDS -->
+    <section id="page-trends" class="page">
+      <h1>Radar de Tendências</h1>
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        <button class="btn primary" onclick="trendsCollect()">🔄 Coletar Tendências Globais</button>
+        <button class="btn" onclick="trendsLoadBriefings()">📋 Atualizar Lista</button>
+      </div>
+
+      <!-- Painel de ação por criador -->
+      <div class="card" style="margin-bottom:16px">
+        <h2>Gerar Briefing por Criador</h2>
+        <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+          <select id="trends_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;flex:1;min-width:200px">
+            <option value="">Selecione o criador...</option>
+          </select>
+          <button class="btn" onclick="trendsCollectChannels()">📡 Coletar Canais</button>
+          <button class="btn primary" onclick="trendsGenerateBriefingJob()">🤖 Gerar Briefing</button>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#555">
+          💡 <strong>Coletar Canais</strong> — scraping XVideos/Pornhub &nbsp;|&nbsp;
+          🤖 <strong>Gerar Briefing</strong> — envia dados ao Grok e gera sugestões
+        </div>
+      </div>
+
+      <!-- Painel de progresso em tempo real -->
+      <div id="trendsJobPanel" style="display:none;margin-bottom:16px">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <h2 style="margin:0" id="trendsJobTitle">Processando…</h2>
+            <button class="btn" style="font-size:11px" onclick="trendsJobClear()">✕ Fechar</button>
+          </div>
+          <div id="trendsJobSteps" style="space-y:8px"></div>
+          <!-- Aprovação do briefing -->
+          <div id="trendsApprovalPanel" style="display:none;margin-top:16px;border-top:1px solid #2a2a2a;padding-top:16px">
+            <div style="font-size:12px;color:#aaa;margin-bottom:12px">Briefing pronto. Revise abaixo e decida se notifica o criador.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn primary" onclick="trendsApproveBriefing(true)" style="background:#2a9d5c;border-color:#2a9d5c">✅ Aprovar e Notificar Criador</button>
+              <button class="btn" onclick="trendsApproveBriefing(false)">👁 Aprovar sem notificar</button>
+              <button class="btn" onclick="trendsJobClear()" style="color:#c44;border-color:#c44">🗑 Descartar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="trendsLatest" style="margin-top:16px"></div>
+      <div id="briefingsList" style="margin-top:16px"></div>
+    </section>
+
+    <!-- CALENDAR -->
+    <section id="page-calendar" class="page">
+      <h1>Calendário Editorial</h1>
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        <button class="btn primary" onclick="calendarShowAdd()">+ Agendar Publicação</button>
+        <button class="btn" onclick="calendarLoadNext()">📅 Próximas Publicações</button>
+        <button class="btn" onclick="calendarAutoSchedule()">🤖 Auto-Agendar</button>
+      </div>
+      <div id="calendarList"></div>
+
+      <div id="calendarAddForm" class="hidden card" style="margin-top:16px">
+        <h2>Nova Entrada no Calendário</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div>
+            <label>Criador</label>
+            <select id="cal_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="">Selecione...</option>
+            </select>
+          </div>
+          <div><label>S3 Object Key do Vídeo</label><input id="cal_video_key" type="text" placeholder="autoeditor/video.mp4"/></div>
+          <div><label>Data/Hora de Publicação</label><input id="cal_publish_at" type="datetime-local"/></div>
+          <div><label>Título</label><input id="cal_title" type="text"/></div>
+          <div style="grid-column:1/-1">
+            <label>Plataformas</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="cal_plat" value="xvideos" checked/> XVideos</label>
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="cal_plat" value="pornhub"/> Pornhub</label>
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="cal_plat" value="xnxx"/> XNXX</label>
+              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="cal_plat" value="xhamster"/> xHamster</label>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px;gap:8px">
+          <button class="btn primary" onclick="calendarSaveEntry()">💾 Salvar</button>
+          <button class="btn" onclick="qs('calendarAddForm').classList.add('hidden')">Cancelar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- FINANCIAL -->
+    <section id="page-financial" class="page">
+      <h1>Financeiro</h1>
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        <button class="btn primary" onclick="financialAgencyOverview()">🏢 Visão da Agência</button>
+        <button class="btn" onclick="financialCreatorReport()">📊 Relatório por Criador</button>
+        <button class="btn" onclick="financialShowAddEarning()">+ Lançar Receita</button>
+      </div>
+
+      <div id="financialAgencyCard" class="hidden card" style="margin-bottom:16px">
+        <h2>Visão Geral da Agência</h2>
+        <div id="financialAgencyData"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <h2>Relatório por Criador</h2>
+        <div class="row" style="gap:8px;margin-top:12px">
+          <select id="fin_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;flex:1">
+            <option value="">Selecione o criador...</option>
+          </select>
+          <input id="fin_month" type="month" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px"/>
+          <button class="btn primary" onclick="financialCreatorReport()">Ver</button>
+        </div>
+        <div id="financialCreatorData" style="margin-top:12px"></div>
+      </div>
+
+      <div id="financialAddEarningForm" class="hidden card">
+        <h2>Lançar Receita Manual</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div>
+            <label>Criador</label>
+            <select id="fe_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+              <option value="">Selecione...</option>
+            </select>
+          </div>
+          <div><label>Plataforma</label><input id="fe_platform" type="text" placeholder="xvideos"/></div>
+          <div><label>Período (YYYY-MM)</label><input id="fe_period" type="month"/></div>
+          <div><label>Receita Bruta (R$)</label><input id="fe_gross" type="number" step="0.01" min="0" value="0"/></div>
+          <div><label>Taxa da Plataforma (%)</label><input id="fe_fee_pct" type="number" step="0.1" min="0" max="100" value="0"/></div>
+          <div><label>Views no Período</label><input id="fe_views" type="number" min="0" value="0"/></div>
+        </div>
+        <div class="row" style="margin-top:12px;gap:8px">
+          <button class="btn primary" onclick="financialSaveEarning()">💾 Salvar</button>
+          <button class="btn" onclick="qs('financialAddEarningForm').classList.add('hidden')">Cancelar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- DMCA -->
+    <section id="page-dmca" class="page">
+      <h1>Proteção DMCA</h1>
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        <button class="btn primary" onclick="dmcaScan()">🔍 Escanear Agora</button>
+        <button class="btn" onclick="dmcaLoadInfringements()">📋 Ver Infrações</button>
+        <button class="btn" onclick="dmcaShowStats()">📊 Estatísticas</button>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <h2>Escanear por Pirataria</h2>
+        <div class="row" style="gap:8px;margin-top:12px">
+          <select id="dmca_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;flex:1">
+            <option value="">Selecione o criador...</option>
+          </select>
+          <button class="btn primary" onclick="dmcaScan()">🔍 Escanear</button>
+        </div>
+        <div id="dmca_scan_status" style="margin-top:10px;color:#aaa;font-size:13px"></div>
+      </div>
+
+      <div id="dmcaStatsCard" class="hidden card" style="margin-bottom:16px">
+        <h2>Estatísticas DMCA</h2>
+        <div id="dmcaStatsData"></div>
+      </div>
+
+      <div id="dmcaInfringements"></div>
+    </section>
+
+      </main>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div class="version-badge">v1.14.5</div>
+
+  <!-- MODAL: CARREGAMENTO DA PÁGINA -->
+  <div id="pageLoadModal" style="
+    position:fixed;inset:0;z-index:99999;
+    background:rgba(10,10,18,0.97);
+    display:flex;align-items:center;justify-content:center;
+    flex-direction:column;gap:0;
+    transition:opacity .4s ease;
+  ">
+    <div style="width:340px;max-width:90vw;text-align:center;">
+      <div style="font-size:28px;font-weight:800;letter-spacing:2px;color:#fff;margin-bottom:6px;">METAPORN</div>
+      <div style="font-size:12px;color:#888;margin-bottom:32px;letter-spacing:1px;">ADMIN PLATFORM</div>
+
+      <div style="
+        background:#1a1a2a;border-radius:8px;
+        height:6px;width:100%;margin-bottom:14px;overflow:hidden;
+      ">
+        <div id="plFill" style="
+          height:100%;width:0%;
+          background:linear-gradient(90deg,#e04060,#c02040);
+          border-radius:8px;
+          transition:width .35s ease;
+        "></div>
+      </div>
+
+      <div id="plDetail" style="font-size:13px;color:#ccc;min-height:20px;margin-bottom:8px;">Iniciando…</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span id="plPct" style="font-size:11px;color:#666;">0%</span>
+        <span id="plEta" style="font-size:11px;color:#666;"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: METADADOS DE UPLOAD -->
+  <div id="uploadMetaModal" class="modal-overlay hidden" onclick="if(event.target===this)_closeUploadMetaModal()">
+    <div class="modal-box" style="max-width:420px;">
+      <h2 style="margin:0 0 16px;">Informações do arquivo</h2>
+      <label class="form-label">Nome do arquivo</label>
+      <input id="uploadMetaName" type="text" class="input" style="width:100%;margin-bottom:14px;" placeholder="Ex: Video_Cliente_Cena01.mp4">
+      <label class="form-label">Empresa</label>
+      <select id="uploadMetaCompany" class="input" style="width:100%;margin-bottom:20px;">
+        <option value="">— sem empresa —</option>
+      </select>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="_closeUploadMetaModal()">Cancelar</button>
+        <button class="btn" id="uploadMetaConfirmBtn" onclick="_confirmUploadMeta()">Confirmar Upload</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTÃO DE AJUDA FLUTUANTE -->
+  <div class="help-float">
+    <button class="help-btn" onclick="toggleHelpPanel()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      Aprenda Aqui
+    </button>
+  </div>
+
+  <!-- PAINEL DE AJUDA -->
+  <div id="helpPanel" class="help-panel">
+    <div class="help-panel-header">
+      <h3>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <span id="helpPanelTitle">Ajuda - Analyze</span>
+      </h3>
+      <button class="help-panel-close" onclick="toggleHelpPanel()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="help-panel-content" id="helpPanelContent">
+      <!-- Conteúdo será preenchido via JavaScript -->
+    </div>
+  </div>
+
+  <script src="/ui/app.js?v=11450"></script>
+</body>
+
+</html>

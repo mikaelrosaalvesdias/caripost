@@ -1,0 +1,23 @@
+{
+    "platform": "xvideos",
+    "version": "2026-04",
+    "selectors": {
+        "file_input": "input[type='file'][accept*='video'], input[type='file']",
+        "title": "#title, input[name='title']",
+        "description": "#description, textarea[name='description']",
+        "tags": "#tags, input[name='tags']",
+        "category": "select[name='category']",
+        "thumbnail": "input[name='thumb'], .thumb-upload input[type='file']",
+        "premium": "#premium, input[name='red']",
+        "submit": "button[type='submit'], .submit-btn, #publish",
+        "upload_complete": ".upload-complete, .progress-100, .upload-success",
+        "logged_in_indicator": ".user-menu, .account-nav, #user-dropdown",
+        "login_username": "#signin-form_login, input[name='login']",
+        "login_password": "#signin-form_password, input[name='password']",
+        "login_submit": "#signin-form input[type='submit']",
+        "video_views": ".views-count, .nb-views, .label-nb-views",
+        "video_likes": ".likes-count, .vote-action-good .value",
+        "video_comments": ".comments-count, #tabComments .nb-comments",
+        "video_rating": ".rating-value, .percent"
+    }
+}

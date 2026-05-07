@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: #e2e8f0;
+  background: #020617;
+  --portal-primary: #67e8f9;
+  --portal-secondary: #8b5cf6;
+  --portal-accent: #22d3ee;
+  --portal-surface: #0f172a;
+  --portal-text: #e2e8f0;
+  --portal-bg-start: #020617;
+  --portal-bg-mid: rgba(139, 92, 246, 0.12);
+  --portal-bg-end: rgba(103, 232, 249, 0.12);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+.font-display {
+  font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.portal-theme-muted {
+  color: color-mix(in srgb, var(--portal-text) 74%, transparent);
+}
+
+.portal-shell-card {
+  border: 1px solid color-mix(in srgb, var(--portal-primary) 18%, rgba(255,255,255,.08));
+  background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.04));
+  box-shadow: 0 24px 60px rgba(0,0,0,.22), 0 0 0 1px rgba(255,255,255,.03) inset;
+  backdrop-filter: blur(18px);
+  border-radius: 28px;
+}
+
+.portal-soft-panel {
+  border: 1px solid color-mix(in srgb, var(--portal-primary) 16%, rgba(255,255,255,.08));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--portal-primary) 10%, transparent), color-mix(in srgb, var(--portal-secondary) 12%, transparent));
+}
+
+.portal-nav-link {
+  color: color-mix(in srgb, var(--portal-text) 90%, transparent);
+}
+
+.portal-nav-link:hover {
+  background: rgba(255,255,255,.08);
+  color: #fff;
+}
+
+.portal-nav-link.is-active {
+  background: var(--portal-primary);
+  color: #06111d;
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--portal-primary) 26%, transparent);
+}
+
+.portal-input {
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+}
+
+.portal-input:focus {
+  border-color: color-mix(in srgb, var(--portal-primary) 42%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--portal-primary) 16%, transparent);
+}
+
+.portal-primary-btn {
+  background: linear-gradient(135deg, var(--portal-primary), var(--portal-accent));
+  color: #04121f;
+}
+
+.portal-primary-btn:hover {
+  filter: brightness(1.05);
+}
+
+.portal-secondary-btn {
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.08);
+  color: var(--portal-text);
+}
+
+.portal-secondary-btn:hover {
+  background: rgba(255,255,255,.14);
+}

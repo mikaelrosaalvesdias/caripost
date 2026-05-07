@@ -1,0 +1,51 @@
+.git/
+.claude/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Runtime/local data
+data/
+*.db
+*.sqlite
+*.sqlite3
+server.log
+server.pid
+*.log
+
+# Secrets and production-only config
+.env
+.env.*
+!.env.example
+frontend-portal/.env
+frontend-portal/.env.*
+!frontend-portal/.env.example
+stack.yml
+stack.brutos.yml
+stack.minio.yml
+DEPLOY_BRUTOS.md
+scripts/fix_cors.py
+
+# Generated frontend/build artifacts
+frontend-portal/node_modules/
+frontend-portal/dist/
+
+# Generated media/test binaries
+media/
+uploads/
+burns/
+teasers/
+logos/
+scripts/test_proxy.mp4
+proxy_test.txt
+
+# Local backup/scratch files
+*.bak
+*.tmp
+*.swp
+Dockerfile.hotfix_logo_profiles

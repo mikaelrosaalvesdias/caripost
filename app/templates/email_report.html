@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relatório Financeiro — MetaPorn Agency</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; background: #0d0d0d; color: #e0e0e0; }
+  .wrapper { max-width: 600px; margin: 0 auto; padding: 24px 16px; }
+  .header { text-align: center; padding: 32px 0 24px; border-bottom: 1px solid #222; }
+  .header h1 { color: #ff1744; font-size: 26px; }
+  .header p { color: #666; font-size: 13px; margin-top: 6px; }
+  .greeting { padding: 20px 0 16px; font-size: 15px; color: #ccc; }
+  .stats-table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; }
+  .stats-table td { padding: 12px 16px; border: 1px solid #222; font-size: 14px; }
+  .stats-table .label { color: #888; background: #161616; }
+  .stats-table .value-good { color: #4CAF50; font-weight: bold; background: #111; }
+  .stats-table .value-main { color: #ff1744; font-weight: bold; font-size: 18px; background: #111; }
+  .stats-table .value { color: #ccc; background: #111; }
+  .platform-section { margin-bottom: 24px; }
+  .platform-section h3 { color: #aaa; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+  .platform-row { display: flex; justify-content: space-between; padding: 8px 12px; background: #181818; border-radius: 4px; margin-bottom: 4px; font-size: 13px; }
+  .platform-name { color: #aaa; }
+  .platform-value { color: #4CAF50; }
+  .note-box { background: #1a1a1a; border-left: 4px solid #4CAF50; padding: 12px 16px; border-radius: 0 6px 6px 0; margin-bottom: 24px; color: #aaa; font-size: 13px; line-height: 1.6; }
+  .footer { text-align: center; padding: 24px 0; border-top: 1px solid #222; color: #444; font-size: 11px; line-height: 1.6; }
+  .footer a { color: #ff1744; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="header">
+    <h1>MetaPorn Agency</h1>
+    <p>Relatório Financeiro — {{month}}</p>
+  </div>
+
+  <div class="greeting">
+    Olá, <strong>{{creator_name}}</strong>! 💰<br>
+    Aqui está o resumo financeiro referente a <strong>{{month_label}}</strong>.
+  </div>
+
+  <table class="stats-table">
+    <tr>
+      <td class="label">Receita Bruta Total</td>
+      <td class="value-good">R$ {{total_gross}}</td>
+    </tr>
+    <tr>
+      <td class="label">Taxas das Plataformas</td>
+      <td class="value">− R$ {{total_platform_fees}}</td>
+    </tr>
+    <tr>
+      <td class="label">Receita Líquida</td>
+      <td class="value">R$ {{total_net}}</td>
+    </tr>
+    <tr>
+      <td class="label">Comissão da Agência ({{commission_pct}}%)</td>
+      <td class="value">− R$ {{total_agency_commission}}</td>
+    </tr>
+    <tr>
+      <td class="label">💸 Seu Repasse</td>
+      <td class="value-main">R$ {{total_creator_payout}}</td>
+    </tr>
+    <tr>
+      <td class="label">Views no Período</td>
+      <td class="value">{{total_views}}</td>
+    </tr>
+  </table>
+
+  {{platforms_html}}
+
+  <div class="note-box">
+    O repasse será processado até o dia 10 do próximo mês. Em caso de dúvidas, entre em contato com nossa equipe.
+  </div>
+
+  <div class="footer">
+    <p>
+      <a href="{{portal_url}}">Ver detalhes no Portal</a> ·
+      <a href="mailto:{{contact_email}}">Suporte</a>
+    </p>
+    <p style="margin-top:8px">© {{year}} MetaPorn Agency</p>
+  </div>
+</div>
+</body>
+</html>

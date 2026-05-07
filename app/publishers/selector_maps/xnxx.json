@@ -1,0 +1,20 @@
+{
+    "platform": "xnxx",
+    "version": "2026-04",
+    "selectors": {
+        "file_input": "input[type='file'][accept*='video'], input[type='file']",
+        "title": "input[name='title'], #title",
+        "description": "textarea[name='description'], #description",
+        "tags": "input[name='tags'], #tags",
+        "category": "select[name='category']",
+        "thumbnail": "input[name='thumb'], input[type='file'][accept*='image']",
+        "submit": "button[type='submit'], input[type='submit'], .submit-btn",
+        "upload_complete": ".upload-complete, .progress-done",
+        "logged_in_indicator": ".user-menu, .account-menu, #user-nav",
+        "login_username": "input[name='login'], #login",
+        "login_password": "input[name='password'], #password",
+        "login_submit": "input[type='submit'], button[type='submit']",
+        "video_views": ".nb-views-number, .video-views",
+        "video_likes": ".vote-action-good .nb, .thumbs-up-count"
+    }
+}

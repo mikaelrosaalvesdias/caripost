@@ -1,0 +1,35 @@
+fastapi==0.133.1
+uvicorn[standard]==0.41.0
+pydantic>=2,<3
+httpx[http2]==0.28.1
+beautifulsoup4==4.14.3
+lxml==6.0.0
+xvideos_api==1.8.3
+sse-starlette==3.2.0
+boto3==1.40.32
+python-multipart==0.0.9
+faster-whisper==1.1.1
+google-api-python-client>=2.169,<3
+google-auth>=2.38,<3
+
+# ── Agency modules ─────────────────────────────────────────────────────────
+# Encryption for credentials/cookies
+cryptography>=43,<46
+
+# Playwright for browser automation (requires: playwright install chromium)
+playwright>=1.49,<2
+
+# APScheduler for cron tasks
+apscheduler>=3.10,<4
+
+# JWT for creator portal
+python-jose[cryptography]>=3.3,<4
+
+# Image hashing for DMCA detection (optional)
+imagehash>=4.3,<5
+
+# Email templates
+jinja2>=3.1,<4
+
+# Pillow (dependency of imagehash)
+Pillow>=10,<12

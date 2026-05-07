@@ -1,0 +1,20 @@
+{
+    "platform": "xhamster",
+    "version": "2026-04",
+    "selectors": {
+        "file_input": "input[type='file']",
+        "title": "input[name='title'], #title, .title-input",
+        "description": "textarea[name='description'], .description-input",
+        "tags": ".tags-input input, input[name='tags']",
+        "category": "select[name='category']",
+        "thumbnail": "input[name='thumb'], .thumbnail-upload input[type='file']",
+        "submit": "button[type='submit'], .upload-btn, .submit-btn",
+        "upload_complete": ".upload-complete, .progress-complete, .done",
+        "logged_in_indicator": ".user-menu, .user-nav, .header-user-name",
+        "login_username": "input[name='username'], input[type='text']",
+        "login_password": "input[name='password'], input[type='password']",
+        "login_submit": "button[type='submit'], .login-button",
+        "video_views": ".views-block .entity-info-views, .label-icon-views",
+        "video_likes": ".entity-buttons-item-primary .entity-buttons-item-count"
+    }
+}

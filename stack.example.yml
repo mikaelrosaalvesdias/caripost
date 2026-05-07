@@ -1,0 +1,41 @@
+version: '3.8'
+
+networks:
+  metaporn_internal:
+    external: true
+
+volumes:
+  adult_meta_data:
+
+services:
+  adult-meta:
+    image: adult-meta:latest
+    networks:
+      - metaporn_internal
+    volumes:
+      - adult_meta_data:/data
+      - /var/www2/adult-meta-media:/media
+    environment:
+      S3_ENDPOINT_URL: "${S3_ENDPOINT_URL}"
+      S3_ACCESS_KEY_ID: "${S3_ACCESS_KEY_ID}"
+      S3_SECRET_ACCESS_KEY: "${S3_SECRET_ACCESS_KEY}"
+      S3_BUCKET: "${S3_BUCKET:-metaporn}"
+      S3_PUBLIC_BASE_URL: "${S3_PUBLIC_BASE_URL}"
+      ADULT_META_API_KEY: "${ADULT_META_API_KEY}"
+      ADULT_META_MEDIA_ROOT: "/media"
+      ADULT_META_MEDIA_URL_SECRET: "${ADULT_META_MEDIA_URL_SECRET}"
+      METAPORN_ENCRYPTION_KEY: "${METAPORN_ENCRYPTION_KEY}"
+      PORTAL_JWT_SECRET: "${PORTAL_JWT_SECRET}"
+      AUTH_SESSION_SECRET: "${AUTH_SESSION_SECRET}"
+      BURN_MAX_PARALLEL: "1"
+      FFMPEG_BURN_THREADS: "0"
+    deploy:
+      replicas: 1
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=metaporn_internal
+        - traefik.http.routers.metaporn.rule=Host(`metaporn.com.br`)
+        - traefik.http.routers.metaporn.entrypoints=websecure
+        - traefik.http.routers.metaporn.tls=true
+        - traefik.http.routers.metaporn.tls.certresolver=letsencrypt
+        - traefik.http.services.metaporn.loadbalancer.server.port=8765
