@@ -227,11 +227,37 @@
       flex-wrap: wrap;
       align-items: center;
       margin-bottom: 12px;
+      position: sticky;
+      top: 72px;
+      z-index: 12;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 14px;
+      background: rgba(9, 14, 28, 0.84);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 14px 34px rgba(0,0,0,.20);
+    }
+
+    .media-manager-bulkbar.has-selection {
+      border-color: rgba(32,213,255,.28);
+      box-shadow: 0 14px 34px rgba(0,0,0,.22), 0 0 26px rgba(32,213,255,.08);
     }
 
     .media-manager-grid {
       display: grid;
       gap: 10px;
+    }
+
+    .media-manager-grid.is-list {
+      grid-template-columns: 1fr;
+    }
+
+    .media-manager-grid.is-icons {
+      --media-tile-size: 190px;
+      --media-tile-ratio: 16 / 9;
+      grid-template-columns: repeat(auto-fill, minmax(var(--media-tile-size), 1fr));
+      gap: 14px;
+      align-items: start;
     }
 
     .media-manager-row {
@@ -243,6 +269,13 @@
       border: 1px solid var(--line);
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.02);
+    }
+
+    .media-manager-row.is-selected,
+    .media-tile.is-selected {
+      border-color: rgba(32,213,255,.55);
+      background: linear-gradient(180deg, rgba(32,213,255,.12), rgba(255,255,255,.035));
+      box-shadow: 0 0 0 1px rgba(32,213,255,.18), 0 16px 34px rgba(0,0,0,.24);
     }
 
     .media-manager-main {
@@ -271,6 +304,236 @@
       margin-top: 8px;
       font-size: 11px;
       color: var(--muted);
+    }
+
+    .media-manager-viewbar {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin: -2px 0 12px;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.025);
+    }
+
+    .media-view-buttons,
+    .media-view-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .media-view-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .9px;
+      color: var(--muted);
+    }
+
+    .media-view-size {
+      width: 150px;
+      accent-color: #20d5ff;
+    }
+
+    .media-tile {
+      position: relative;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.022));
+      box-shadow: 0 12px 26px rgba(0,0,0,0.20);
+      transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+
+    .media-tile:hover {
+      transform: translateY(-2px);
+      border-color: rgba(32,213,255,0.30);
+      background: linear-gradient(180deg, rgba(32,213,255,0.075), rgba(255,255,255,0.028));
+      box-shadow: 0 18px 38px rgba(0,0,0,0.28), 0 0 22px rgba(32,213,255,0.10);
+    }
+
+    .media-tile-cover {
+      position: relative;
+      aspect-ratio: var(--media-tile-ratio);
+      overflow: hidden;
+      border-radius: 12px;
+      background:
+        radial-gradient(circle at 25% 20%, rgba(32,213,255,0.16), transparent 36%),
+        linear-gradient(135deg, rgba(6,16,34,0.95), rgba(18,24,46,0.92));
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .media-tile-img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      opacity: 0;
+      transition: opacity .22s ease;
+      background: #000;
+    }
+
+    .media-tile-cover.is-ready .media-tile-img {
+      opacity: 1;
+    }
+
+    .media-tile-skeleton {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px;
+      color: rgba(215,229,255,.72);
+      text-align: center;
+      font-size: 11px;
+      letter-spacing: .2px;
+    }
+
+    .media-tile-cover.is-ready .media-tile-skeleton {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .media-tile-cover.is-error .media-tile-skeleton {
+      color: #ffb4c2;
+    }
+
+    .media-tile-badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 2;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(5,12,25,.72);
+      border: 1px solid rgba(255,255,255,.10);
+      color: #d7e5ff;
+      font-size: 10px;
+      font-weight: 700;
+      backdrop-filter: blur(10px);
+    }
+
+    .media-tile-duration {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      z-index: 2;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(5,12,25,.80);
+      border: 1px solid rgba(255,255,255,.12);
+      color: #f5fbff;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .2px;
+      backdrop-filter: blur(10px);
+    }
+
+    .media-tile-check {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      background: rgba(5,12,25,.74);
+      border: 1px solid rgba(255,255,255,.10);
+      color: #d7e5ff;
+      font-size: 10px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    }
+
+    .media-tile-play {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      z-index: 2;
+      transform: translate(-50%, -50%) scale(.92);
+      width: 46px;
+      height: 46px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.20);
+      background: rgba(8,16,32,.68);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      opacity: 0;
+      cursor: pointer;
+      transition: opacity .16s ease, transform .16s ease, background .16s ease;
+      backdrop-filter: blur(10px);
+    }
+
+    .media-tile:hover .media-tile-play,
+    .media-tile-cover:focus-within .media-tile-play {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .media-tile-play:hover {
+      background: rgba(32,213,255,.82);
+      color: #071426;
+    }
+
+    .media-tile-name {
+      margin-top: 8px;
+      color: #f4f7ff;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.3;
+      min-height: 32px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+    }
+
+    .media-tile-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .media-tile-meta span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .media-tile-tech {
+      color: rgba(190, 214, 255, .72);
+      font-size: 10px;
+    }
+
+    .media-tile-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .media-tile-actions .btn {
+      padding: 6px 8px;
+      font-size: 11px;
+      justify-content: center;
     }
 
     /* ── CONTAINER ── */
@@ -846,6 +1109,189 @@
       font-size: 11px;
       color: #8585a8;
       margin-top: 4px;
+    }
+
+    .upload-progress-card {
+      --upload-pct: 0;
+      --upload-color: #14d8ff;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      align-items: center;
+      justify-items: center;
+      padding: 16px;
+      margin-top: 12px;
+      border: 1px solid rgba(20, 216, 255, 0.24);
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at 18% 10%, rgba(20, 216, 255, 0.18), transparent 34%),
+        linear-gradient(135deg, rgba(6, 14, 30, 0.92), rgba(9, 13, 24, 0.78));
+      box-shadow: 0 16px 46px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      text-align: center;
+    }
+
+    .upload-progress-card.op-progress-card {
+      justify-items: stretch;
+      text-align: left;
+    }
+
+    @media (min-width: 760px) {
+      .upload-progress-card.op-progress-card {
+        grid-template-columns: 122px 1fr;
+        align-items: center;
+      }
+    }
+
+    .upload-progress-ring {
+      width: 112px;
+      height: 112px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      position: relative;
+      background:
+        conic-gradient(var(--upload-color) calc(var(--upload-pct) * 1%), rgba(255, 255, 255, 0.07) 0),
+        radial-gradient(circle, rgba(20, 216, 255, 0.18), rgba(20, 216, 255, 0.02) 62%, transparent 64%);
+      box-shadow: 0 0 28px rgba(20, 216, 255, 0.22);
+      transition: background 0.35s ease, filter 0.25s ease;
+    }
+
+    .upload-progress-ring::before {
+      content: '';
+      position: absolute;
+      inset: -5px;
+      border-radius: inherit;
+      border: 1px solid rgba(20, 216, 255, 0.22);
+      box-shadow: 0 0 22px rgba(20, 216, 255, 0.12);
+      animation: uploadRingPulse 1.7s ease-in-out infinite;
+    }
+
+    .upload-progress-inner {
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      background: linear-gradient(145deg, rgba(7, 14, 28, 0.98), rgba(16, 22, 38, 0.94));
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.42);
+      z-index: 1;
+    }
+
+    .upload-progress-percent {
+      color: #f8fbff;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      font-family: 'Space Grotesk', sans-serif;
+    }
+
+    .upload-progress-state {
+      color: #74eaff;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      margin-top: 6px;
+    }
+
+    .upload-progress-title {
+      color: #eaf7ff;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      margin-bottom: 6px;
+    }
+
+    .upload-progress-copy {
+      width: 100%;
+    }
+
+    .upload-progress-detail {
+      color: #9fb4c6;
+      font-size: 12px;
+      line-height: 1.45;
+      min-height: 18px;
+    }
+
+    .upload-progress-track {
+      height: 5px;
+      margin-top: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .upload-progress-track .op-progress-fill {
+      background: linear-gradient(90deg, #0896ff, #1de7ff, #69f4ff);
+      box-shadow: 0 0 18px rgba(20, 216, 255, 0.4);
+    }
+
+    .upload-progress-card.is-good {
+      --upload-color: #22c55e;
+      border-color: rgba(34, 197, 94, 0.28);
+    }
+
+    .upload-progress-card.is-good .upload-progress-state {
+      color: #86efac;
+    }
+
+    .upload-progress-card.is-bad {
+      --upload-color: #fb2f68;
+      border-color: rgba(251, 47, 104, 0.32);
+    }
+
+    .upload-progress-card.is-bad .upload-progress-state {
+      color: #ff8bab;
+    }
+
+    .op-progress-history {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 10px;
+      max-height: 116px;
+      overflow: hidden;
+    }
+
+    .op-progress-history-item {
+      align-self: flex-start;
+      max-width: 100%;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(20, 216, 255, 0.16);
+      background: rgba(20, 216, 255, 0.07);
+      color: #9fb4c6;
+      font-size: 10.5px;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .op-progress-history-item.good {
+      border-color: rgba(34, 197, 94, 0.24);
+      background: rgba(34, 197, 94, 0.10);
+      color: #a7f3d0;
+    }
+
+    .op-progress-history-item.bad {
+      border-color: rgba(251, 47, 104, 0.28);
+      background: rgba(251, 47, 104, 0.10);
+      color: #ffb3c6;
+    }
+
+    @keyframes uploadRingPulse {
+      0%, 100% {
+        opacity: 0.55;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 1;
+        transform: scale(1.035);
+      }
     }
 
     /* ── COMPARE CONFIG GRID ── */
@@ -3520,7 +3966,7 @@
         </a>
         <div class="sidebar-version">
           <span>Build atual</span>
-          <strong>v1.14.5</strong>
+          <strong>v1.18.18</strong>
         </div>
       </div>
     </aside>
@@ -3630,8 +4076,8 @@
               <button class="btn" onclick="toggleUploadList()" id="btnShowUploads">📂 Selecionar do servidor</button>
               <span style="align-self:center;color:var(--muted);font-size:12px;">ou</span>
               <label class="btn" style="cursor:pointer;">
-                📤 Fazer upload
-                <input id="anVideoFile" type="file" accept="video/*" style="display:none" onchange="uploadVideo()" />
+                📤 Fazer uploads
+                <input id="anVideoFile" type="file" accept="video/*" multiple style="display:none" onchange="uploadVideo()" />
               </label>
             </div>
             <div id="anUploadList" class="hidden"
@@ -3640,6 +4086,23 @@
             <div class="hint">object_key: <span id="anObjectKey">-</span></div>
             <div class="hint">url: <span id="anVideoUrl">-</span></div>
             <div class="hint" id="anUploadStatus">status: -</div>
+            <div class="hint">Você pode selecionar vários vídeos de uma vez. Eles sobem automaticamente em fila paralela, sem formulário.</div>
+            <div class="upload-progress-card" id="anUploadProgressWrap" style="display:none;">
+              <div class="upload-progress-ring" id="anUploadProgressRing" style="--upload-pct:0;">
+                <div class="upload-progress-inner">
+                  <div class="upload-progress-percent" id="anUploadProgressPct">0%</div>
+                  <div class="upload-progress-state" id="anUploadProgressState">pronto</div>
+                </div>
+              </div>
+              <div class="upload-progress-copy">
+                <div class="upload-progress-title" id="anUploadProgressTitle">Aguardando upload</div>
+                <div class="upload-progress-detail" id="anUploadProgressLabel">Selecione um arquivo para iniciar.</div>
+                <div class="upload-progress-track">
+                  <div class="op-progress-fill" id="anUploadProgressFill"></div>
+                </div>
+                <div class="op-progress-history" id="anUploadProgressHistory"></div>
+              </div>
+            </div>
             <div class="op-progress-wrap" id="anTranscribeProgressWrap">
               <div class="op-progress-track">
                 <div class="op-progress-fill" id="anTranscribeProgressFill"></div>
@@ -3655,16 +4118,34 @@
             <div class="col grow">
               <label>Idioma</label>
               <select id="anLang">
-                <option value="auto">auto</option>
-                <option value="pt-BR">pt-BR</option>
+                <option value="pt-BR" selected>pt-BR</option>
                 <option value="en">en</option>
                 <option value="es">es</option>
+                <option value="auto">auto</option>
               </select>
             </div>
             <div class="col">
               <label>Limit</label>
               <input id="anLimit" type="number" value="20" min="1" max="200" />
             </div>
+          </div>
+
+          <div class="row wrap" style="gap:8px;margin:8px 0 12px;align-items:center;">
+            <button class="btn primary" onclick="transcribeAnalyzeSelected('auto')" title="Modo local conservador: não inventa fala quando o áudio não está claro">⚡ Auto estrito</button>
+            <button class="btn" onclick="transcribeAnalyzeSelected('assemblyai')" title="AssemblyAI Universal-3 Pro → Universal-2">AssemblyAI</button>
+            <button class="btn" onclick="transcribeAnalyzeSelected('groq')" title="OpenRouter STT usando token:openrouter">OpenRouter STT</button>
+            <button class="btn" onclick="transcribeAnalyzeSelected('openai')" title="OpenAI Whisper">OpenAI</button>
+            <button class="btn" onclick="transcribeAnalyzeSelected('local')" title="Faster-Whisper local">🖥 Local</button>
+            <button class="btn" onclick="transcribeAnalyzeSelected('premium')" title="Faster-Whisper large-v3, 24kHz, SRT premium">⭐ Premium</button>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+              <input id="anIncludeVocalizations" type="checkbox">
+              Gemidos claros
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+              <input id="anTranscribeEnhanceAudio" type="checkbox">
+              Realçar fala baixa
+            </label>
+            <span class="hint">Selecionar/subir vídeo não transcreve mais sozinho. Escolha aqui quando quiser transcrever.</span>
           </div>
 
           <details class="cardSub">
@@ -3883,29 +4364,40 @@
         </div>
 
         <!-- BARRA DE PROGRESSO DETALHADA -->
-        <div id="cmpProgressWrap" style="display:none;margin-top:14px;">
-          <div class="cmp-prog-bar-track">
-            <div class="cmp-prog-bar-fill" id="cmpProgBarFill"></div>
-          </div>
-          <div class="cmp-prog-providers">
-            <div class="cmp-prog-provider" id="cmpProgA">
-              <div class="cmp-prog-dot" id="cmpProgDotA"></div>
-              <div class="cmp-prog-info">
-                <span class="cmp-prog-name" id="cmpProgNameA">Provider A</span>
-                <span class="cmp-prog-detail" id="cmpProgDetailA">aguardando…</span>
-              </div>
-              <span class="cmp-prog-tokens" id="cmpProgTokensA">0 tok</span>
-            </div>
-            <div class="cmp-prog-provider" id="cmpProgB">
-              <div class="cmp-prog-dot" id="cmpProgDotB"></div>
-              <div class="cmp-prog-info">
-                <span class="cmp-prog-name" id="cmpProgNameB">Provider B</span>
-                <span class="cmp-prog-detail" id="cmpProgDetailB">aguardando…</span>
-              </div>
-              <span class="cmp-prog-tokens" id="cmpProgTokensB">0 tok</span>
+        <div id="cmpProgressWrap" class="upload-progress-card op-progress-card" style="display:none;margin-top:14px;">
+          <div class="upload-progress-ring" id="cmpProgressRing" style="--upload-pct:0;">
+            <div class="upload-progress-inner">
+              <div class="upload-progress-percent" id="cmpProgressPct">0%</div>
+              <div class="upload-progress-state" id="cmpProgressState">aguarde</div>
             </div>
           </div>
-          <div class="cmp-prog-elapsed" id="cmpProgElapsed">00:00</div>
+          <div class="upload-progress-copy">
+            <div class="upload-progress-title" id="cmpProgressTitle">Comparar modelos</div>
+            <div class="upload-progress-detail" id="cmpProgressLabel">Aguardando início.</div>
+            <div class="upload-progress-track">
+              <div class="op-progress-fill" id="cmpProgBarFill"></div>
+            </div>
+            <div class="cmp-prog-providers">
+              <div class="cmp-prog-provider" id="cmpProgA">
+                <div class="cmp-prog-dot" id="cmpProgDotA"></div>
+                <div class="cmp-prog-info">
+                  <span class="cmp-prog-name" id="cmpProgNameA">Provider A</span>
+                  <span class="cmp-prog-detail" id="cmpProgDetailA">aguardando…</span>
+                </div>
+                <span class="cmp-prog-tokens" id="cmpProgTokensA">0 tok</span>
+              </div>
+              <div class="cmp-prog-provider" id="cmpProgB">
+                <div class="cmp-prog-dot" id="cmpProgDotB"></div>
+                <div class="cmp-prog-info">
+                  <span class="cmp-prog-name" id="cmpProgNameB">Provider B</span>
+                  <span class="cmp-prog-detail" id="cmpProgDetailB">aguardando…</span>
+                </div>
+                <span class="cmp-prog-tokens" id="cmpProgTokensB">0 tok</span>
+              </div>
+            </div>
+            <div class="cmp-prog-elapsed" id="cmpProgElapsed">00:00</div>
+            <div class="op-progress-history" id="cmpProgressHistory"></div>
+          </div>
         </div>
 
         <div class="hint" style="margin-top:8px;">Stream SSE com fallback automático para endpoint não-stream.</div>
@@ -3950,6 +4442,9 @@
                 <button id="btnRunsReload" class="btn primary">↺</button>
               </div>
             </div>
+            <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;">
+              <button id="btnRunDeleteSelected" class="btn" style="color:var(--bad);border-color:rgba(255,68,85,.45);" disabled>Excluir run selecionado</button>
+            </div>
             <div id="runsList" style="margin-top:12px;"></div>
           </div>
         </div>
@@ -3987,6 +4482,10 @@
           <div class="col">
             <label>&nbsp;</label>
             <button id="btnMediaDriveImportSelected" class="btn">Importar selecionados</button>
+          </div>
+          <div class="col">
+            <label>&nbsp;</label>
+            <button id="btnMediaDriveSelectAll" class="btn">Selecionar todos</button>
           </div>
           <div class="col">
             <label>&nbsp;</label>
@@ -4048,7 +4547,7 @@
           </div>
           <div class="col">
             <label>Limite por tipo</label>
-            <input id="mediaManagerLimit" type="number" value="80" min="10" max="300" />
+            <input id="mediaManagerLimit" type="number" value="80" min="10" max="500" />
           </div>
           <div class="col">
             <label>&nbsp;</label>
@@ -4056,7 +4555,28 @@
           </div>
         </div>
 
-        <div class="media-manager-bulkbar">
+        <div class="media-manager-viewbar">
+          <div class="media-view-buttons">
+            <span class="media-view-label">Visualização</span>
+            <button id="btnMediaViewIcons" class="btn" type="button">Capas</button>
+            <button id="btnMediaViewList" class="btn" type="button">Lista</button>
+          </div>
+          <div class="media-view-controls">
+            <span class="media-view-label">Tamanho</span>
+            <input id="mediaManagerTileSize" class="media-view-size" type="range" value="190" min="140" max="340" step="10" />
+            <span id="mediaManagerTileSizeLabel" class="hint" style="min-width:44px;text-align:right;">190px</span>
+            <span class="media-view-label">Formato</span>
+            <select id="mediaManagerTileShape"
+              style="height:34px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:8px;">
+              <option value="16x9">16:9 widescreen</option>
+              <option value="4x3">4:3 clássico</option>
+              <option value="1x1">Quadrado</option>
+              <option value="poster">Poster vertical</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="media-manager-bulkbar" id="mediaManagerBulkbar">
           <button id="btnMediaSelectFiltered" class="btn">Selecionar filtrados</button>
           <button id="btnMediaClearSelection" class="btn">Limpar seleção</button>
           <button id="btnMediaBulkDrive" class="btn">Drive em lote</button>
@@ -4135,6 +4655,10 @@
                 <input id="criacaoLimit" type="number" value="30" min="1" max="200" style="width:70px;">
               </div>
               <div class="col"><button id="btnCriacaoReload" class="btn primary">↺</button></div>
+            </div>
+            <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;">
+              <button id="btnCriacaoClearSelected" class="btn" disabled>Limpar criação selecionada</button>
+              <button id="btnCriacaoDeleteSelected" class="btn" style="color:var(--bad);border-color:rgba(255,68,85,.45);" disabled>Excluir tudo</button>
             </div>
             <div id="criacaoRunList" style="margin-top:12px;"></div>
           </div>
@@ -4821,7 +5345,7 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <div class="version-badge">v1.14.5</div>
+  <div class="version-badge">v1.18.18</div>
 
   <!-- MODAL: CARREGAMENTO DA PÁGINA -->
   <div id="pageLoadModal" style="
@@ -4851,23 +5375,6 @@
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <span id="plPct" style="font-size:11px;color:#666;">0%</span>
         <span id="plEta" style="font-size:11px;color:#666;"></span>
-      </div>
-    </div>
-  </div>
-
-  <!-- MODAL: METADADOS DE UPLOAD -->
-  <div id="uploadMetaModal" class="modal-overlay hidden" onclick="if(event.target===this)_closeUploadMetaModal()">
-    <div class="modal-box" style="max-width:420px;">
-      <h2 style="margin:0 0 16px;">Informações do arquivo</h2>
-      <label class="form-label">Nome do arquivo</label>
-      <input id="uploadMetaName" type="text" class="input" style="width:100%;margin-bottom:14px;" placeholder="Ex: Video_Cliente_Cena01.mp4">
-      <label class="form-label">Empresa</label>
-      <select id="uploadMetaCompany" class="input" style="width:100%;margin-bottom:20px;">
-        <option value="">— sem empresa —</option>
-      </select>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button class="btn btn-secondary" onclick="_closeUploadMetaModal()">Cancelar</button>
-        <button class="btn" id="uploadMetaConfirmBtn" onclick="_confirmUploadMeta()">Confirmar Upload</button>
       </div>
     </div>
   </div>
@@ -4907,7 +5414,7 @@
     </div>
   </div>
 
-  <script src="/ui/app.js?v=11450"></script>
+  <script src="/ui/app.js?v=118180"></script>
 </body>
 
 </html>

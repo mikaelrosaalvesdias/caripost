@@ -79,16 +79,117 @@ class AnimatedProgress {
     this._steps = [];
     this._stepIdx = 0;
     this._stepStart = 0;
+    this._history = null;
+    this._lastHistoryText = '';
+    this._title = this._titleForWrap(wrapId);
+    this._ensureCard();
   }
+
+  _titleForWrap(id) {
+    const titles = {
+      anTranscribeProgressWrap: 'Transcrever',
+      anAnalyzeProgressWrap: 'Analisar',
+      aeProgressWrap: 'AutoEditor',
+    };
+    return titles[id] || 'Processando';
+  }
+
+  _ensureCard() {
+    if (!this._wrap || !this._fill || !this._label) return;
+    if (this._wrap.dataset.progressCard === '1') return;
+
+    const previousDisplay = this._wrap.style.display || '';
+    this._wrap.dataset.progressCard = '1';
+    this._wrap.classList.add('upload-progress-card', 'op-progress-card');
+
+    const ring = document.createElement('div');
+    ring.className = 'upload-progress-ring';
+    ring.style.setProperty('--upload-pct', '0');
+    ring.innerHTML = `
+      <div class="upload-progress-inner">
+        <div class="upload-progress-percent">0%</div>
+        <div class="upload-progress-state">pronto</div>
+      </div>
+    `;
+
+    const copy = document.createElement('div');
+    copy.className = 'upload-progress-copy';
+
+    const title = document.createElement('div');
+    title.className = 'upload-progress-title';
+    title.textContent = this._title;
+
+    this._label.classList.add('upload-progress-detail');
+    this._label.textContent = this._label.textContent || 'Aguardando início.';
+
+    const track = document.createElement('div');
+    track.className = 'upload-progress-track';
+    track.appendChild(this._fill);
+
+    const history = document.createElement('div');
+    history.className = 'op-progress-history';
+
+    copy.appendChild(title);
+    copy.appendChild(this._label);
+    copy.appendChild(track);
+    copy.appendChild(history);
+
+    this._wrap.innerHTML = '';
+    this._wrap.appendChild(ring);
+    this._wrap.appendChild(copy);
+    this._ring = ring;
+    this._pctText = ring.querySelector('.upload-progress-percent');
+    this._stateText = ring.querySelector('.upload-progress-state');
+    this._titleEl = title;
+    this._history = history;
+    this._wrap.style.display = previousDisplay || 'none';
+  }
+
+  _stateTextFor(kind) {
+    if (kind === 'good') return 'ok';
+    if (kind === 'bad') return 'erro';
+    if (kind === 'waiting') return 'confirme';
+    return this._pct > 2 ? 'rodando' : 'aguarde';
+  }
+
+  _paint(pct, label, kind = 'active') {
+    if (!this._wrap || !this._fill || !this._label) return;
+    this._ensureCard();
+    const safePct = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
+    this._wrap.classList.toggle('is-good', kind === 'good');
+    this._wrap.classList.toggle('is-bad', kind === 'bad');
+    this._wrap.style.setProperty('--upload-pct', safePct.toFixed(1));
+    if (this._ring) this._ring.style.setProperty('--upload-pct', safePct.toFixed(1));
+    if (this._pctText) this._pctText.textContent = `${Math.round(safePct)}%`;
+    if (this._stateText) this._stateText.textContent = this._stateTextFor(kind);
+    if (this._titleEl) this._titleEl.textContent = this._title;
+    this._fill.style.width = `${safePct.toFixed(1)}%`;
+    if (label) this._label.textContent = label;
+  }
+
+  _pushHistory(text, kind = 'active') {
+    if (!this._history || !text) return;
+    const clean = String(text).replace(/^[✓✗⏳🎬🔍🤖✂️🔊🎞️📥]+\s*/u, '').trim();
+    if (!clean || clean === this._lastHistoryText) return;
+    this._lastHistoryText = clean;
+    const item = document.createElement('div');
+    item.className = `op-progress-history-item ${kind}`;
+    item.textContent = `${kind === 'good' ? '✓' : kind === 'bad' ? '!' : '•'} ${clean}`;
+    this._history.prepend(item);
+    while (this._history.children.length > 6) this._history.lastElementChild?.remove();
+  }
+
   // steps = [{pct: 30, label: 'texto…', minMs: 2000}, …]
   start(steps) {
     this._steps    = steps;
     this._stepIdx  = 0;
     this._pct      = 0;
-    this._fill.style.background  = 'var(--pri)';
-    this._fill.style.width       = '0%';
-    this._wrap.style.display     = 'block';
-    this._label.textContent      = steps[0]?.label || '';
+    this._lastHistoryText = '';
+    if (this._history) this._history.innerHTML = '';
+    this._fill.style.background  = '';
+    this._wrap.style.display     = 'grid';
+    this._paint(0, steps[0]?.label || 'Iniciando…');
+    this._pushHistory(steps[0]?.label || 'Iniciando…');
     this._stepStart = Date.now();
     clearInterval(this._timer);
     this._timer = setInterval(() => this._tick(), 250);
@@ -100,19 +201,20 @@ class AnimatedProgress {
     const elapsed = Date.now() - this._stepStart;
     if (this._pct < target - 0.4)
       this._pct += (target - this._pct) * 0.12;
-    this._fill.style.width = this._pct.toFixed(1) + '%';
+    this._paint(this._pct, step.label || '');
     const next = this._steps[this._stepIdx + 1];
     if (next && elapsed >= (step.minMs || 1500) && this._pct >= target - 1.5) {
       this._stepIdx++;
       this._stepStart = Date.now();
-      this._label.textContent = next.label;
+      this._paint(this._pct, next.label || '');
+      this._pushHistory(next.label || '');
     }
   }
   _updatePct(pct, label) {
     if (pct <= this._pct && !label) return;
     this._pct = Math.max(this._pct, pct);
-    this._fill.style.width = this._pct.toFixed(1) + '%';
-    if (label) this._label.textContent = label;
+    this._paint(this._pct, label || this._label?.textContent || '');
+    if (label) this._pushHistory(label);
     // Advance fake-animation step so it doesn't run ahead of real progress
     while (this._stepIdx < this._steps.length - 1 && this._pct >= this._steps[this._stepIdx].pct) {
       this._stepIdx++;
@@ -121,21 +223,23 @@ class AnimatedProgress {
   }
   complete(label) {
     clearInterval(this._timer);
-    this._fill.style.background = '#2a9d5c';
-    this._fill.style.width      = '100%';
-    this._label.textContent     = label || '✓ Concluído';
-    setTimeout(() => { this._wrap.style.display = 'none'; }, 2200);
+    this._pct = 100;
+    this._wrap.style.display = 'grid';
+    this._paint(100, label || '✓ Concluído', 'good');
+    this._pushHistory(label || 'Concluído', 'good');
   }
   error(label) {
     clearInterval(this._timer);
-    this._fill.style.background = 'var(--pri)';
-    this._fill.style.width      = '100%';
-    this._label.textContent     = label || '✗ Falhou';
+    this._pct = 100;
+    this._wrap.style.display = 'grid';
+    this._paint(100, label || '✗ Falhou', 'bad');
+    this._pushHistory(label || 'Falhou', 'bad');
   }
   hide() {
     clearInterval(this._timer);
     this._wrap.style.display = 'none';
     this._pct = 0;
+    this._paint(0, 'Aguardando início.');
   }
 }
 
@@ -156,7 +260,23 @@ const state = {
   criacaoRequestId: 0,
   criacaoAbort: null,
   runFramesCache: new Map(),
+  selectedRunId: null,
+  selectedCriacaoRunId: null,
 };
+
+function _safeStorageGet(key, fallback = '') {
+  try {
+    return window.localStorage?.getItem(key) ?? fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function _safeStorageSet(key, value) {
+  try {
+    window.localStorage?.setItem(key, String(value));
+  } catch (_) {}
+}
 
 const mediaManagerState = {
   category: 'all',
@@ -174,6 +294,16 @@ const mediaManagerState = {
   previewLabel: '',
   loaded: false,
   selectedKeys: [],
+  viewMode: _safeStorageGet('mediaManagerViewMode', 'icons') === 'list' ? 'list' : 'icons',
+  tileSize: Math.max(140, Math.min(parseInt(_safeStorageGet('mediaManagerTileSize', '190'), 10) || 190, 340)),
+  tileShape: ['16x9', '4x3', '1x1', 'poster'].includes(_safeStorageGet('mediaManagerTileShape', '16x9'))
+    ? _safeStorageGet('mediaManagerTileShape', '16x9')
+    : '16x9',
+  previewObserver: null,
+  thumbQueue: [],
+  thumbActive: 0,
+  metadataCache: {},
+  metadataPending: new Set(),
 };
 
 let _burnQueueRefreshInFlight = null;
@@ -274,7 +404,7 @@ async function healthTick() {
 }
 
 // SETTINGS
-const tokenProviders = ['openai', 'groq', 'grok', 'gemini', 'deepseek', 'openrouter', 'fal'];
+const tokenProviders = ['openai', 'groq', 'grok', 'gemini', 'deepseek', 'openrouter', 'deepgram', 'fal'];
 
 function renderTokenRows(tokens) {
   const configured = new Map();
@@ -381,6 +511,294 @@ const TEASER_MAX_SCENE_DURATION_SEC = 720;
 const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
+  {
+    version: 'v1.18.18', date: '2026-05-25',
+    items: [
+      { type: 'fix', text: 'Logo: burn corrigido para calcular a altura pela proporção real da imagem no FFmpeg 7, evitando marca achatada em vídeos legendados.' },
+    ],
+  },
+  {
+    version: 'v1.18.17', date: '2026-05-23',
+    items: [
+      { type: 'fix', text: 'Runs/Criação: botões fixos de exclusão agora aparecem na lateral e ficam habilitados ao selecionar um run, sem depender apenas dos botões pequenos dentro da lista.' },
+      { type: 'fix', text: 'Criação: adicionadas ações visíveis para limpar somente a criação selecionada ou excluir tudo do run selecionado.' },
+    ],
+  },
+  {
+    version: 'v1.18.16', date: '2026-05-23',
+    items: [
+      { type: 'feat', text: 'Runs: adicionadas ações para excluir run completo ou limpar somente a criação, removendo registros, jobs e mídias derivadas sem afetar arquivos usados por outros runs.' },
+      { type: 'fix', text: 'Criação: limpeza preserva o run original e bloqueia exclusão quando há processamento ativo, evitando apagar estado durante burn/teaser em andamento.' },
+      { type: 'chore', text: 'Versionamento sincronizado no backend, badges da UI e cache-busting do app.js para o deploy.' },
+    ],
+  },
+  {
+    version: 'v1.18.15', date: '2026-05-21',
+    items: [
+      { type: 'fix', text: 'Transcrição: fallback OpenRouter do pós-processamento agora usa `x-ai/grok-4.3`, evitando falha por modelo Grok depreciado.' },
+    ],
+  },
+  {
+    version: 'v1.18.14', date: '2026-05-21',
+    items: [
+      { type: 'fix', text: 'Transcrição: pós-processamento adulto não tenta mais `grok-2-latest`; usa Grok atual e cai para OpenRouter quando xAI rejeita o modelo.' },
+    ],
+  },
+  {
+    version: 'v1.18.13', date: '2026-05-21',
+    items: [
+      { type: 'fix', text: 'Transcrição local: modo adulto sem idioma explícito agora força PT-BR e tenta strict, relaxed e no-VAD antes de retornar vazio.' },
+      { type: 'fix', text: 'Transcrição Auto: se o local vier vazio, tenta Whisper Sync e OpenRouter em sequência em vez de encerrar com empty_transcript.' },
+      { type: 'feat', text: 'Teaser: queima de logo ganhou card circular de progresso com porcentagem, estado e histórico, igual ao upload.' },
+    ],
+  },
+  {
+    version: 'v1.18.12', date: '2026-05-20',
+    items: [
+      { type: 'fix', text: 'Logo: escala agora preserva o aspecto real da imagem no burn sem legenda, burn com legenda, preview e teaser.' },
+      { type: 'fix', text: 'Logo: queima sem legenda, teaser direto e queima de logo no teaser voltam a carregar a imagem salva da empresa mesmo quando o layout foi desvinculado.' },
+      { type: 'fix', text: 'Teaser: endpoint de queimar logo agora aceita `logos[]` como a queima principal, preservando a configuração da aba de logo do teaser.' },
+      { type: 'fix', text: 'Logo: logs de burn/teaser agora mostram `logo_present` e `logo_count`, evitando job silencioso sem overlay.' },
+    ],
+  },
+  {
+    version: 'v1.18.5', date: '2026-05-19',
+    items: [
+      { type: 'feat', text: 'Arquivos: seleção múltipla redesenhada com cards/linhas marcados, seleção por categoria filtrada e botão de seleção total do Drive.' },
+      { type: 'feat', text: 'Arquivos: duração, resolução, FPS e áudio agora carregam por ffprobe em lote e aparecem nos cards e na lista.' },
+      { type: 'perf', text: 'Arquivos: capas agora usam thumbnails JPEG cacheadas no servidor em vez de carregar um vídeo por card, acelerando muito a grade.' },
+    ],
+  },
+  {
+    version: 'v1.18.4', date: '2026-05-19',
+    items: [
+      { type: 'fix', text: 'Queima: endpoint e visão de fila agora expõem `progress_pct` explicitamente para a porcentagem aparecer mesmo fora do card principal do job.' },
+    ],
+  },
+  {
+    version: 'v1.18.3', date: '2026-05-19',
+    items: [
+      { type: 'fix', text: 'Whisper Sync agora reconstrói o SRT pelos word_timestamps para evitar blocos gigantes de vários minutos.' },
+    ]
+  },
+  {
+    version: 'v1.18.2', date: '2026-05-19',
+    items: [
+      { type: 'feat', text: 'Transcrição ganhou Whisper Sync: faster-whisper premium com timestamps por palavra, sem LLM, para legenda queimável em áudio adulto difícil.' },
+      { type: 'fix', text: 'Deepgram passa a usar nova-3 com keyterms adultos por padrão, em vez de nova-2/keywords.' },
+    ]
+  },
+  {
+    version: 'v1.18.1', date: '2026-05-19',
+    items: [
+      { type: 'feat', text: 'Transcrição ganhou provider Deepgram Sync com timestamps por palavra para gerar SRT queimável com sincronia real.' },
+      { type: 'fix', text: 'Deepgram preserva texto bruto sem pós-processamento LLM, evitando reescrita/alucinação em diálogos.' },
+    ]
+  },
+  {
+    version: 'v1.18.0', date: '2026-05-19',
+    items: [
+      { type: 'fix', text: 'Queima de legenda ganhou diagnóstico de SRT antes do burn, mostrando buracos grandes de sincronia/cobertura no próprio run.' },
+      { type: 'feat', text: 'Aba Criação agora gera prévia rápida de 60s em baixa resolução no minuto escolhido, com a mesma logo, fonte e SRT da queima completa.' },
+      { type: 'fix', text: 'OpenRouter STT usa prompt PT-BR adulto e chunks menores por padrão para reduzir perda de trechos e alucinação em diálogos.' },
+    ]
+  },
+  {
+    version: 'v1.17.9', date: '2026-05-18',
+    items: [
+      { type: 'fix', text: 'OpenRouter continua liberado para legenda: quando vier sem timestamps reais, o backend reespalha os blocos no tempo do vídeo antes da queima.' },
+      { type: 'fix', text: 'SRT antigo com blocos de 5 minutos agora é reparado automaticamente na queima, em vez de obrigar Premium/local.' },
+    ]
+  },
+  {
+    version: 'v1.17.8', date: '2026-05-18',
+    items: [
+      { type: 'fix', text: 'Queima bloqueia SRT com timestamps sintéticos/por blocos de 5 minutos para evitar legenda travada ou fora de sincronia.' },
+      { type: 'fix', text: 'OpenRouter STT agora retorna timing_quality/burn_safe para a interface não tratar texto sem timestamps reais como legenda pronta para queima.' },
+      { type: 'fix', text: 'Watermarks em canvas 16:9 completo (ex: 3840x2160) deixam de ser recortados automaticamente, evitando logo subir para o centro ao queimar com legenda.' },
+      { type: 'fix', text: 'Antes de queimar, linhas longas do SRT são quebradas em até duas linhas para não criar faixa gigante no rodapé.' },
+    ]
+  },
+  {
+    version: 'v1.17.7', date: '2026-05-16',
+    items: [
+      { type: 'fix', text: 'Tradução OpenRouter: remove modelos reasoning (DeepSeek R1) que contaminavam delimitador |||SEG||| com blocos de pensamento; adiciona limpeza de resposta (tags think, code fences, trailing delimiter) e fallback para Google Translate.' },
+      { type: 'feat', text: 'Queima: tamanho da legenda agora aceita de 6 a 72 (antes mínimo 10), com reserva de espaço da logo ajustada proporcionalmente.' },
+      { type: 'fix', text: 'Queima: backend gerava timestamps falsos (~5s) quando SRT não era encontrado no run (fallback que chunkava texto puro). Agora frontend envia SRT do editor diretamente no body, e backend usa ele primeiro — fim de timposts artificiais e logo deslocada.' },
+    ]
+  },
+  {
+    version: 'v1.17.4', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'Transcrição premium: prompt adulto PT-BR reforçado, VAD com threshold 0.35-0.40 e whitelist ampliada.' },
+      { type: 'fix', text: 'Grok pós-processamento: payload agora leva adult_mode/porn_context e registra removidos/alterados nos logs.' },
+      { type: 'fix', text: 'Tradução de legenda: prompt preserva tom adulto explícito, palavrões, gemidos e dirty talk.' },
+    ]
+  },
+  {
+    version: 'v1.17.3', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'Premium PT-BR: faster-whisper large-v3-turbo/large-v3 em CPU int8 com prompt adulto, VAD dedicado e word timestamps.' },
+      { type: 'fix', text: 'Transcrição pornô BR: scoring anti-alucinação, whitelist forte de dirty talk/gemidos e fallback sem traduzir nem remover repetições reais.' },
+      { type: 'fix', text: 'Pós-processamento Grok-3 opcional via token:grok agora é conservador: só remove alucinação clara e preserva timestamps.' },
+    ]
+  },
+  {
+    version: 'v1.17.2', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'Transcrição PT-BR: filtro anti-alucinação remove blocos clássicos de ASR em inglês/spam sem cortar repetições reais.' },
+      { type: 'fix', text: 'AssemblyAI: keyterms adultos agora respeitam o idioma escolhido; em pt-BR não empurra termos em inglês.' },
+      { type: 'fix', text: 'Premium: resgate sem VAD deixou de rodar por padrão para não inventar fala em gemidos/silêncio.' },
+    ]
+  },
+  {
+    version: 'v1.17.1', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'Transcrição: opção Groq agora usa OpenRouter STT com token:openrouter, sem exigir token:groq.' },
+      { type: 'fix', text: 'Premium large-v3: filtros relaxados e fallback sem VAD para não retornar vazio em fala baixa.' },
+      { type: 'fix', text: 'AssemblyAI: não descarta palavras por confiança baixa e preserva mais fala repetida/baixa.' },
+    ]
+  },
+  {
+    version: 'v1.17.0', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'Transcrição: repetições de palavras/frases/segmentos não são mais removidas, pois em vídeo adulto isso faz parte do conteúdo real.' },
+      { type: 'fix', text: 'Transcrição: limpeza agora remove apenas scripts inesperados, spam conhecido e vazamento de prompt, preservando fala repetida.' },
+    ]
+  },
+  {
+    version: 'v1.16.9', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'AssemblyAI: reduzido speech_threshold para não abortar vídeos com fala baixa; o filtro anti-ruído fica na confiança das palavras.' },
+    ]
+  },
+  {
+    version: 'v1.16.8', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'Analyze: selecionar ou subir vídeo não inicia mais transcrição automática; a etapa original agora exige escolha manual do provider.' },
+      { type: 'feat', text: 'Analyze: adicionados botões Auto estrito, AssemblyAI, Groq, OpenAI e Local para transcrever o vídeo selecionado sob demanda.' },
+    ]
+  },
+  {
+    version: 'v1.16.7', date: '2026-05-15',
+    items: [
+      { type: 'fix', text: 'AssemblyAI: corrigido upload HTTP assíncrono do áudio extraído para o endpoint /v2/upload.' },
+    ]
+  },
+  {
+    version: 'v1.16.6', date: '2026-05-15',
+    items: [
+      { type: 'feat', text: 'Transcrição: adicionada opção AssemblyAI Universal-3 Pro/Universal-2 como alternativa ao Whisper local/Groq/OpenAI, sem substituir o modo local estrito.' },
+      { type: 'fix', text: 'Transcrição Auto agora é conservadora/local para reduzir alucinação: trecho sem fala clara deve voltar vazio em vez de inventar legenda.' },
+    ]
+  },
+  {
+    version: 'v1.16.5', date: '2026-05-14',
+    items: [
+      { type: 'feat', text: 'Upload: seleção múltipla de vídeos no Analyze, envio em fila paralela sem formulário/modal de metadados e com progresso consolidado.' },
+    ]
+  },
+  {
+    version: 'v1.16.4', date: '2026-05-14',
+    items: [
+      { type: 'fix', text: 'Transcrição: removido envio de prompt/instruções para Whisper/OpenAI, que causava vazamento literal de instruções dentro da legenda.' },
+    ]
+  },
+  {
+    version: 'v1.16.3', date: '2026-05-14',
+    items: [
+      { type: 'fix', text: 'Transcrição: spam conhecido do Whisper agora é removido mesmo em frase curta, não só em blocos longos.' },
+    ]
+  },
+  {
+    version: 'v1.16.2', date: '2026-05-14',
+    items: [
+      { type: 'fix', text: 'Transcrição: filtro anti-alucinação agora remove também spam clássico do Whisper em PT/ES tipo “se inscreva no canal”, comum em trechos adultos sem fala clara.' },
+    ]
+  },
+  {
+    version: 'v1.16.1', date: '2026-05-14',
+    items: [
+      { type: 'fix', text: 'Transcrição adulto: prompt sem censura para fala explícita, captura de voz baixa/vocalizações claras e pré-processamento de áudio para levantar diálogo em cenas com gemidos/ruído.' },
+    ]
+  },
+  {
+    version: 'v1.16.0', date: '2026-05-14',
+    items: [
+      { type: 'fix', text: 'Transcrição: idioma falado separado de tradução, padrão em português e filtro anti-alucinação para bloquear scripts/idiomas estranhos antes de salvar o SRT.' },
+      { type: 'ui', text: 'Legenda: novo preview visual de fonte, tamanho, cor e delay na tela de queima, atualizando em tempo real como o preview de logo.' },
+    ]
+  },
+  {
+    version: 'v1.15.9', date: '2026-05-13',
+    items: [
+      { type: 'fix', text: 'Logo: removida qualquer correção que esticava a arte; a queima agora preserva a proporção real da imagem e, com legenda, reserva uma faixa inferior para impedir logo e legenda de se atropelarem.' },
+    ]
+  },
+  {
+    version: 'v1.15.8', date: '2026-05-13',
+    items: [
+      { type: 'fix', text: 'Logo: sondagem do SAR real do vídeo com ffprobe, pois no scale2ref do FFmpeg 5.1 as variáveis sar/main_sar apontam para o SAR do logo (sempre 1), não do vídeo — corrige logo achatada de vez.' },
+      { type: 'fix', text: 'Progresso da queima: throttle reduzido de 5% para 3% e mensagem "Salvando vídeo queimado…" forçada após o ffmpeg, evitando UI travada em 96%.' },
+    ]
+  },
+  {
+    version: 'v1.15.7', date: '2026-05-13',
+    items: [
+      { type: 'fix', text: 'Logo: corrigido cálculo de altura no scale2ref — usava proporção do vídeo (ih/iw) em vez da proporção real do logo (main_h/main_w), e faltava compensação de SAR não quadrado, causando logo achatada em vídeos anamórficos.' },
+    ]
+  },
+  {
+    version: 'v1.15.6', date: '2026-05-13',
+    items: [
+      { type: 'fix', text: 'Logo: logos ultra-horizontais mantêm a largura configurada e recebem correção de altura visual, evitando marca gigante e achatada na queima.' },
+    ]
+  },
+  {
+    version: 'v1.15.5', date: '2026-05-13',
+    items: [
+      { type: 'fix', text: 'Logo: logos horizontais transparentes agora são aparadas e recebem escala wide inteligente, evitando aparência achatada na queima.' },
+    ]
+  },
+  {
+    version: 'v1.15.4', date: '2026-05-13',
+    items: [
+      { type: 'fix', text: 'Logo: preview HQ, queima e teaser agora preservam a proporção real da imagem ao escalar, evitando logo achatada no vídeo final.' },
+    ]
+  },
+  {
+    version: 'v1.15.3', date: '2026-05-12',
+    items: [
+      { type: 'feat', text: 'Arquivos: visualização por capas no estilo explorador de arquivos, com player ao clicar, ações rápidas, ajuste de tamanho e formatos 16:9, 4:3, quadrado e poster.' },
+      { type: 'perf', text: 'Arquivos: capas carregam sob demanda ao rolar a página, evitando abrir preview de todos os vídeos de uma vez.' },
+    ]
+  },
+  {
+    version: 'v1.15.2', date: '2026-05-12',
+    items: [
+      { type: 'feat', text: 'Progresso: Transcrever, Analisar, Compare, Burn/Logo/Legenda e Teaser agora usam o mesmo quadro circular azul com porcentagem e histórico dos passos.' },
+      { type: 'fix', text: 'Compare: progresso em stream não reentra mais no próprio handler, evitando loop de eventos enquanto conta tokens.' },
+    ]
+  },
+  {
+    version: 'v1.15.1', date: '2026-05-12',
+    items: [
+      { type: 'fix', text: 'Upload: estado inicial agora deixa explícito que o envio só começa após clicar em Confirmar Upload no modal, com feedback imediato ao confirmar.' },
+    ]
+  },
+  {
+    version: 'v1.15.0', date: '2026-05-12',
+    items: [
+      { type: 'feat', text: 'Upload: progresso agora usa loader circular azul com porcentagem no centro e detalhes do envio logo abaixo.' },
+    ]
+  },
+  {
+    version: 'v1.14.9', date: '2026-05-12',
+    items: [
+      { type: 'fix', text: 'Upload: seleção de arquivo agora mostra estado "aguardando confirmação" antes do modal e barra real de progresso durante envio para `/uploads/local-stream`.' },
+      { type: 'fix', text: 'Upload: interface passa a exibir MB enviados, tamanho total e percentual, deixando claro quando o arquivo ainda não começou a chegar ao servidor.' },
+    ]
+  },
   {
     version: 'v1.14.5', date: '2026-05-07',
     items: [
@@ -1772,6 +2190,7 @@ async function deleteStoredObject(objectKey, opts = {}) {
       qs('anObjectKey').textContent = '-';
       qs('anVideoUrl').textContent = '-';
       qs('anUploadStatus').textContent = 'status: vídeo removido do storage';
+      _resetAnalyzeUploadProgress();
     }
     if (opts.refresh) await loadUploadList();
     toast('Arquivo excluído do storage', 'good');
@@ -1782,6 +2201,7 @@ async function deleteStoredObject(objectKey, opts = {}) {
 
 async function selectExistingVideo(objectKey, publicUrl, filename) {
   try {
+    _resetAnalyzeUploadProgress();
     qs('anUploadStatus').textContent = 'status: validando vídeo no storage…';
     const validation = await validateStoredVideo(objectKey, { silent: true });
     if (!validation.ok) {
@@ -1796,42 +2216,13 @@ async function selectExistingVideo(objectKey, publicUrl, filename) {
     // Oculta a lista após seleção
     _uploadListVisible = false;
     qs('anUploadList').classList.add('hidden');
-    qs('anUploadStatus').textContent = `status: vídeo selecionado (${filename})`;
+    state.videoOriginalFilename = filename || '';
+    qs('anUploadStatus').textContent = `status: vídeo selecionado (${filename}) — escolha abaixo como transcrever`;
+    transcribeProgress.hide();
     toast(`Vídeo selecionado: ${filename}`);
-    // Auto-transcrever o vídeo selecionado
-
-    qs('anUploadStatus').textContent = 'status: transcrevendo…';
-    transcribeProgress.start([
-      { pct: 28, label: 'Baixando vídeo do storage…',  minMs: 3000 },
-      { pct: 58, label: 'Extraindo áudio com ffmpeg…', minMs: 4000 },
-      { pct: 92, label: 'Transcrevendo com Whisper…',  minMs: 99999 },
-    ]);
-    const lang = qs('anLang').value || null;
-    const tr = await apiFetch('/transcribe', { method: 'POST', body: JSON.stringify({ video_object_key: objectKey, language: lang }) });
-    if (tr?.ok && tr?.transcript?.text) {
-      qs('anTranscript').value = tr.transcript.text;
-      qs('anSrt').textContent = tr.transcript.srt || '';
-      state.transcriptSegments = tr.transcript.segments || [];
-      state.transcriptSrt      = tr.transcript.srt || '';
-      if (tr.probe) {
-        if (tr.probe.duration_seconds) qs('anDur').value = tr.probe.duration_seconds.toFixed(1);
-        if (tr.probe.width)  qs('anW').value  = tr.probe.width;
-        if (tr.probe.height) qs('anH').value  = tr.probe.height;
-        if (tr.probe.fps)    qs('anFps').value = tr.probe.fps;
-      }
-      transcribeProgress.complete('✓ Transcrição concluída');
-      qs('anUploadStatus').textContent = 'status: transcrição concluída';
-      toast('Transcrição preenchida');
-    } else if (tr?.error) {
-      const detail = tr.detail ? ` — ${tr.detail}` : '';
-      transcribeProgress.error(`✗ ${tr.error}${detail}`);
-      qs('anUploadStatus').textContent = `status: selecionado — transcrição falhou (${tr.error}${detail})`;
-    } else {
-      transcribeProgress.hide();
-    }
   } catch(e) {
-    transcribeProgress.error(`✗ ${e.message}`);
-    qs('anUploadStatus').textContent = `status: selecionado — erro transcrição: ${e.message}`;
+    qs('anUploadStatus').textContent = `status: erro ao selecionar vídeo — ${e.message}`;
+    toast(e.message, 'bad');
   }
 }
 
@@ -1841,12 +2232,108 @@ function _mediaCategoryLabel(category) {
   return 'Original';
 }
 
+function _formatMediaClock(seconds) {
+  const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = safe % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function _mediaMetadataForItem(item) {
+  const key = String(item?.object_key || '').trim();
+  const cached = key ? (mediaManagerState.metadataCache[key] || {}) : {};
+  const raw = item?.metadata || item?.probe || {};
+  const meta = { ...raw, ...cached };
+  const duration = Number(meta.duration_seconds || item?.duration_seconds || 0);
+  const width = Number(meta.width || item?.width || 0);
+  const height = Number(meta.height || item?.height || 0);
+  const fps = Number(meta.avg_fps || meta.fps || item?.fps || 0);
+  const hasAudio = meta.has_audio != null ? !!meta.has_audio : null;
+  return {
+    duration,
+    durationLabel: duration > 0 ? _formatMediaClock(duration) : '--:--',
+    width,
+    height,
+    resolutionLabel: width && height ? `${width}×${height}` : 'resolução...',
+    fps,
+    fpsLabel: fps > 0 ? `${Number(fps).toFixed(fps >= 50 ? 2 : 0)} fps` : 'fps...',
+    hasAudio,
+    audioLabel: hasAudio == null ? 'áudio...' : (hasAudio ? 'com áudio' : 'sem áudio'),
+  };
+}
+
 function _mediaSelectedSet() {
   return new Set((mediaManagerState.selectedKeys || []).map(v => String(v || '').trim()).filter(Boolean));
 }
 
 function _setMediaSelectedSet(setLike) {
   mediaManagerState.selectedKeys = Array.from(setLike || []).map(v => String(v || '').trim()).filter(Boolean);
+}
+
+function _inlineJsonArg(value) {
+  return JSON.stringify(String(value ?? ''))
+    .replace(/&/g, '\\u0026')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/'/g, '\\u0027');
+}
+
+function _mediaTileAspectRatio(shape = mediaManagerState.tileShape) {
+  if (shape === '4x3') return '4 / 3';
+  if (shape === '1x1') return '1 / 1';
+  if (shape === 'poster') return '2 / 3';
+  return '16 / 9';
+}
+
+function _syncMediaManagerViewControls() {
+  const mode = mediaManagerState.viewMode === 'list' ? 'list' : 'icons';
+  const size = Math.max(140, Math.min(parseInt(mediaManagerState.tileSize || 190, 10) || 190, 340));
+  const shape = ['16x9', '4x3', '1x1', 'poster'].includes(mediaManagerState.tileShape) ? mediaManagerState.tileShape : '16x9';
+  mediaManagerState.viewMode = mode;
+  mediaManagerState.tileSize = size;
+  mediaManagerState.tileShape = shape;
+
+  const btnIcons = qs('btnMediaViewIcons');
+  const btnList = qs('btnMediaViewList');
+  if (btnIcons) btnIcons.classList.toggle('primary', mode === 'icons');
+  if (btnList) btnList.classList.toggle('primary', mode === 'list');
+
+  const sizeEl = qs('mediaManagerTileSize');
+  const sizeLabel = qs('mediaManagerTileSizeLabel');
+  const shapeEl = qs('mediaManagerTileShape');
+  if (sizeEl) sizeEl.value = String(size);
+  if (sizeLabel) sizeLabel.textContent = `${size}px`;
+  if (shapeEl) shapeEl.value = shape;
+}
+
+function _applyMediaManagerGridStyle() {
+  const listEl = qs('mediaManagerList');
+  if (!listEl) return;
+  listEl.style.setProperty('--media-tile-size', `${mediaManagerState.tileSize || 190}px`);
+  listEl.style.setProperty('--media-tile-ratio', _mediaTileAspectRatio());
+}
+
+function setMediaManagerViewMode(mode) {
+  mediaManagerState.viewMode = mode === 'list' ? 'list' : 'icons';
+  _safeStorageSet('mediaManagerViewMode', mediaManagerState.viewMode);
+  _syncMediaManagerViewControls();
+  renderMediaManagerList();
+}
+
+function setMediaManagerTileSize(value) {
+  mediaManagerState.tileSize = Math.max(140, Math.min(parseInt(value || 190, 10) || 190, 340));
+  _safeStorageSet('mediaManagerTileSize', mediaManagerState.tileSize);
+  _syncMediaManagerViewControls();
+  _applyMediaManagerGridStyle();
+}
+
+function setMediaManagerTileShape(shape) {
+  mediaManagerState.tileShape = ['16x9', '4x3', '1x1', 'poster'].includes(shape) ? shape : '16x9';
+  _safeStorageSet('mediaManagerTileShape', mediaManagerState.tileShape);
+  _syncMediaManagerViewControls();
+  _applyMediaManagerGridStyle();
 }
 
 function _getMediaManagerFilteredItems() {
@@ -1872,6 +2359,8 @@ function _updateMediaSelectionStats(totalVisible = null) {
   const count = _mediaSelectedSet().size;
   const suffix = Number.isFinite(totalVisible) ? ` de ${totalVisible}` : '';
   el.textContent = `${count} selecionado(s)${suffix}`;
+  const bulk = qs('mediaManagerBulkbar');
+  if (bulk) bulk.classList.toggle('has-selection', count > 0);
 }
 
 function toggleManagedMediaSelection(objectKey, checked) {
@@ -1881,6 +2370,7 @@ function toggleManagedMediaSelection(objectKey, checked) {
   if (checked) set.add(key);
   else set.delete(key);
   _setMediaSelectedSet(set);
+  _syncManagedMediaSelectionDom(key, checked);
   _updateMediaSelectionStats(_getMediaManagerFilteredItems().length);
 }
 
@@ -1896,11 +2386,22 @@ function clearManagedMediaSelection() {
   renderMediaManagerList();
 }
 
+function _syncManagedMediaSelectionDom(objectKey, selected) {
+  const key = String(objectKey || '').trim();
+  if (!key) return;
+  document.querySelectorAll('#mediaManagerList [data-media-key]').forEach(el => {
+    if (el.dataset.mediaKey !== key) return;
+    el.classList.toggle('is-selected', !!selected);
+    const cb = el.querySelector('input[type="checkbox"][data-media-select]');
+    if (cb) cb.checked = !!selected;
+  });
+}
+
 function _syncMediaManagerFiltersFromDom() {
   const searchEl = qs('mediaManagerSearch');
   const limitEl = qs('mediaManagerLimit');
   mediaManagerState.search = String(searchEl?.value || mediaManagerState.search || '').trim();
-  mediaManagerState.maxKeys = Math.max(10, Math.min(parseInt(limitEl?.value || mediaManagerState.maxKeys || 80, 10) || 80, 300));
+  mediaManagerState.maxKeys = Math.max(10, Math.min(parseInt(limitEl?.value || mediaManagerState.maxKeys || 80, 10) || 80, 500));
   if (limitEl) limitEl.value = String(mediaManagerState.maxKeys);
 }
 
@@ -2031,6 +2532,15 @@ function clearDriveIntakeSelection() {
   renderDriveIntakeList();
 }
 
+function selectAllDriveIntakeFiles() {
+  const set = _driveIntakeSelectedSet();
+  (mediaManagerState.driveIntakeItems || []).forEach(item => {
+    if (!item?.is_folder && item?.id) set.add(String(item.id).trim());
+  });
+  _setDriveIntakeSelectedSet(set);
+  renderDriveIntakeList();
+}
+
 function _driveIntakeJobForFile(fileId) {
   return mediaManagerState.driveIntakeJobs[String(fileId || '').trim()] || null;
 }
@@ -2093,28 +2603,34 @@ function renderDriveIntakeList() {
     const id = String(item.id || '');
     const name = String(item.name || 'arquivo');
     const size = item.size_mb ? `${item.size_mb} MB` : '-';
-    const modified = item.modified_time ? fmtDate(item.modified_time) : '-';
-    const mime = String(item.mime_type || '');
-    const job = _driveIntakeJobForFile(id);
-    const disabled = item.is_folder ? 'disabled' : '';
+	    const modified = item.modified_time ? fmtDate(item.modified_time) : '-';
+	    const mime = String(item.mime_type || '');
+	    const videoMeta = item.video_meta || {};
+	    const durationMs = Number(videoMeta.durationMillis || 0);
+	    const duration = durationMs > 0 ? _formatMediaClock(durationMs / 1000) : '--:--';
+	    const resolution = videoMeta.width && videoMeta.height ? `${videoMeta.width}×${videoMeta.height}` : 'resolução...';
+	    const job = _driveIntakeJobForFile(id);
+	    const disabled = item.is_folder ? 'disabled' : '';
     const jobHtml = job
       ? `<div class="media-manager-status">${esc(job.detail || 'Importação em andamento')}
           ${job.object_key ? ` · <span style="color:var(--good)">importado</span>` : ''}
         </div>`
       : '';
     return `
-      <div class="media-manager-row">
-        <div class="media-manager-main">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
-              <input type="checkbox" ${finalSelected.has(id) ? 'checked' : ''} ${disabled} onchange='toggleDriveIntakeSelection(${JSON.stringify(id)}, this.checked)'>
+	      <div class="media-manager-row ${finalSelected.has(id) ? 'is-selected' : ''}">
+	        <div class="media-manager-main">
+	          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+	            <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+	              <input type="checkbox" ${finalSelected.has(id) ? 'checked' : ''} ${disabled} onchange='toggleDriveIntakeSelection(${JSON.stringify(id)}, this.checked)'>
               <span>Selecionar</span>
             </label>
             <strong style="font-size:13px;">${esc(name)}</strong>
-            <span class="badge">${esc(size)}</span>
-            <span class="badge">${esc(modified)}</span>
-            <span class="badge">${esc(item.is_folder ? 'Pasta' : (mime || 'arquivo'))}</span>
-          </div>
+	            <span class="badge">${esc(size)}</span>
+	            <span class="badge">${esc(modified)}</span>
+	            <span class="badge">${esc(item.is_folder ? 'Pasta' : (mime || 'arquivo'))}</span>
+	            <span class="badge">${esc(duration)}</span>
+	            <span class="badge">${esc(resolution)}</span>
+	          </div>
           <div class="hint" style="word-break:break-all;">${esc(id)}</div>
           ${jobHtml}
         </div>
@@ -2220,6 +2736,7 @@ async function reloadMediaManagerFiles(opts = {}) {
 
 async function loadMediaManagerPage(force = false) {
   _syncMediaManagerFiltersFromDom();
+  _syncMediaManagerViewControls();
   setMediaManagerCategory(mediaManagerState.category || 'all');
   await loadMediaDriveCreatorOptions();
   if (!mediaManagerState.loaded || force) {
@@ -2263,52 +2780,242 @@ function renderMediaManagerList(errors = []) {
   _updateMediaSelectionStats(filtered.length);
 
   if (!filtered.length) {
+    listEl.className = 'media-manager-grid is-list';
     listEl.innerHTML = '<div class="criacao-empty">Nenhum arquivo encontrado com esse filtro.</div>';
     return;
   }
 
-  listEl.innerHTML = filtered.map(item => {
-    const key = String(item.object_key || '');
-    const filename = _cleanFilename(String(item.filename || key.split('/').pop() || 'arquivo'));
-    const label = _mediaCategoryLabel(String(item.category || 'uploads'));
-    const date = item.last_modified ? fmtDate(item.last_modified) : '-';
-    const size = item.size_mb != null ? `${item.size_mb} MB` : '-';
-    const keyJson = JSON.stringify(key);
-    const fileJson = JSON.stringify(filename);
-    const labelJson = JSON.stringify(filename);
-    const driveJob = _mediaDriveJobForKey(key);
-    const driveStatus = driveJob
-      ? `<div class="media-manager-status">${esc(driveJob.detail || 'Upload no Google Drive em andamento')}
-          ${driveJob.drive_web_view_link ? ` · <a href="${esc(driveJob.drive_web_view_link)}" target="_blank" rel="noreferrer">Abrir no Drive</a>` : ''}
-        </div>`
-      : '';
+  const useIcons = mediaManagerState.viewMode !== 'list';
+  listEl.className = `media-manager-grid ${useIcons ? 'is-icons' : 'is-list'}`;
+  _applyMediaManagerGridStyle();
+  listEl.innerHTML = filtered.map(item => (
+    useIcons
+      ? _renderManagedMediaTile(item, selectedSet)
+      : _renderManagedMediaRow(item, selectedSet)
+  )).join('');
+  _hydrateMediaMetadata(filtered);
+  if (useIcons) _hydrateMediaTilePreviews();
+}
 
-    return `
-      <div class="media-manager-row">
-        <div class="media-manager-main">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
-              <input type="checkbox" ${selectedSet.has(key) ? 'checked' : ''} onchange='toggleManagedMediaSelection(${keyJson}, this.checked)'>
-              <span>Selecionar</span>
-            </label>
-            <strong style="font-size:13px;">${esc(filename)}</strong>
-            <span class="badge">${esc(label)}</span>
-            <span class="badge">${esc(size)}</span>
-            <span class="badge">${esc(date)}</span>
-          </div>
-          <div class="hint" style="word-break:break-all;">${esc(key)}</div>
-          ${driveStatus}
+function _managedMediaItemViewModel(item, selectedSet) {
+  const key = String(item.object_key || '');
+  const filename = _cleanFilename(String(item.filename || key.split('/').pop() || 'arquivo'));
+  const label = _mediaCategoryLabel(String(item.category || 'uploads'));
+  const date = item.last_modified ? fmtDate(item.last_modified) : '-';
+  const size = item.size_mb != null ? `${item.size_mb} MB` : '-';
+  const meta = _mediaMetadataForItem(item);
+  const keyArg = _inlineJsonArg(key);
+  const fileArg = _inlineJsonArg(filename);
+  const labelArg = _inlineJsonArg(filename);
+  const driveJob = _mediaDriveJobForKey(key);
+  const driveStatus = driveJob
+    ? `<div class="media-manager-status">${esc(driveJob.detail || 'Upload no Google Drive em andamento')}
+        ${driveJob.drive_web_view_link ? ` · <a href="${esc(driveJob.drive_web_view_link)}" target="_blank" rel="noreferrer">Abrir no Drive</a>` : ''}
+      </div>`
+    : '';
+  return { key, filename, label, date, size, meta, keyArg, fileArg, labelArg, driveStatus, selected: selectedSet.has(key) };
+}
+
+function _renderManagedMediaRow(item, selectedSet) {
+  const vm = _managedMediaItemViewModel(item, selectedSet);
+  return `
+    <div class="media-manager-row ${vm.selected ? 'is-selected' : ''}" data-media-key="${escAttr(vm.key)}">
+      <div class="media-manager-main">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+            <input type="checkbox" data-media-select ${vm.selected ? 'checked' : ''} onchange='toggleManagedMediaSelection(${vm.keyArg}, this.checked)'>
+            <span>Selecionar</span>
+          </label>
+          <strong style="font-size:13px;">${esc(vm.filename)}</strong>
+          <span class="badge">${esc(vm.label)}</span>
+          <span class="badge">${esc(vm.size)}</span>
+          <span class="badge">${esc(vm.date)}</span>
+          <span class="badge js-media-duration">${esc(vm.meta.durationLabel)}</span>
+          <span class="badge js-media-resolution">${esc(vm.meta.resolutionLabel)}</span>
+          <span class="badge js-media-fps">${esc(vm.meta.fpsLabel)}</span>
+          <span class="badge js-media-audio">${esc(vm.meta.audioLabel)}</span>
         </div>
-        <div class="media-manager-actions">
-          <button class="btn" onclick='previewManagedMedia(${keyJson}, ${labelJson})'>Player</button>
-          <button class="btn" onclick='downloadManagedMedia(${keyJson}, ${fileJson})'>Baixar</button>
-          <button class="btn" onclick='renameManagedMedia(${keyJson}, ${fileJson})'>Renomear</button>
-          <button class="btn" onclick='sendManagedMediaToDrive(${keyJson}, ${fileJson})'>Drive</button>
-          <button class="btn" onclick='deleteManagedMedia(${keyJson}, ${labelJson})'>Excluir</button>
-        </div>
+        <div class="hint" style="word-break:break-all;">${esc(vm.key)}</div>
+        ${vm.driveStatus}
       </div>
-    `;
-  }).join('');
+      <div class="media-manager-actions">
+        <button class="btn" onclick='previewManagedMedia(${vm.keyArg}, ${vm.labelArg})'>Player</button>
+        <button class="btn" onclick='downloadManagedMedia(${vm.keyArg}, ${vm.fileArg})'>Baixar</button>
+        <button class="btn" onclick='renameManagedMedia(${vm.keyArg}, ${vm.fileArg})'>Renomear</button>
+        <button class="btn" onclick='sendManagedMediaToDrive(${vm.keyArg}, ${vm.fileArg})'>Drive</button>
+        <button class="btn" onclick='deleteManagedMedia(${vm.keyArg}, ${vm.labelArg})'>Excluir</button>
+      </div>
+    </div>
+  `;
+}
+
+function _renderManagedMediaTile(item, selectedSet) {
+  const vm = _managedMediaItemViewModel(item, selectedSet);
+  return `
+    <div class="media-tile ${vm.selected ? 'is-selected' : ''}" data-media-key="${escAttr(vm.key)}" ondblclick='previewManagedMedia(${vm.keyArg}, ${vm.labelArg})'>
+      <div class="media-tile-cover is-loading" data-media-preview-key="${escAttr(vm.key)}" data-media-preview-label="${escAttr(vm.filename)}"
+        onclick='previewManagedMedia(${vm.keyArg}, ${vm.labelArg})'>
+        <img class="media-tile-img" alt="" loading="lazy" decoding="async">
+        <div class="media-tile-skeleton">Capa em fila…</div>
+        <span class="media-tile-badge">${esc(vm.label)}</span>
+        <span class="media-tile-duration js-media-duration">${esc(vm.meta.durationLabel)}</span>
+        <label class="media-tile-check" onclick="event.stopPropagation()">
+          <input type="checkbox" data-media-select ${vm.selected ? 'checked' : ''} onchange='toggleManagedMediaSelection(${vm.keyArg}, this.checked)'>
+          <span>Selecionar</span>
+        </label>
+        <button type="button" class="media-tile-play" onclick='event.stopPropagation();previewManagedMedia(${vm.keyArg}, ${vm.labelArg})'>▶</button>
+      </div>
+      <div class="media-tile-name" title="${esc(vm.filename)}">${esc(vm.filename)}</div>
+      <div class="media-tile-meta">
+        <span>${esc(vm.size)}</span>
+        <span>${esc(vm.date)}</span>
+      </div>
+      <div class="media-tile-meta media-tile-tech">
+        <span class="js-media-resolution">${esc(vm.meta.resolutionLabel)}</span>
+        <span class="js-media-fps">${esc(vm.meta.fpsLabel)}</span>
+        <span class="js-media-audio">${esc(vm.meta.audioLabel)}</span>
+      </div>
+      ${vm.driveStatus}
+      <div class="media-tile-actions">
+        <button class="btn" onclick='previewManagedMedia(${vm.keyArg}, ${vm.labelArg})'>Player</button>
+        <button class="btn" onclick='downloadManagedMedia(${vm.keyArg}, ${vm.fileArg})'>Baixar</button>
+        <button class="btn" onclick='renameManagedMedia(${vm.keyArg}, ${vm.fileArg})'>Renomear</button>
+        <button class="btn" onclick='sendManagedMediaToDrive(${vm.keyArg}, ${vm.fileArg})'>Drive</button>
+        <button class="btn" onclick='deleteManagedMedia(${vm.keyArg}, ${vm.labelArg})' style="grid-column:1 / -1;">Excluir</button>
+      </div>
+    </div>
+  `;
+}
+
+function _hydrateMediaTilePreviews() {
+  const listEl = qs('mediaManagerList');
+  if (!listEl) return;
+  if (mediaManagerState.previewObserver) {
+    try { mediaManagerState.previewObserver.disconnect(); } catch (_) {}
+    mediaManagerState.previewObserver = null;
+  }
+  const covers = Array.from(listEl.querySelectorAll('.media-tile-cover[data-media-preview-key]'));
+  if (!covers.length) return;
+  if (!('IntersectionObserver' in window)) {
+    covers.slice(0, 12).forEach(_enqueueMediaTilePreview);
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      observer.unobserve(entry.target);
+      _enqueueMediaTilePreview(entry.target);
+    });
+  }, { rootMargin: '120px 0px', threshold: 0.01 });
+  mediaManagerState.previewObserver = observer;
+  covers.forEach(el => observer.observe(el));
+}
+
+function _enqueueMediaTilePreview(el) {
+  if (!el || el.dataset.loaded === '1' || el.dataset.queued === '1') return;
+  el.dataset.queued = '1';
+  mediaManagerState.thumbQueue.push(el);
+  _pumpMediaTilePreviewQueue();
+}
+
+function _pumpMediaTilePreviewQueue() {
+  const limit = 4;
+  while (mediaManagerState.thumbActive < limit && mediaManagerState.thumbQueue.length) {
+    const el = mediaManagerState.thumbQueue.shift();
+    if (!el || el.dataset.loaded === '1') continue;
+    mediaManagerState.thumbActive += 1;
+    _loadMediaTilePreview(el)
+      .catch(() => {})
+      .finally(() => {
+        mediaManagerState.thumbActive = Math.max(0, mediaManagerState.thumbActive - 1);
+        _pumpMediaTilePreviewQueue();
+      });
+  }
+}
+
+async function _loadMediaTilePreview(el) {
+  if (!el || el.dataset.loaded === '1') return;
+  el.dataset.loaded = '1';
+  const key = _normalizeObjectKeyish(el.dataset.mediaPreviewKey || '');
+  const img = el.querySelector('img.media-tile-img');
+  if (!key || !img) {
+    el.classList.remove('is-loading');
+    el.classList.add('is-error');
+    const skeleton = el.querySelector('.media-tile-skeleton');
+    if (skeleton) skeleton.textContent = 'Capa indisponível';
+    return;
+  }
+
+  const markReady = () => {
+    el.classList.remove('is-loading', 'is-error');
+    el.classList.add('is-ready');
+  };
+  const markError = () => {
+    el.classList.remove('is-loading');
+    el.classList.add('is-error');
+    const skeleton = el.querySelector('.media-tile-skeleton');
+    if (skeleton) skeleton.textContent = 'Sem preview';
+  };
+
+  try {
+    const res = await apiFetch(`/api/media-manager/thumbnail-url?object_key=${encodeURIComponent(key)}&width=520&t=8`);
+    if (res?.metadata) {
+      mediaManagerState.metadataCache[key] = res.metadata;
+      _applyMediaMetadataToDom(key);
+    }
+    if (!res?.url) throw new Error('thumb_url_failed');
+    img.onload = markReady;
+    img.onerror = markError;
+    img.src = res.url;
+  } catch (_) {
+    markError();
+  }
+}
+
+function _hydrateMediaMetadata(items) {
+  const keys = [];
+  (items || []).forEach(item => {
+    const key = String(item?.object_key || '').trim();
+    if (!key || mediaManagerState.metadataCache[key] || mediaManagerState.metadataPending.has(key)) return;
+    keys.push(key);
+  });
+  const batch = keys.slice(0, 120);
+  if (!batch.length) return;
+  batch.forEach(key => mediaManagerState.metadataPending.add(key));
+  apiFetch('/api/media-manager/metadata/batch', {
+    method: 'POST',
+    body: JSON.stringify({ object_keys: batch }),
+  }).then(res => {
+    const itemsMap = res?.items || {};
+    Object.entries(itemsMap).forEach(([key, meta]) => {
+      mediaManagerState.metadataCache[key] = meta || {};
+      const item = (mediaManagerState.items || []).find(it => String(it.object_key || '').trim() === key);
+      if (item && meta) item.metadata = meta;
+      _applyMediaMetadataToDom(key);
+    });
+  }).catch(() => {
+    // Metadata is decorative; do not block the file grid.
+  }).finally(() => {
+    batch.forEach(key => mediaManagerState.metadataPending.delete(key));
+  });
+}
+
+function _applyMediaMetadataToDom(objectKey) {
+  const key = String(objectKey || '').trim();
+  if (!key) return;
+  const item = (mediaManagerState.items || []).find(it => String(it.object_key || '').trim() === key) || { object_key: key };
+  const meta = _mediaMetadataForItem(item);
+  document.querySelectorAll('#mediaManagerList [data-media-key]').forEach(el => {
+    if (el.dataset.mediaKey !== key) return;
+    const durationEl = el.querySelector('.js-media-duration');
+    const resolutionEl = el.querySelector('.js-media-resolution');
+    const fpsEl = el.querySelector('.js-media-fps');
+    const audioEl = el.querySelector('.js-media-audio');
+    if (durationEl) durationEl.textContent = meta.durationLabel;
+    if (resolutionEl) resolutionEl.textContent = meta.resolutionLabel;
+    if (fpsEl) fpsEl.textContent = meta.fpsLabel;
+    if (audioEl) audioEl.textContent = meta.audioLabel;
+  });
 }
 
 async function previewManagedMedia(objectKey, label) {
@@ -2326,12 +3033,17 @@ async function previewManagedMedia(objectKey, label) {
     const previewUrl = await _getAdaptivePreviewUrl(key, { maxHeight: 1080, maxFps: 30 }) || await _getVideoStreamUrl(key);
     if (!previewUrl) throw new Error('Não foi possível gerar URL de preview');
     video.src = previewUrl;
+    video.onloadedmetadata = () => {
+      const duration = Number.isFinite(video.duration) ? _formatMediaClock(video.duration) : 'minutagem indisponível';
+      const resLabel = video.videoWidth && video.videoHeight ? `${video.videoWidth}×${video.videoHeight}` : 'resolução indisponível';
+      meta.textContent = `${label || 'Arquivo'} · ${duration} · ${resLabel} · ${key}`;
+    };
     video.load();
     empty.classList.add('hidden');
     video.classList.remove('hidden');
     mediaManagerState.previewObjectKey = key;
     mediaManagerState.previewLabel = String(label || '');
-    meta.textContent = `${label || 'Arquivo'} · ${key}`;
+    meta.textContent = `${label || 'Arquivo'} · carregando minutagem… · ${key}`;
   } catch (e) {
     empty.textContent = `Erro ao abrir player: ${e.message}`;
     meta.textContent = `${label || 'Arquivo'} · falha no preview`;
@@ -2508,6 +3220,120 @@ async function bulkSendManagedMediaToDrive() {
   if (failures.length) toast(`Falha em ${failures.length} upload(s)`, 'bad');
 }
 
+function _formatUploadBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = n;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  const digits = value >= 100 || idx === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[idx]}`;
+}
+
+let _anUploadProgressLast = '';
+let _anUploadBatchTotal = 1;
+
+function _pushAnalyzeUploadHistory(label, kind = 'active') {
+  const hist = qs('anUploadProgressHistory');
+  if (!hist || !label) return;
+  const clean = String(label)
+    .replace(/^[✓✗!⏳📤]+\s*/u, '')
+    .replace(/\s+\d+%$/g, '')
+    .trim();
+  if (!clean || clean === _anUploadProgressLast) return;
+  _anUploadProgressLast = clean;
+  const item = document.createElement('div');
+  item.className = `op-progress-history-item ${kind}`;
+  item.textContent = `${kind === 'good' ? '✓' : kind === 'bad' ? '!' : '•'} ${clean}`;
+  hist.prepend(item);
+  while (hist.children.length > 6) hist.lastElementChild?.remove();
+}
+
+function _setAnalyzeUploadProgress(pct, label, kind = 'active') {
+  const isBatchUpload = Number(_anUploadBatchTotal || 1) > 1;
+  const wrap = qs('anUploadProgressWrap');
+  const fill = qs('anUploadProgressFill');
+  const text = qs('anUploadProgressLabel');
+  const ring = qs('anUploadProgressRing');
+  const pctText = qs('anUploadProgressPct');
+  const stateText = qs('anUploadProgressState');
+  const titleText = qs('anUploadProgressTitle');
+  const safePct = Math.max(0, Math.min(100, Number(pct || 0)));
+  const roundedPct = Math.round(safePct);
+  const stateLabel = kind === 'bad'
+    ? 'erro'
+    : kind === 'good'
+      ? 'ok'
+      : kind === 'waiting'
+        ? 'confirme'
+        : safePct <= 0
+          ? 'aguarde'
+          : 'enviando';
+  const titleLabel = kind === 'bad'
+    ? (isBatchUpload ? 'Falha nos uploads' : 'Falha no upload')
+    : kind === 'good'
+      ? (isBatchUpload ? 'Uploads concluídos' : 'Upload concluído')
+      : kind === 'waiting'
+        ? 'Aguardando confirmação'
+        : safePct <= 0
+          ? 'Preparando envio'
+          : (isBatchUpload ? 'Enviando uploads' : 'Enviando arquivo');
+  if (wrap) {
+    wrap.style.display = '';
+    wrap.style.setProperty('--upload-pct', String(safePct));
+    wrap.classList.toggle('is-good', kind === 'good');
+    wrap.classList.toggle('is-bad', kind === 'bad');
+  }
+  if (ring) ring.style.setProperty('--upload-pct', String(safePct));
+  if (pctText) pctText.textContent = `${roundedPct}%`;
+  if (stateText) stateText.textContent = stateLabel;
+  if (titleText) titleText.textContent = titleLabel;
+  if (fill) {
+    fill.style.width = `${safePct}%`;
+    fill.style.background = kind === 'bad'
+      ? 'linear-gradient(90deg, #fb2f68, #ff7aa2)'
+      : kind === 'good'
+        ? 'linear-gradient(90deg, #22c55e, #86efac)'
+        : 'linear-gradient(90deg, #0896ff, #1de7ff, #69f4ff)';
+  }
+  if (text) text.textContent = label || '';
+  if (kind !== 'active' || safePct <= 0 || safePct >= 100 || /preparando|aguardando|validando|conclu/i.test(String(label || ''))) {
+    _pushAnalyzeUploadHistory(label, kind);
+  }
+}
+
+function _resetAnalyzeUploadProgress() {
+  const wrap = qs('anUploadProgressWrap');
+  const fill = qs('anUploadProgressFill');
+  const text = qs('anUploadProgressLabel');
+  const ring = qs('anUploadProgressRing');
+  const pctText = qs('anUploadProgressPct');
+  const stateText = qs('anUploadProgressState');
+  const titleText = qs('anUploadProgressTitle');
+  const hist = qs('anUploadProgressHistory');
+  _anUploadProgressLast = '';
+  _anUploadBatchTotal = 1;
+  if (wrap) wrap.style.display = 'none';
+  if (wrap) {
+    wrap.style.setProperty('--upload-pct', '0');
+    wrap.classList.remove('is-good', 'is-bad');
+  }
+  if (ring) ring.style.setProperty('--upload-pct', '0');
+  if (pctText) pctText.textContent = '0%';
+  if (stateText) stateText.textContent = 'pronto';
+  if (titleText) titleText.textContent = 'Aguardando upload';
+  if (fill) {
+    fill.style.width = '0%';
+    fill.style.background = 'linear-gradient(90deg, #0896ff, #1de7ff, #69f4ff)';
+  }
+  if (text) text.textContent = 'Selecione um arquivo para iniciar.';
+  if (hist) hist.innerHTML = '';
+}
+
 // Upload direto ao backend em uma única requisição binária.
 // O servidor grava a mídia em storage local e valida antes de aceitar quando necessário.
 async function _uploadViaProxy(file, opts = {}) {
@@ -2524,9 +3350,15 @@ async function _uploadViaProxy(file, opts = {}) {
     xhr.setRequestHeader('X-Filename', file.name || 'upload.bin');
     xhr.setRequestHeader('X-File-Size', String(file.size || 0));
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.upload.onloadstart = () => {
+      if (opts.onStart) opts.onStart(file.size || 0);
+    };
     xhr.upload.onprogress = (evt) => {
       if (!opts.onProgress || !evt.lengthComputable) return;
       opts.onProgress(evt.loaded, evt.total || file.size || 0);
+    };
+    xhr.upload.onload = () => {
+      if (opts.onProgress) opts.onProgress(file.size || 0, file.size || 0);
     };
     xhr.onload = () => {
       let data = {};
@@ -2542,137 +3374,208 @@ async function _uploadViaProxy(file, opts = {}) {
       reject(new Error(data.detail || data.error || `HTTP ${xhr.status}`));
     };
     xhr.onerror = () => reject(new Error('Falha de rede no upload'));
+    xhr.onabort = () => reject(new Error('Upload cancelado pelo navegador'));
     xhr.send(file);
   });
 }
 
-let _uploadMetaCallback = null;
+function _selectAnalyzeUploadedVideo(proxy, file) {
+  state.videoObjectKey = proxy?.object_key || null;
+  state.videoUrl = proxy?.public_url || null;
+  state.videoOriginalFilename = file?.name || '';
+  const keyEl = qs('anObjectKey');
+  const urlEl = qs('anVideoUrl');
+  if (keyEl) keyEl.textContent = state.videoObjectKey || '-';
+  if (urlEl) urlEl.textContent = state.videoUrl || '-';
+}
 
-async function _showUploadMetaModal(file, onConfirm) {
-  _uploadMetaCallback = onConfirm;
-  const nameEl = qs('uploadMetaName');
-  const compEl = qs('uploadMetaCompany');
-  if (nameEl) nameEl.value = file.name || '';
-  // Load companies from logo profiles
-  if (compEl) {
-    compEl.innerHTML = '<option value="">— sem empresa —</option>';
-    try {
-      const r = await apiFetch('/settings/wizard/logo-profiles');
-      const profiles = Array.isArray(r) ? r : (r.profiles || []);
-      profiles.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.id || p.company_name || '';
-        opt.textContent = p.company_name || p.name || p.id || '';
-        opt.dataset.name = p.company_name || p.name || '';
-        compEl.appendChild(opt);
-      });
-    } catch (_) {}
+async function _saveAnalyzeUploadMeta(proxy, file) {
+  if (!proxy?.object_key) return;
+  try {
+    await apiFetch('/uploads/set-meta', { method: 'POST', body: JSON.stringify({
+      object_key: proxy.object_key,
+      display_name: file?.name || '',
+      company_id: '',
+      company_name: '',
+    })});
+  } catch (_) {}
+}
+
+function _analyzeTranscribeProviderLabel(provider) {
+  return ({
+    auto: 'Auto estrito',
+    assemblyai: 'AssemblyAI',
+    groq: 'OpenRouter STT',
+    openrouter: 'OpenRouter STT',
+    openai: 'OpenAI',
+    local: 'Local',
+    premium: '⭐ Premium (large-v3)',
+  })[provider] || provider || 'Auto estrito';
+}
+
+async function transcribeAnalyzeSelected(provider = 'auto') {
+  const objectKeyText = (qs('anObjectKey')?.textContent || '').trim();
+  const objectKey = (state.videoObjectKey || (objectKeyText !== '-' ? objectKeyText : '') || '').trim();
+  if (!objectKey) return toast('Selecione ou suba um vídeo antes de transcrever', 'bad');
+  const providerName = _analyzeTranscribeProviderLabel(provider);
+  try {
+    qs('anUploadStatus').textContent = `status: transcrevendo com ${providerName}…`;
+    transcribeProgress.start([
+      { pct: 18, label: 'Baixando vídeo do storage…',  minMs: 2500 },
+      { pct: 42, label: 'Extraindo áudio com ffmpeg…', minMs: 3500 },
+      { pct: 88, label: provider === 'assemblyai' ? 'AssemblyAI processando áudio…' : provider === 'premium' ? 'Carregando modelo large-v3 e transcrevendo…' : `Transcrevendo com ${providerName}…`, minMs: 99999 },
+    ]);
+    const lang = qs('anLang')?.value || null;
+    const includeVocalizations = qs('anIncludeVocalizations')?.checked === true;
+    const enhanceAudio = qs('anTranscribeEnhanceAudio')?.checked === true;
+    const payload = {
+      video_object_key: objectKey,
+      provider,
+      adult_mode: true,
+      include_vocalizations: includeVocalizations,
+      enhance_audio: enhanceAudio,
+    };
+    if (lang && lang !== 'auto') payload.language = lang;
+    const tr = await apiFetch('/transcribe', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (tr?.ok && tr?.transcript?.text) {
+      qs('anTranscript').value = tr.transcript.text;
+      qs('anSrt').textContent = tr.transcript.srt || '';
+      state.transcriptSegments = tr.transcript.segments || [];
+      state.transcriptSrt = tr.transcript.srt || '';
+      if (tr.probe) {
+        if (tr.probe.duration_seconds) qs('anDur').value = tr.probe.duration_seconds.toFixed(1);
+        if (tr.probe.width) qs('anW').value = tr.probe.width;
+        if (tr.probe.height) qs('anH').value = tr.probe.height;
+        if (tr.probe.fps) qs('anFps').value = tr.probe.fps;
+      }
+      transcribeProgress.complete('✓ Transcrição concluída');
+      qs('anUploadStatus').textContent = 'status: transcrição concluída';
+      toast(`Transcrição preenchida via ${tr.transcript.provider || providerName}`);
+    } else if (tr?.error) {
+      const detail = tr.detail ? ` — ${tr.detail}` : '';
+      transcribeProgress.error(`✗ ${tr.error}${detail}`);
+      qs('anUploadStatus').textContent = `status: transcrição falhou (${tr.error}${detail})`;
+      toast('Transcrição falhou: ' + (tr.detail || tr.error), 'bad');
+    } else {
+      transcribeProgress.hide();
+      qs('anUploadStatus').textContent = 'status: transcrição não retornou texto';
+    }
+  } catch (e) {
+    transcribeProgress.error(`✗ ${e.message}`);
+    qs('anUploadStatus').textContent = 'status: erro transcrição';
+    toast('Erro ao transcrever: ' + e.message, 'bad');
   }
-  const modal = qs('uploadMetaModal');
-  if (modal) modal.classList.remove('hidden');
-}
-
-function _closeUploadMetaModal() {
-  const modal = qs('uploadMetaModal');
-  if (modal) modal.classList.add('hidden');
-  _uploadMetaCallback = null;
-}
-
-function _confirmUploadMeta() {
-  const nameEl = qs('uploadMetaName');
-  const compEl = qs('uploadMetaCompany');
-  const displayName = (nameEl?.value || '').trim();
-  const companyId = compEl?.value || '';
-  const companyName = compEl?.options[compEl.selectedIndex]?.dataset?.name || companyId || '';
-  _closeUploadMetaModal();
-  if (_uploadMetaCallback) _uploadMetaCallback({ displayName, companyId, companyName });
 }
 
 async function uploadVideo() {
-  const f = qs('anVideoFile').files?.[0];
-  if (!f) return toast('Selecione um vídeo', 'bad');
+  const input = qs('anVideoFile');
+  const files = Array.from(input?.files || []).filter(Boolean);
+  if (!files.length) return toast('Selecione um ou mais vídeos', 'bad');
 
-  // Show metadata modal before uploading
-  const meta = await new Promise(resolve => _showUploadMetaModal(f, resolve));
-  if (!meta) return;
+  const totalFiles = files.length;
+  const totalBytes = files.reduce((sum, file) => sum + (file.size || 0), 0);
+  const loadedByIndex = new Map(files.map((_, idx) => [idx, 0]));
+  const startedAt = Date.now();
+  const results = [];
+  const failures = [];
+  let completed = 0;
+  let nextIndex = 0;
 
-  qs('anUploadStatus').textContent = 'status: enviando arquivo…';
+  _anUploadBatchTotal = totalFiles;
+
+  const batchLabel = totalFiles === 1 ? '1 vídeo' : `${totalFiles} vídeos`;
+  qs('anUploadStatus').textContent = `status: preparando upload de ${batchLabel} (${_formatUploadBytes(totalBytes)})`;
+  _setAnalyzeUploadProgress(0, `Preparando envio de ${batchLabel}. O upload começa automaticamente, sem formulário.`, 'active');
+
+  const updateBatchProgress = (label, kind = 'active') => {
+    const loaded = Array.from(loadedByIndex.values()).reduce((sum, value) => sum + value, 0);
+    const pct = totalBytes > 0 ? Math.min(100, Math.round((loaded / totalBytes) * 100)) : 0;
+    const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
+    const speed = loaded > 0 ? `${_formatUploadBytes(loaded / elapsedSec)}/s` : '';
+    const suffix = speed && kind === 'active' ? ` · ${speed}` : '';
+    qs('anUploadStatus').textContent = `status: ${completed}/${totalFiles} enviados, ${failures.length} falharam — ${pct}%${suffix}`;
+    _setAnalyzeUploadProgress(pct, label, kind);
+  };
+
+  const uploadOne = async (file, index) => {
+    const fileSizeText = _formatUploadBytes(file.size || 0);
+    updateBatchProgress(`Arquivo ${index + 1}/${totalFiles}: iniciando ${file.name || 'vídeo'} (${fileSizeText})…`);
+    try {
+      const proxy = await _uploadViaProxy(file, {
+        prefix: 'uploads',
+        validateVideo: true,
+        deleteIfInvalid: true,
+        onStart: () => {
+          loadedByIndex.set(index, 0);
+          updateBatchProgress(`Arquivo ${index + 1}/${totalFiles}: conexão aberta para ${file.name || 'vídeo'}…`);
+        },
+        onProgress: (loaded, total) => {
+          const safeLoaded = Math.max(0, Math.min(loaded || 0, total || file.size || 0));
+          loadedByIndex.set(index, safeLoaded);
+          const loadedText = _formatUploadBytes(safeLoaded);
+          const totalText = _formatUploadBytes(total || file.size || 0);
+          updateBatchProgress(`Arquivo ${index + 1}/${totalFiles}: ${file.name || 'vídeo'} — ${loadedText}/${totalText}…`);
+        },
+      });
+
+      loadedByIndex.set(index, file.size || 0);
+      completed += 1;
+      await _saveAnalyzeUploadMeta(proxy, file);
+      results.push({ file, proxy, index });
+      _pushAnalyzeUploadHistory(`✓ ${file.name || 'vídeo'} enviado`, 'good');
+      updateBatchProgress(`Arquivo ${index + 1}/${totalFiles}: upload concluído — ${file.name || 'vídeo'}.`);
+    } catch (e) {
+      loadedByIndex.set(index, file.size || 0);
+      failures.push({ file, error: e });
+      _pushAnalyzeUploadHistory(`✗ ${file.name || 'vídeo'} falhou: ${e.message}`, 'bad');
+      updateBatchProgress(`Arquivo ${index + 1}/${totalFiles}: falha em ${file.name || 'vídeo'} — ${e.message}.`);
+    }
+  };
+
+  const worker = async () => {
+    while (nextIndex < totalFiles) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await uploadOne(files[index], index);
+    }
+  };
 
   try {
-    let proxy;
+    const parallelUploads = Math.min(2, totalFiles);
+    await Promise.all(Array.from({ length: parallelUploads }, worker));
 
-    proxy = await _uploadViaProxy(f, {
-      prefix: 'uploads',
-      validateVideo: true,
-      deleteIfInvalid: true,
-      onProgress: (loaded, total) => {
-        const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
-        qs('anUploadStatus').textContent = `status: enviando arquivo (${pct}%)…`;
-      },
-    });
-
-    state.videoObjectKey = proxy.object_key;
-    state.videoUrl = proxy.public_url;
-    state.videoOriginalFilename = meta.displayName || f.name || '';
-    qs('anObjectKey').textContent = state.videoObjectKey;
-    qs('anVideoUrl').textContent = state.videoUrl;
-
-    // Save display metadata to backend
-    try {
-      await apiFetch('/uploads/set-meta', { method: 'POST', body: JSON.stringify({
-        object_key: proxy.object_key,
-        display_name: meta.displayName || f.name || '',
-        company_id: meta.companyId || '',
-        company_name: meta.companyName || '',
-      })});
-    } catch (_) {}
-
-    qs('anUploadStatus').textContent = 'status: upload concluído';
-    toast('Upload concluído');
-
-    // Step 3: auto-transcribe server-side (backend baixa do MinIO → Whisper)
-    try {
-      qs('anUploadStatus').textContent = 'status: transcrevendo…';
-      transcribeProgress.start([
-        { pct: 28, label: 'Baixando vídeo do storage…',  minMs: 3000 },
-        { pct: 58, label: 'Extraindo áudio com ffmpeg…', minMs: 4000 },
-        { pct: 92, label: 'Transcrevendo com Whisper…',  minMs: 99999 },
-      ]);
-      const lang = qs('anLang').value || null;
-      const tr = await apiFetch('/transcribe', { method: 'POST', body: JSON.stringify({ video_object_key: state.videoObjectKey, language: lang }) });
-      if (tr?.ok && tr?.transcript?.text) {
-        qs('anTranscript').value = tr.transcript.text;
-        qs('anSrt').textContent = tr.transcript.srt || '';
-        state.transcriptSegments = tr.transcript.segments || [];
-        state.transcriptSrt      = tr.transcript.srt || '';
-        // Auto-fill video metadata from ffprobe result
-        if (tr.probe) {
-          if (tr.probe.duration_seconds) qs('anDur').value = tr.probe.duration_seconds.toFixed(1);
-          if (tr.probe.width)  qs('anW').value  = tr.probe.width;
-          if (tr.probe.height) qs('anH').value  = tr.probe.height;
-          if (tr.probe.fps)    qs('anFps').value = tr.probe.fps;
-        }
-        transcribeProgress.complete('✓ Transcrição concluída');
-        qs('anUploadStatus').textContent = 'status: transcrição concluída';
-        toast('Transcrição preenchida');
-      } else if (tr?.error) {
-        const detail = tr.detail ? ` — ${tr.detail}` : '';
-        transcribeProgress.error(`✗ ${tr.error}${detail}`);
-        qs('anUploadStatus').textContent = `status: upload ok — transcrição falhou (${tr.error}${detail})`;
-        toast('Transcrição falhou: ' + (tr.detail || tr.error), 'bad');
-      } else {
-        transcribeProgress.hide();
-        qs('anUploadStatus').textContent = 'status: upload concluído (sem transcrição)';
-      }
-    } catch (e) {
-      transcribeProgress.error(`✗ ${e.message}`);
-      qs('anUploadStatus').textContent = 'status: upload concluído (erro transcrição)';
-      toast('Erro ao transcrever: ' + e.message, 'bad');
+    if (!results.length) {
+      const firstError = failures[0]?.error?.message || 'nenhum arquivo foi enviado';
+      qs('anUploadStatus').textContent = `status: todos os uploads falharam — ${firstError}`;
+      _setAnalyzeUploadProgress(100, `Todos os uploads falharam: ${firstError}`, 'bad');
+      toast('Todos os uploads falharam: ' + firstError, 'bad');
+      return;
     }
 
+    const selected = results[results.length - 1];
+    _selectAnalyzeUploadedVideo(selected.proxy, selected.file);
+
+    if (failures.length) {
+      qs('anUploadStatus').textContent = `status: ${results.length}/${totalFiles} uploads concluídos; ${failures.length} falharam. Selecionado: ${selected.file.name}`;
+      _setAnalyzeUploadProgress(100, `${results.length}/${totalFiles} uploads concluídos. ${failures.length} falharam. Último enviado selecionado: ${selected.file.name}.`, 'bad');
+      toast(`${results.length}/${totalFiles} uploads concluídos; ${failures.length} falharam`, 'bad');
+      return;
+    }
+
+    qs('anUploadStatus').textContent = `status: ${results.length} upload${results.length === 1 ? '' : 's'} concluído${results.length === 1 ? '' : 's'}. Selecionado: ${selected.file.name}`;
+    _setAnalyzeUploadProgress(100, `${results.length} upload${results.length === 1 ? '' : 's'} concluído${results.length === 1 ? '' : 's'}. ${selected.file.name} ficou selecionado.`, 'good');
+    toast(results.length === 1 ? 'Upload concluído' : `${results.length} uploads concluídos`, 'good');
+
+    transcribeProgress.hide();
   } catch (e) {
-    qs('anUploadStatus').textContent = 'status: erro';
+    qs('anUploadStatus').textContent = `status: erro no upload — ${e.message}`;
+    _setAnalyzeUploadProgress(100, `Erro no upload: ${e.message}`, 'bad');
     toast(e.message, 'bad');
+  } finally {
+    if (input) input.value = '';
   }
 }
 
@@ -2889,6 +3792,7 @@ function clearAnalyze() {
   qs('anVideoUrl').textContent = '-';
   qs('anUploadStatus').textContent = 'status: -';
   qs('anVideoFile').value = '';
+  _resetAnalyzeUploadProgress();
   state.videoObjectKey = null;
   state.videoUrl = null;
   state.lastAnalyze = null;
@@ -2978,6 +3882,45 @@ function parseSseBlock(block) {
   });
   if (!dataLines.length) return null;
   return { event: ev, data: dataLines.join('\n') };
+}
+
+let _compareProgressLast = '';
+
+function _compareProgressReset() {
+  _compareProgressLast = '';
+  const hist = qs('cmpProgressHistory');
+  if (hist) hist.innerHTML = '';
+}
+
+function _compareProgressPush(detail, kind = 'active') {
+  const hist = qs('cmpProgressHistory');
+  if (!hist || !detail) return;
+  const clean = String(detail).replace(/^[✓✗!•⏳]+\s*/u, '').trim();
+  if (!clean || clean === _compareProgressLast) return;
+  _compareProgressLast = clean;
+  const item = document.createElement('div');
+  item.className = `op-progress-history-item ${kind}`;
+  item.textContent = `${kind === 'good' ? '✓' : kind === 'bad' ? '!' : '•'} ${clean}`;
+  hist.prepend(item);
+  while (hist.children.length > 6) hist.lastElementChild?.remove();
+}
+
+function _setCompareProgress(pct, detail, kind = 'active', opts = {}) {
+  const wrap = qs('cmpProgressWrap');
+  if (!wrap) return;
+  const safePct = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
+  wrap.style.display = 'grid';
+  wrap.classList.toggle('is-good', kind === 'good');
+  wrap.classList.toggle('is-bad', kind === 'bad');
+  wrap.style.setProperty('--upload-pct', safePct.toFixed(1));
+  qs('cmpProgressRing')?.style.setProperty('--upload-pct', safePct.toFixed(1));
+  if (qs('cmpProgressPct')) qs('cmpProgressPct').textContent = `${Math.round(safePct)}%`;
+  if (qs('cmpProgressState')) {
+    qs('cmpProgressState').textContent = kind === 'good' ? 'ok' : kind === 'bad' ? 'erro' : (safePct > 8 ? 'rodando' : 'aguarde');
+  }
+  if (qs('cmpProgressLabel')) qs('cmpProgressLabel').textContent = detail || 'Processando comparação…';
+  if (qs('cmpProgBarFill')) qs('cmpProgBarFill').style.width = `${safePct.toFixed(1)}%`;
+  if (opts.log !== false) _compareProgressPush(detail, kind);
 }
 
 function applyCompareStreamMessage(msg) {
@@ -3141,6 +4084,7 @@ async function doCompare() {
   qs('cmpOutB').textContent = '';
   qs('cmpStatusA').textContent = 'aguardando…';
   qs('cmpStatusB').textContent = 'aguardando…';
+  _compareProgressReset();
 
   // ── progresso detalhado ──
   const _progState = { tokA: 0, tokB: 0, startMs: Date.now() };
@@ -3151,6 +4095,11 @@ async function doCompare() {
     qs('cmpProgElapsed').textContent = `${mm}:${ss}`;
     qs('cmpProgTokensA').textContent = `${_progState.tokA} tok`;
     qs('cmpProgTokensB').textContent = `${_progState.tokB} tok`;
+    const tokenTarget = Math.max(1, (max_tokens || 1200) * 2);
+    const tokenPct = Math.min(66, ((_progState.tokA + _progState.tokB) / tokenTarget) * 66);
+    const timePct = Math.min(20, secs / 3);
+    const pct = Math.min(94, 8 + tokenPct + timePct);
+    _setCompareProgress(pct, `Gerando respostas · A ${_progState.tokA} tok · B ${_progState.tokB} tok · ${mm}:${ss}`, 'active', { log: false });
   }
   function _cmpProgSetState(idx, state, detail) {
     const dot = qs(idx === 0 ? 'cmpProgDotA' : 'cmpProgDotB');
@@ -3170,12 +4119,11 @@ async function doCompare() {
   );
   _cmpProgSetState(0, 'running', 'conectando…');
   _cmpProgSetState(1, 'running', 'conectando…');
-  qs('cmpProgressWrap').style.display = 'block';
+  _setCompareProgress(8, 'Conectando aos dois modelos…');
 
   const _tickInterval = setInterval(_cmpProgUpdate, 500);
 
   // intercepta deltas para contar tokens em tempo real
-  const _origApply = applyCompareStreamMessage;
   window._cmpProgStateRef = _progState;
   const _patchedApply = function(msg) {
     const idx = Number(msg?.provider_index);
@@ -3191,30 +4139,36 @@ async function doCompare() {
       }
     } else if (msg?.event === 'provider_start') {
       _cmpProgSetState(idx, 'running', 'gerando…');
+      _compareProgressPush(`Provider ${idx === 0 ? 'A' : 'B'} começou a gerar`);
     } else if (msg?.event === 'provider_done') {
       const secs = Math.max(1, (Date.now() - _progState.startMs) / 1000);
       const tok = idx === 0 ? _progState.tokA : _progState.tokB;
       _cmpProgSetState(idx, 'done', `${tok} tokens em ${secs.toFixed(1)}s`);
+      _compareProgressPush(`Provider ${idx === 0 ? 'A' : 'B'} concluído`, 'good');
     } else if (msg?.event === 'error') {
       _cmpProgSetState(idx, 'error', msg?.error || 'erro');
+      _compareProgressPush(`Provider ${idx === 0 ? 'A' : 'B'} falhou: ${msg?.error || 'erro'}`, 'bad');
     }
-    return _origApply(msg);
   };
   // monkey-patch temporário
   window._cmpApplyPatch = _patchedApply;
 
   try {
     await doCompareStream(payload);
+    _setCompareProgress(100, 'Comparação finalizada', 'good');
     toast('Comparação finalizada');
   } catch (streamErr) {
     try {
       _cmpProgSetState(0, 'running', 'modo não-stream…');
       _cmpProgSetState(1, 'running', 'modo não-stream…');
+      _setCompareProgress(55, 'Stream instável. Tentando modo não-stream…');
       await doCompareNonStream(payload);
+      _setCompareProgress(100, 'Comparação finalizada via modo não-stream', 'good');
       toast('Concluído via não-stream');
     } catch (e) {
       _cmpProgSetState(0, 'error', 'falhou');
       _cmpProgSetState(1, 'error', 'falhou');
+      _setCompareProgress(100, (e && e.message) || (streamErr && streamErr.message) || 'Falha na comparação', 'bad');
       toast((e && e.message) || (streamErr && streamErr.message) || 'Falha na comparação', 'bad');
     }
   } finally {
@@ -3347,12 +4301,55 @@ function parseCompareText(text) {
 }
 
 function _cleanFilename(fname) {
-  return (fname || '')
-    .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, '')
-    .replace(/^[^_]+_-/, '');
+  // Strip "local:" prefix if present, then take last path segment
+  let s = (fname || '').replace(/^local:/, '');
+  const lastSeg = s.split('/').pop() || s;
+  // Strip UUID prefix: {uuid4}-rest
+  s = lastSeg.replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, '');
+  // Strip any leading code up to first _-_ (e.g. "0406_-_" or "0414_03_-_")
+  s = s.replace(/^.*?_-(?=_)/, '');
+  return s || lastSeg;
 }
 
 // RUNS
+function _updateDeletionActionButtons() {
+  const runId = String(state.selectedRunId || '').trim();
+  const criacaoRunId = String(state.selectedCriacaoRunId || criacaoState.runId || '').trim();
+  const runBtn = qs('btnRunDeleteSelected');
+  if (runBtn) {
+    runBtn.disabled = !runId;
+    runBtn.title = runId ? `Excluir run ${runId}` : 'Selecione um run primeiro';
+  }
+  const clearBtn = qs('btnCriacaoClearSelected');
+  if (clearBtn) {
+    clearBtn.disabled = !criacaoRunId;
+    clearBtn.title = criacaoRunId ? `Limpar criação ${criacaoRunId}` : 'Selecione um run primeiro';
+  }
+  const deleteBtn = qs('btnCriacaoDeleteSelected');
+  if (deleteBtn) {
+    deleteBtn.disabled = !criacaoRunId;
+    deleteBtn.title = criacaoRunId ? `Excluir tudo ${criacaoRunId}` : 'Selecione um run primeiro';
+  }
+}
+
+function deleteSelectedRun() {
+  const id = String(state.selectedRunId || state.lastRunDetail?.id || '').trim();
+  if (!id) return toast('Selecione um run primeiro', 'bad');
+  deleteRun(id);
+}
+
+function clearSelectedCriacaoRun() {
+  const id = String(state.selectedCriacaoRunId || criacaoState.runId || '').trim();
+  if (!id) return toast('Selecione um run na Criação primeiro', 'bad');
+  clearCriacaoRun(id);
+}
+
+function deleteSelectedCriacaoRun() {
+  const id = String(state.selectedCriacaoRunId || criacaoState.runId || '').trim();
+  if (!id) return toast('Selecione um run na Criação primeiro', 'bad');
+  deleteRun(id);
+}
+
 async function reloadRuns() {
   try {
     const limit = parseInt(qs('runsLimit').value || '50', 10);
@@ -3367,10 +4364,13 @@ async function reloadRuns() {
 
       const snippet = item.transcript_snippet || item.source || '';
       const dateStr = fmtDate(item.created_at);
-      const rawFilename = item.original_filename || _cleanFilename((item.video_object_key || '').split('/').pop() || '');
+      const rawFilename = item.original_filename || _cleanFilename(item.video_object_key || '');
       const displayName = rawFilename || ((item.id || '').slice(0, 20) + '…');
       row.innerHTML = `
-        <div class="run-item-id" title="${esc(item.id || '')}">${esc(displayName)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div class="run-item-id" title="${esc(item.id || '')}">${esc(displayName)}</div>
+          <button class="btn" style="font-size:10px;padding:2px 7px;color:var(--bad);border-color:rgba(255,68,85,.45);" onclick="event.stopPropagation();deleteRun('${escAttr(item.id || '')}')">Excluir</button>
+        </div>
         <div class="run-item-date">${dateStr}</div>
         ${snippet ? `<div class="run-item-snippet">${esc(snippet)}</div>` : ''}
         <div class="run-item-status ${item.error ? 'err' : 'ok'}">${item.error ? '✕ Erro' : '✓ OK'}</div>
@@ -3378,8 +4378,64 @@ async function reloadRuns() {
       row.onclick = () => loadRunDetail(item.id, row);
       list.appendChild(row);
     });
+    _updateDeletionActionButtons();
   } catch (e) {
     toast(e.message, 'bad');
+  }
+}
+
+function _clearRunLocalState(runId) {
+  const id = String(runId || '').trim();
+  if (!id) return;
+  try { sessionStorage.removeItem(_wizardSessionKey(id)); } catch (_) {}
+  try { state.runFramesCache?.delete(id); } catch (_) {}
+  if (state.lastRunDetail && String(state.lastRunDetail.id || '') === id) {
+    state.lastRunDetail = null;
+    state.selectedRunId = null;
+    const detail = qs('runsDetail');
+    if (detail) detail.innerHTML = '<div class="run-detail-empty">Selecione um run na lista para ver detalhes</div>';
+  }
+  if (String(criacaoState.runId || '') === id) {
+    state.selectedCriacaoRunId = null;
+    criacaoState.runId = null;
+    criacaoState.frames = [];
+    criacaoState.postResult = null;
+    criacaoState.activeBurnJobId = null;
+    _revokeLogoPreviewHqUrl();
+    const detail = qs('criacaoDetail');
+    if (detail) detail.innerHTML = '<div class="criacao-empty">Selecione um run na lista para gerar o post</div>';
+  }
+  _updateDeletionActionButtons();
+}
+
+async function deleteRun(runId) {
+  const id = String(runId || '').trim();
+  if (!id) return toast('Run inválido', 'bad');
+  if (!confirm('Excluir este run e os arquivos vinculados só a ele? Esta ação não pode ser desfeita.')) return;
+  try {
+    const res = await apiFetch(`/runs/${encodeURIComponent(id)}?delete_media=true`, { method: 'DELETE' });
+    _clearRunLocalState(id);
+    await Promise.allSettled([reloadRuns(), loadCriacaoRuns()]);
+    const deletedCount = (res.deleted_media || []).length;
+    const skippedCount = (res.skipped_media || []).length;
+    toast(`Run excluído. Mídias apagadas: ${deletedCount}${skippedCount ? ` · preservadas por uso em outro run: ${skippedCount}` : ''}`, 'good');
+  } catch (e) {
+    toast('Erro ao excluir run: ' + e.message, 'bad');
+  }
+}
+
+async function clearCriacaoRun(runId) {
+  const id = String(runId || criacaoState.runId || '').trim();
+  if (!id) return toast('Nenhum run selecionado', 'bad');
+  if (!confirm('Limpar a criação deste run? Isso remove vídeos derivados, fila/post agendado e estado do wizard, mantendo o run original.')) return;
+  try {
+    const res = await apiFetch(`/runs/${encodeURIComponent(id)}/creation`, { method: 'DELETE' });
+    _clearRunLocalState(id);
+    await loadCriacaoRuns();
+    const deletedCount = (res.deleted_media || []).length;
+    toast(`Criação limpa. Mídias apagadas: ${deletedCount}`, 'good');
+  } catch (e) {
+    toast('Erro ao limpar criação: ' + e.message, 'bad');
   }
 }
 
@@ -3424,6 +4480,8 @@ async function loadRunDetail(id, rowEl) {
   // mark active
   document.querySelectorAll('.run-item').forEach(el => el.classList.remove('active'));
   if (rowEl) rowEl.classList.add('active');
+  state.selectedRunId = String(id || '').trim();
+  _updateDeletionActionButtons();
 
   const reqId = (state.runDetailRequestId || 0) + 1;
   state.runDetailRequestId = reqId;
@@ -3561,6 +4619,7 @@ function renderRunDetail(r) {
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <button class="btn" onclick="copyDetailPrompt()">Copiar prompt</button>
           <button class="btn primary" onclick="detailToCompare()">→ Compare</button>
+          <button class="btn" style="color:var(--bad);border-color:rgba(255,68,85,.45);" onclick="deleteRun('${escAttr(activeRunId)}')">Excluir run</button>
         </div>
       </div>
     </div>
@@ -3999,8 +5058,15 @@ const criacaoState = {
   thumbElements: [],
   thumbSelectedElementId: null,
   transcriptDraft: '',
+  transcribeSourceLang: 'pt',
+  transcribeTargetLang: '',
+  transcribeAdultMode: true,
+  transcribeIncludeVocalizations: true,
   activeBurnJobId: null,
   burnSkipSubtitles: false,
+  burnFontSize: 22,
+  burnFontColor: 'white',
+  burnSubDelay: 0,
   step: 1,
   logoPreviewHqFrame: null,
   logoPreviewHqUrl: '',
@@ -4283,12 +5349,13 @@ function _teaserNormalizeLogo(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const d = _teaserLogoDefaults();
   const name = String(src.name || 'logo').trim() || 'logo';
+  const logoSrc = String(src.src || src.b64 || src.logo_b64 || '').trim();
   const mime = String(src.mime || '').trim().toLowerCase();
-  const isGif = mime === 'image/gif' || /\.gif$/i.test(name) || /^data:image\/gif/i.test(String(src.src || ''));
+  const isGif = mime === 'image/gif' || /\.gif$/i.test(name) || /^data:image\/gif/i.test(logoSrc);
   return {
     id: String(src.id || `logo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
     name,
-    src: String(src.src || ''),
+    src: logoSrc,
     mime: mime || (isGif ? 'image/gif' : ''),
     isGif: !!isGif,
     x: _toNum(src.x, d.x, 0, 100),
@@ -5280,6 +6347,10 @@ function _resetCriacaoForRun(id, frames, reqData, visionAnalysis) {
   const tr = reqData.transcript || {};
   criacaoState.hasTranscript = !!(tr.text || tr.srt || tr.segments?.length);
   criacaoState.transcriptDraft = (tr.srt || '').trim();
+  criacaoState.transcribeSourceLang = 'pt';
+  criacaoState.transcribeTargetLang = '';
+  criacaoState.transcribeAdultMode = true;
+  criacaoState.transcribeIncludeVocalizations = true;
 
   criacaoState.postResult = null;
   criacaoState.selectedFrameIdx = null;
@@ -5323,6 +6394,9 @@ function _resetCriacaoForRun(id, frames, reqData, visionAnalysis) {
   criacaoState.burnedPreset = 'ultrafast';
   criacaoState.activeBurnJobId = null;
   criacaoState.burnSkipSubtitles = false;
+  criacaoState.burnFontSize = 22;
+  criacaoState.burnFontColor = 'white';
+  criacaoState.burnSubDelay = 0;
   _revokeLogoPreviewHqUrl();
   criacaoState.logoPreviewHqFrame = null;
   criacaoState.logoPreviewHqUrl = '';
@@ -5375,6 +6449,13 @@ function _syncCriacaoDraftsFromDom() {
   const burnQ = qs('burnQuality');
   const burnR = qs('burnResolution');
   const burnP = qs('burnPreset');
+  const burnFontSize = qs('burnFontSize');
+  const burnFontColor = qs('burnFontColor');
+  const burnSubDelay = qs('burnSubDelay');
+  const transcribeSourceLang = qs('transcribeSourceLang');
+  const transcribeLang = qs('transcribeLang');
+  const transcribeAdultMode = qs('transcribeAdultMode');
+  const transcribeIncludeVocalizations = qs('transcribeIncludeVocalizations');
   const tScale = qs('thumbOutputScale');
   const tCropX = qs('thumbCropX');
   const tCropY = qs('thumbCropY');
@@ -5403,6 +6484,13 @@ function _syncCriacaoDraftsFromDom() {
   if (burnQ) criacaoState.burnedQuality = burnQ.value || criacaoState.burnedQuality;
   if (burnR) criacaoState.burnedResolution = burnR.value || criacaoState.burnedResolution;
   if (burnP) criacaoState.burnedPreset = burnP.value || criacaoState.burnedPreset;
+  if (burnFontSize) criacaoState.burnFontSize = _clamp(parseInt(burnFontSize.value, 10) || criacaoState.burnFontSize || 22, 6, 72);
+  if (burnFontColor) criacaoState.burnFontColor = burnFontColor.value || criacaoState.burnFontColor || 'white';
+  if (burnSubDelay) criacaoState.burnSubDelay = _toNum(burnSubDelay.value, criacaoState.burnSubDelay || 0, -30, 30);
+  if (transcribeSourceLang) criacaoState.transcribeSourceLang = transcribeSourceLang.value || 'pt';
+  if (transcribeLang) criacaoState.transcribeTargetLang = transcribeLang.value || '';
+  if (transcribeAdultMode) criacaoState.transcribeAdultMode = !!transcribeAdultMode.checked;
+  if (transcribeIncludeVocalizations) criacaoState.transcribeIncludeVocalizations = !!transcribeIncludeVocalizations.checked;
   if (tScale) criacaoState.thumbOutputScale = _clamp(parseInt(tScale.value, 10) || criacaoState.thumbOutputScale, 1, 3);
   if (tCropX) criacaoState.thumbCropX = _toNum(tCropX.value, criacaoState.thumbCropX, 0, 100);
   if (tCropY) criacaoState.thumbCropY = _toNum(tCropY.value, criacaoState.thumbCropY, 0, 100);
@@ -5500,15 +6588,20 @@ async function loadCriacaoRuns() {
       el.className = 'criacao-run-item';
       el.dataset.id = item.id;
       const dateStr = fmtDate(item.created_at);
-      const shortId = (item.id || '').slice(0, 18) + '…';
+      const rawFilename = item.original_filename || _cleanFilename(item.video_object_key || '');
+      const displayName = rawFilename || ((item.id || '').slice(0, 18) + '…');
       el.innerHTML = `
-        <div class="criacao-run-id">${esc(shortId)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div class="criacao-run-id" title="${esc(item.id || '')}">${esc(displayName)}</div>
+          <button class="btn" style="font-size:10px;padding:2px 7px;color:var(--bad);border-color:rgba(255,68,85,.45);" onclick="event.stopPropagation();clearCriacaoRun('${escAttr(item.id || '')}')">Limpar</button>
+        </div>
         <div class="criacao-run-date">${esc(dateStr)}</div>
         <span class="badge ${item.error ? 'bad' : 'good'}" style="margin-top:4px;">${item.error ? 'erro' : 'ok'}</span>
       `;
       el.onclick = () => selectCriacaoRun(item.id, el);
       list.appendChild(el);
     });
+    _updateDeletionActionButtons();
   } catch (e) {
     toast(e.message, 'bad');
   }
@@ -5517,6 +6610,8 @@ async function loadCriacaoRuns() {
 async function selectCriacaoRun(id, rowEl) {
   document.querySelectorAll('.criacao-run-item').forEach(el => el.classList.remove('active'));
   if (rowEl) rowEl.classList.add('active');
+  state.selectedCriacaoRunId = String(id || '').trim();
+  _updateDeletionActionButtons();
 
   const reqId = (state.criacaoRequestId || 0) + 1;
   state.criacaoRequestId = reqId;
@@ -5929,28 +7024,66 @@ function _renderBurnResultHtml() {
 
 function _renderStepLegenda(runId) {
   const canGoTeaser = true;
+  const srcLang = criacaoState.transcribeSourceLang || 'pt';
+  const targetLang = criacaoState.transcribeTargetLang || '';
+  const subtitlePreviewFrameIdx = criacaoState.selectedFrameIdx ?? 0;
+  const subtitlePreviewFrame = criacaoState.frames?.[subtitlePreviewFrameIdx] || '';
+  const subtitlePreviewBg = subtitlePreviewFrame
+    ? `background-image:linear-gradient(180deg,rgba(0,0,0,.10),rgba(0,0,0,.75)),url('data:image/jpeg;base64,${subtitlePreviewFrame}');background-size:cover;background-position:center;`
+    : `background:radial-gradient(circle at 20% 20%,rgba(32,213,255,.26),transparent 34%),linear-gradient(135deg,#151827,#05060b 72%);`;
   return `
     <div class="detail-section card">
       <h2>Passo 2 — Gerar Vídeo Legendado</h2>
       <div class="hint" style="margin-bottom:10px;">Transcreva/edite a legenda e gere o vídeo final com logo queimada.</div>
 
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-bottom:10px;">
+        <div class="col">
+          <label>Idioma falado no vídeo</label>
+          <select id="transcribeSourceLang" style="padding:5px 8px;border-radius:6px;background:var(--card);color:var(--text);border:1px solid var(--line);font-size:13px;width:100%;" onchange="criacaoState.transcribeSourceLang=this.value;_persistWizardState();">
+            <option value="pt" ${srcLang === 'pt' ? 'selected' : ''}>Português (recomendado)</option>
+            <option value="en" ${srcLang === 'en' ? 'selected' : ''}>English</option>
+            <option value="es" ${srcLang === 'es' ? 'selected' : ''}>Español</option>
+            <option value="fr" ${srcLang === 'fr' ? 'selected' : ''}>Français</option>
+            <option value="de" ${srcLang === 'de' ? 'selected' : ''}>Deutsch</option>
+            <option value="it" ${srcLang === 'it' ? 'selected' : ''}>Italiano</option>
+            <option value="ja" ${srcLang === 'ja' ? 'selected' : ''}>日本語</option>
+            <option value="zh" ${srcLang === 'zh' ? 'selected' : ''}>中文</option>
+            <option value="auto" ${srcLang === 'auto' ? 'selected' : ''}>Auto (risco maior)</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>Traduzir legenda para</label>
+          <select id="transcribeLang" style="padding:5px 8px;border-radius:6px;background:var(--card);color:var(--text);border:1px solid var(--line);font-size:13px;width:100%;" onchange="onTranslateLangChange()">
+            <option value="" ${!targetLang ? 'selected' : ''}>Não traduzir</option>
+            <option value="pt" ${targetLang === 'pt' ? 'selected' : ''}>Português</option>
+            <option value="en" ${targetLang === 'en' ? 'selected' : ''}>English</option>
+            <option value="es" ${targetLang === 'es' ? 'selected' : ''}>Español</option>
+            <option value="fr" ${targetLang === 'fr' ? 'selected' : ''}>Français</option>
+            <option value="de" ${targetLang === 'de' ? 'selected' : ''}>Deutsch</option>
+            <option value="it" ${targetLang === 'it' ? 'selected' : ''}>Italiano</option>
+            <option value="ja" ${targetLang === 'ja' ? 'selected' : ''}>日本語</option>
+            <option value="zh" ${targetLang === 'zh' ? 'selected' : ''}>中文</option>
+          </select>
+        </div>
+      </div>
+
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-        <select id="transcribeLang" style="padding:5px 8px;border-radius:6px;background:var(--card);color:var(--text);border:1px solid var(--line);font-size:13px;" onchange="onTranslateLangChange()">
-          <option value="">Original (sem traduzir)</option>
-          <option value="pt">Português</option>
-          <option value="en">English</option>
-          <option value="es">Español</option>
-          <option value="fr">Français</option>
-          <option value="de">Deutsch</option>
-          <option value="it">Italiano</option>
-          <option value="ja">日本語</option>
-          <option value="zh">中文</option>
-        </select>
-        <button class="btn primary" onclick="reTranscribe('auto')" title="Tenta Groq → OpenAI → Local automaticamente">⚡ Auto</button>
-        <button class="btn" onclick="reTranscribe('groq')" title="Groq Whisper Large V3 Turbo">Groq</button>
+        <button class="btn primary" onclick="reTranscribe('auto')" title="Modo conservador/local: não inventa fala quando o áudio não está claro">⚡ Auto estrito</button>
+        <button class="btn primary" onclick="reTranscribe('whisper_sync')" title="Faster-Whisper premium: timestamps por palavra, sem pós-processamento LLM">Whisper Sync</button>
+        <button class="btn primary" onclick="reTranscribe('deepgram')" title="Deepgram Nova-2: timestamps por palavra, melhor para sincronia de legenda">Deepgram Sync</button>
+        <button class="btn" onclick="reTranscribe('assemblyai')" title="AssemblyAI Universal-3 Pro → Universal-2">AssemblyAI</button>
+        <button class="btn" onclick="reTranscribe('groq')" title="OpenRouter STT usando token:openrouter">OpenRouter STT</button>
         <button class="btn" onclick="reTranscribe('openai')" title="OpenAI Whisper">OpenAI</button>
         <button class="btn" onclick="reTranscribe('local')" title="Faster-Whisper local (CPU)">🖥 Local</button>
-        <span class="hint">Idioma final da legenda — ao mudar traduz o SRT atual imediatamente</span>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+          <input id="transcribeAdultMode" type="checkbox" ${criacaoState.transcribeAdultMode !== false ? 'checked' : ''} onchange="criacaoState.transcribeAdultMode=!!this.checked;_persistWizardState();">
+          Adulto sem censura
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+          <input id="transcribeIncludeVocalizations" type="checkbox" ${criacaoState.transcribeIncludeVocalizations !== false ? 'checked' : ''} onchange="criacaoState.transcribeIncludeVocalizations=!!this.checked;_persistWizardState();">
+          Gemidos claros
+        </label>
+        <span class="hint">Para queimar legenda, prefira Whisper Sync ou Deepgram Sync: ambos usam timestamps reais. OpenRouter pode acertar vocabulário, mas o tempo é estimado.</span>
       </div>
 
       <div class="srt-editor-wrap">
@@ -6010,21 +7143,21 @@ function _renderStepLegenda(runId) {
         <div class="row wrap" style="gap:8px;margin-bottom:8px;align-items:flex-end;">
           <div class="col">
             <label>Tamanho da legenda</label>
-            <input id="burnFontSize" type="number" value="22" min="10" max="72" style="width:70px;">
+            <input id="burnFontSize" type="number" value="${criacaoState.burnFontSize || 22}" min="6" max="72" style="width:70px;" oninput="updateSubtitlePreview()" onchange="_syncCriacaoDraftsFromDom();updateSubtitlePreview();">
           </div>
           <div class="col">
             <label>Cor</label>
-            <select id="burnFontColor">
-              <option value="white">Branco</option>
-              <option value="yellow">Amarelo</option>
-              <option value="cyan">Ciano</option>
-              <option value="orange">Laranja</option>
-              <option value="black">Preto</option>
+            <select id="burnFontColor" onchange="_syncCriacaoDraftsFromDom();updateSubtitlePreview();">
+              <option value="white" ${(criacaoState.burnFontColor || 'white') === 'white' ? 'selected' : ''}>Branco</option>
+              <option value="yellow" ${criacaoState.burnFontColor === 'yellow' ? 'selected' : ''}>Amarelo</option>
+              <option value="cyan" ${criacaoState.burnFontColor === 'cyan' ? 'selected' : ''}>Ciano</option>
+              <option value="orange" ${criacaoState.burnFontColor === 'orange' ? 'selected' : ''}>Laranja</option>
+              <option value="black" ${criacaoState.burnFontColor === 'black' ? 'selected' : ''}>Preto</option>
             </select>
           </div>
           <div class="col">
             <label>Delay (s)</label>
-            <input id="burnSubDelay" type="number" value="0" step="0.5" style="width:80px;">
+            <input id="burnSubDelay" type="number" value="${criacaoState.burnSubDelay || 0}" step="0.5" style="width:80px;" oninput="updateSubtitlePreview()" onchange="_syncCriacaoDraftsFromDom();updateSubtitlePreview();">
           </div>
           <div class="col">
             <label>Resolução</label>
@@ -6055,6 +7188,19 @@ function _renderStepLegenda(runId) {
           </div>
         </div>
 
+        <div style="margin:10px 0 12px;padding:12px;border:1px solid rgba(32,213,255,.22);border-radius:14px;background:rgba(5,8,14,.45);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+            <strong style="font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);">Preview da legenda</strong>
+            <span id="subtitlePreviewHint" class="hint">Ajuste tamanho/cor antes de queimar.</span>
+          </div>
+          <div id="subtitlePreviewScreen" style="position:relative;overflow:hidden;border-radius:12px;border:1px solid rgba(255,255,255,.10);aspect-ratio:16/9;max-height:260px;${subtitlePreviewBg}">
+            <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 46%,rgba(0,0,0,.72) 100%);"></div>
+            <div id="subtitlePreviewText" style="position:absolute;left:5%;right:5%;bottom:7%;text-align:center;font-family:Arial,Helvetica,sans-serif;font-weight:800;line-height:1.18;padding:0 8px;word-break:normal;white-space:normal;">
+              Preview da legenda na tela
+            </div>
+          </div>
+        </div>
+
         <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;">
           <button class="btn primary" onclick="triggerBurnSubs()" ${criacaoState.hasTranscript || criacaoState.burnSkipSubtitles ? '' : 'disabled'}>
             ${criacaoState.burnSkipSubtitles ? '🖼 Queimar só logo (sem legenda)' : '🔤 Gerar versão legendada com logo'}
@@ -6064,6 +7210,16 @@ function _renderStepLegenda(runId) {
           </button>
           ${(!criacaoState.hasTranscript && !criacaoState.burnSkipSubtitles) ? '<span class="hint">Transcreva primeiro ou clique em "Sem legenda"</span>' : ''}
         </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding:10px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.03);">
+          <div class="col">
+            <label>Prévia no minuto</label>
+            <input id="burnPreviewMinute" type="number" value="0" min="0" step="0.5" style="width:90px;">
+          </div>
+          <button class="btn" onclick="burnDiagnoseSubtitles()">🩺 Diagnosticar SRT</button>
+          <button class="btn primary" onclick="burnQuickPreview()">⚡ Prévia rápida 60s</button>
+          <span class="hint" style="align-self:center;">Use antes da queima completa para testar sincronia sem esperar horas.</span>
+        </div>
+        <div id="burnPreviewArea" style="margin-top:8px;"></div>
         <button class="btn" onclick="loadExistingBurnedVideos('run')">📁 Usar vídeo legendado deste run</button>
         <button class="btn" onclick="loadExistingBurnedVideos('all')">🗂 Buscar em todos os legendados</button>
         <span class="hint" style="width:100%;">Dica: selecione um vídeo legendado já pronto para continuar sem gerar de novo.</span>
@@ -7277,7 +8433,11 @@ function renderCriacaoDetail(runId, frames) {
           <div style="font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:1.5px;color:var(--muted);">${esc(runId.slice(0, 24))}…</div>
           <div class="hint">${frames.length} screenshots disponíveis</div>
         </div>
-        <span class="badge">Wizard de Criação</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">Wizard de Criação</span>
+          <button class="btn" onclick="clearCriacaoRun('${escAttr(runId)}')">Limpar criação</button>
+          <button class="btn" style="color:var(--bad);border-color:rgba(255,68,85,.45);" onclick="deleteRun('${escAttr(runId)}')">Excluir tudo</button>
+        </div>
       </div>
       ${_renderWizardProgress()}
     </div>
@@ -7316,6 +8476,7 @@ function _postRenderCriacao(runId) {
       }
     }
     _srtEditorInit();
+    updateSubtitlePreview();
   }
 
   if (criacaoState.step === 4) {
@@ -7728,8 +8889,12 @@ function _teaserLogoPayloadList() {
 function _syncInheritedTeaserLogosFromMain() {
   const list = _teaserLogoList();
   if (!list.length) return false;
+  const hasProfileLogo = !!String(criacaoState.logoProfileId || criacaoState.logoProfileName || '').trim();
   // Se não há logo no Passo 1, remove logos sync_main do teaser (eram derivadas dela).
   if (!criacaoState.logoB64) {
+    // Perfis salvos guardam a imagem no servidor por object_key. Mesmo sem
+    // dataURL no browser, o backend consegue resolver a logo pelo perfil.
+    if (hasProfileLogo) return false;
     const filtered = list.filter((l) => !l.sync_main);
     if (filtered.length < list.length) {
       criacaoState.teaserLogos = filtered;
@@ -8257,6 +9422,37 @@ function _extractFirstSubtitleLine(srtContent) {
   return '';
 }
 
+function updateSubtitlePreview() {
+  const preview = qs('subtitlePreviewText');
+  if (!preview) return;
+  const size = _clamp(parseInt(qs('burnFontSize')?.value || criacaoState.burnFontSize || '22', 10) || 22, 6, 72);
+  const colorKey = qs('burnFontColor')?.value || criacaoState.burnFontColor || 'white';
+  const delay = _toNum(qs('burnSubDelay')?.value, criacaoState.burnSubDelay || 0, -30, 30);
+  criacaoState.burnFontSize = size;
+  criacaoState.burnFontColor = colorKey;
+  criacaoState.burnSubDelay = delay;
+
+  const colorMap = {
+    white: '#f7f7f7',
+    yellow: '#fff04a',
+    cyan: '#39e7ff',
+    orange: '#ffb347',
+    black: '#050505',
+  };
+  const cssColor = colorMap[colorKey] || colorMap.white;
+  const fromEditor = qs('transcriptSrtEdit')?.value || criacaoState.transcriptDraft || '';
+  const text = _extractFirstSubtitleLine(fromEditor) || 'Preview da legenda na tela';
+  const cssSize = Math.round(size * 1.18);
+  preview.textContent = text;
+  preview.style.fontSize = `${cssSize}px`;
+  preview.style.color = cssColor;
+  preview.style.textShadow = colorKey === 'black'
+    ? '0 0 2px #fff, 0 1px 3px rgba(255,255,255,.75)'
+    : '0 0 2px #000, 0 2px 4px #000, 0 0 8px rgba(0,0,0,.85)';
+  const hint = qs('subtitlePreviewHint');
+  if (hint) hint.textContent = `Tamanho ${size}px · ${colorKey} · delay ${delay >= 0 ? '+' : ''}${delay}s`;
+}
+
 function useFirstSubtitleAsThumbCaption() {
   const ta = qs('transcriptSrtEdit');
   const fromEditor = ta ? ta.value : criacaoState.transcriptDraft;
@@ -8283,6 +9479,7 @@ async function _loadTranscriptIntoEditor(runId) {
       if (burnBtn) burnBtn.disabled = !criacaoState.hasTranscript;
       if (st) st.textContent = 'SRT carregado do servidor.';
       _srtUpdateStats();
+      updateSubtitlePreview();
       return;
     }
     ta.value = '';
@@ -8290,6 +9487,7 @@ async function _loadTranscriptIntoEditor(runId) {
   } catch (e) {
     ta.value = '';
   }
+  updateSubtitlePreview();
 }
 
 function loadBurnLogo(input) {
@@ -8657,6 +9855,8 @@ async function onTranslateLangChange() {
   if (!langSel || !ta) return;
 
   const targetLang = langSel.value;
+  criacaoState.transcribeTargetLang = targetLang || '';
+  _persistWizardState();
   const srt = ta.value.trim();
 
   // Sem idioma selecionado: nada a fazer
@@ -8689,6 +9889,7 @@ async function onTranslateLangChange() {
     }
     ta.value = data.srt;
     criacaoState.transcriptDraft = data.srt;
+    updateSubtitlePreview();
     if (st) st.textContent = `✓ SRT traduzido para ${targetLang.toUpperCase()} (${data.segments_count} segmentos). Revise e salve se necessário.`;
     toast(`Tradução para ${targetLang.toUpperCase()} aplicada no editor!`, 'good');
   } catch (e) {
@@ -8697,6 +9898,20 @@ async function onTranslateLangChange() {
   } finally {
     langSel.disabled = false;
   }
+}
+
+function _transcribeLangLabel(code) {
+  return ({
+    pt: 'Português',
+    en: 'English',
+    es: 'Español',
+    fr: 'Français',
+    de: 'Deutsch',
+    it: 'Italiano',
+    ja: '日本語',
+    zh: '中文',
+    auto: 'Auto',
+  })[code] || code || 'Auto';
 }
 
 async function reTranscribe(provider) {
@@ -8710,29 +9925,47 @@ async function reTranscribe(provider) {
   if (!videoObjectKey) return toast('Este run não tem video_object_key — não é possível transcrever', 'bad');
 
   const targetLang = (qs('transcribeLang')?.value || '').trim();
-  const targetLabel = ({
-    pt: 'Português',
-    en: 'English',
-    es: 'Español',
-    fr: 'Français',
-    de: 'Deutsch',
-    it: 'Italiano',
-    ja: '日本語',
-    zh: '中文',
-  })[targetLang] || '';
+  const sourceLang = (qs('transcribeSourceLang')?.value || criacaoState.transcribeSourceLang || 'pt').trim();
+  const adultMode = qs('transcribeAdultMode')?.checked !== false;
+  const includeVocalizations = qs('transcribeIncludeVocalizations')?.checked !== false;
+  criacaoState.transcribeSourceLang = sourceLang || 'pt';
+  criacaoState.transcribeTargetLang = targetLang || '';
+  criacaoState.transcribeAdultMode = adultMode;
+  criacaoState.transcribeIncludeVocalizations = includeVocalizations;
+  const targetLabel = _transcribeLangLabel(targetLang);
+  const sourceLabel = _transcribeLangLabel(sourceLang);
   const ta = qs('transcriptSrtEdit');
   const st = qs('transcriptStatus');
   if (st) {
+    const providerLabel = provider === 'local'
+      ? 'localmente'
+      : provider === 'whisper_sync'
+        ? 'Whisper Sync…'
+      : provider === 'deepgram'
+        ? 'Deepgram Sync…'
+      : provider === 'assemblyai'
+        ? 'AssemblyAI…'
+        : (provider === 'groq' || provider === 'openrouter')
+          ? 'OpenRouter STT…'
+        : provider === 'auto'
+          ? 'modo estrito/local…'
+          : `${provider}…`;
     const base = provider === 'local'
       ? '⏳ Transcrevendo localmente…'
-      : `⏳ Transcrevendo com ${provider}…`;
-    st.textContent = targetLang ? `${base} traduzindo para ${targetLabel || targetLang}…` : base;
+      : `⏳ Transcrevendo com ${providerLabel}`;
+    st.textContent = targetLang
+      ? `${base} fala em ${sourceLabel}, traduzindo para ${targetLabel || targetLang}…`
+      : `${base} fala em ${sourceLabel}…`;
   }
 
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (state.apiKey) headers['X-API-Key'] = state.apiKey;
     const body = { video_object_key: videoObjectKey, provider };
+    if (sourceLang && sourceLang !== 'auto') body.language = sourceLang;
+    body.adult_mode = adultMode;
+    body.include_vocalizations = includeVocalizations;
+    body.enhance_audio = true;
     if (targetLang) body.translate_to = targetLang;
     const res = await fetch('/transcribe', {
       method: 'POST', headers,
@@ -8743,6 +9976,7 @@ async function reTranscribe(provider) {
     const srt = data.transcript?.srt || '';
     if (ta) ta.value = srt;
     criacaoState.transcriptDraft = srt;
+    updateSubtitlePreview();
     if (st) {
       if (data.transcript?.translated && (data.transcript?.target_lang || targetLang)) {
         st.textContent = `✓ Transcrição traduzida para ${(data.transcript?.target_lang || targetLang).toUpperCase()} pronta para revisão.`;
@@ -8751,7 +9985,7 @@ async function reTranscribe(provider) {
         st.textContent = `✓ Transcrição pronta (${usedProvider}).`;
       }
     }
-    criacaoState.hasTranscript = true;
+    criacaoState.hasTranscript = !!srt.trim();
     await _saveTranscriptData(data.transcript);
     const usedProvider = data.transcript?.provider || provider;
     toast(data.transcript?.translated ? `Transcrição e tradução concluídas via ${usedProvider} — SRT salvo!` : `Transcrição concluída via ${usedProvider} — SRT salvo!`, 'good');
@@ -8772,6 +10006,7 @@ function _srtEditorInit() {
   ta.addEventListener('input', () => {
     _syncCriacaoDraftsFromDom();
     _srtUpdateStats();
+    updateSubtitlePreview();
     if (qs('srtFindInput')?.value) _srtFindChange();
   });
   ta.addEventListener('keyup', _srtUpdateCursor);
@@ -8972,6 +10207,7 @@ async function saveTranscript() {
   if (!criacaoState.runId || !ta) return;
   const srt = ta.value.trim();
   criacaoState.transcriptDraft = srt;
+  updateSubtitlePreview();
   await _saveTranscriptData({ srt, text: srt, segments: [] });
   criacaoState.hasTranscript = !!srt;
 }
@@ -9426,7 +10662,10 @@ async function burnLogoOnTeaser() {
   if (linkChanged) _persistWizardState({ immediate: true });
 
   const area = qs('teaserLogoBurnArea');
-  if (area) area.innerHTML = '<span class="hint" style="color:var(--muted);">⏳ Queimando logo no teaser…</span>';
+  if (area) {
+    area.innerHTML = _teaserLogoBurnProgressHtml();
+    _setTeaserLogoBurnProgress(2, 'Preparando queima da logo no teaser…');
+  }
 
   try {
     const headers = { 'Content-Type': 'application/json' };
@@ -9445,7 +10684,18 @@ async function burnLogoOnTeaser() {
       max_height: 0,
       x264_preset: criacaoState.burnedPreset || 'veryfast',
     };
-    if (criacaoState.logoB64) body.logo_b64 = criacaoState.logoB64;
+    const teaserLogoPayload = _teaserLogoPayloadList();
+    if (teaserLogoPayload.length) {
+      body.logos = teaserLogoPayload;
+      const firstLogo = teaserLogoPayload[0];
+      body.logo_b64 = firstLogo.b64;
+      body.logo_x = firstLogo.x;
+      body.logo_y = firstLogo.y;
+      body.logo_scale_pct = firstLogo.scale_pct;
+      body.logo_opacity = firstLogo.opacity;
+    } else if (criacaoState.logoB64) {
+      body.logo_b64 = criacaoState.logoB64;
+    }
 
     const res = await fetch('/api/teaser/burn-logo', { method: 'POST', headers, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
@@ -9459,14 +10709,61 @@ async function burnLogoOnTeaser() {
   }
 }
 
+function _teaserLogoBurnProgressHtml() {
+  return `
+    <div id="teaserLogoBurnProgressWrap" class="upload-progress-card op-progress-card" style="display:grid;margin-top:10px;">
+      <div class="upload-progress-ring" id="teaserLogoBurnProgressRing" style="--upload-pct:0;">
+        <div class="upload-progress-inner">
+          <div class="upload-progress-percent" id="teaserLogoBurnProgressPct">0%</div>
+          <div class="upload-progress-state" id="teaserLogoBurnProgressState">aguarde</div>
+        </div>
+      </div>
+      <div class="upload-progress-copy">
+        <div class="upload-progress-title" id="teaserLogoBurnProgressTitle">Queimando logo no teaser</div>
+        <div class="upload-progress-detail" id="teaserLogoBurnProgressLabel">Preparando…</div>
+        <div class="upload-progress-track"><div class="upload-progress-fill" id="teaserLogoBurnProgressFill" style="width:0%"></div></div>
+        <div class="op-progress-history" id="teaserLogoBurnProgressHistory"></div>
+      </div>
+    </div>`;
+}
+
+let _teaserLogoBurnProgressLast = '';
+
+function _setTeaserLogoBurnProgress(pct, detail, kind = 'active') {
+  const wrap = qs('teaserLogoBurnProgressWrap');
+  if (!wrap) return;
+  const safePct = Math.max(0, Math.min(100, Number.isFinite(Number(pct)) ? Number(pct) : 0));
+  wrap.classList.toggle('is-good', kind === 'good');
+  wrap.classList.toggle('is-bad', kind === 'bad');
+  wrap.style.setProperty('--upload-pct', safePct.toFixed(1));
+  qs('teaserLogoBurnProgressRing')?.style.setProperty('--upload-pct', safePct.toFixed(1));
+  if (qs('teaserLogoBurnProgressPct')) qs('teaserLogoBurnProgressPct').textContent = `${Math.round(safePct)}%`;
+  if (qs('teaserLogoBurnProgressState')) {
+    qs('teaserLogoBurnProgressState').textContent = kind === 'good' ? 'ok' : kind === 'bad' ? 'erro' : (safePct > 8 ? 'rodando' : 'aguarde');
+  }
+  if (qs('teaserLogoBurnProgressLabel')) qs('teaserLogoBurnProgressLabel').textContent = detail || 'Processando…';
+  if (qs('teaserLogoBurnProgressFill')) qs('teaserLogoBurnProgressFill').style.width = `${safePct.toFixed(1)}%`;
+  const hist = qs('teaserLogoBurnProgressHistory');
+  const clean = String(detail || '').replace(/^[✓✗!•⏳]+\s*/u, '').trim();
+  if (hist && clean && clean !== _teaserLogoBurnProgressLast) {
+    _teaserLogoBurnProgressLast = clean;
+    const item = document.createElement('div');
+    item.className = `op-progress-history-item ${kind}`;
+    item.textContent = `${kind === 'good' ? '✓' : kind === 'bad' ? '!' : '•'} ${clean}`;
+    hist.prepend(item);
+    while (hist.children.length > 6) hist.lastElementChild?.remove();
+  }
+}
+
 async function _pollTeaserLogoBurnJob(jobId, area) {
   const headers = state.apiKey ? { 'X-API-Key': state.apiKey } : {};
   const startedAt = Date.now();
+  let lastPct = 2;
   while (true) {
     const res = await fetch(`/api/burn-subtitles/status/${jobId}`, { headers });
     const job = await res.json().catch(() => ({}));
     if (!res.ok || job.error === 'job_not_found') {
-      if (area) area.innerHTML = '<span class="hint" style="color:var(--bad);">Job não encontrado.</span>';
+      _setTeaserLogoBurnProgress(100, 'Job não encontrado.', 'bad');
       return;
     }
     const status = job.status;
@@ -9485,19 +10782,27 @@ async function _pollTeaserLogoBurnJob(jobId, area) {
         criacaoState.teaserLogoUrl = job.video_url || null;
       }
       _persistWizardState({ immediate: true });
+      if (area) {
+        area.innerHTML = _teaserLogoBurnProgressHtml();
+        _setTeaserLogoBurnProgress(100, '✓ Teaser com logo pronto.', 'good');
+      }
       renderCriacaoDetail(criacaoState.runId, criacaoState.frames);
       toast('Teaser com logo pronto!', 'good');
       return;
     }
     if (status === 'error' || status === 'cancelled') {
-      if (area) area.innerHTML = `<span class="hint" style="color:var(--bad);">Erro: ${job.detail || job.error || 'falha no processamento'}</span>`;
+      _setTeaserLogoBurnProgress(100, `Erro: ${job.detail || job.error || 'falha no processamento'}`, 'bad');
       toast('Erro no burn do teaser: ' + (job.detail || job.error || 'falha'), 'bad');
       return;
     }
     const detail = job.detail || 'Processando…';
-    if (area) area.innerHTML = `<span class="hint" style="color:var(--muted);">⏳ ${esc(detail)}</span>`;
+    const realPct = Number(job.pct ?? job.progress_pct);
+    if (Number.isFinite(realPct)) lastPct = Math.max(lastPct, Math.min(99, realPct));
+    else if (/ffmpeg/i.test(detail)) lastPct = Math.max(lastPct, 12);
+    else if (/salvando/i.test(detail)) lastPct = Math.max(lastPct, 96);
+    _setTeaserLogoBurnProgress(lastPct, detail);
     if (Date.now() - startedAt > 1000 * 60 * 180) {
-      if (area) area.innerHTML = '<span class="hint" style="color:var(--bad);">Tempo excedido no burn do teaser.</span>';
+      _setTeaserLogoBurnProgress(100, 'Tempo excedido no burn do teaser.', 'bad');
       return;
     }
     await new Promise(r => setTimeout(r, 3000));
@@ -9747,17 +11052,93 @@ async function useThumbSourceByIndex(idx) {
   return _useBurnedCandidate('thumb', idx);
 }
 
-function _renderBurnProgressHtml(detail, dots = 0, queueLabel = '') {
+const _operationProgressState = {};
+
+function _operationProgressReset(id) {
+  delete _operationProgressState[id];
+}
+
+function _operationProgressKindLabel(kind, pct) {
+  if (kind === 'good') return 'ok';
+  if (kind === 'bad') return 'erro';
+  if (kind === 'waiting') return 'fila';
+  return pct > 2 ? 'rodando' : 'aguarde';
+}
+
+function _operationProgressPush(id, detail, kind = 'active') {
+  const st = _operationProgressState[id] ||= { pct: 0, history: [], last: '' };
+  const clean = String(detail || '')
+    .replace(/[.]{2,}$/g, '')
+    .replace(/^[✓✗!⏳📤🎬🔍🤖✂️🔊🎞️]+\s*/u, '')
+    .trim();
+  if (!clean || clean === st.last) return st;
+  st.last = clean;
+  st.history.unshift({ text: clean, kind });
+  st.history = st.history.slice(0, 6);
+  return st;
+}
+
+function _renderOperationProgressHtml(id, title, detail, opts = {}) {
+  const st = _operationProgressState[id] ||= { pct: 0, history: [], last: '' };
+  const kind = opts.kind || 'active';
+  if (Number.isFinite(opts.pct)) {
+    st.pct = Math.max(0, Math.min(100, opts.pct));
+  } else if (kind === 'good' || kind === 'bad') {
+    st.pct = 100;
+  } else {
+    const pctFromDetail = detail ? parseInt(detail.match(/(\d+)%/)?.[1], 10) : null;
+    if (Number.isFinite(pctFromDetail)) {
+      st.pct = Math.max(0, Math.min(99, pctFromDetail));
+    } else {
+      st.pct = Math.max(0, Math.min(96, (st.pct || 0) + 4));
+    }
+  }
+  _operationProgressPush(id, detail, kind);
+
+  const dots = Number.isFinite(opts.dots) ? '.'.repeat(Math.max(0, opts.dots || 0)) : '';
+  const pct = Math.max(0, Math.min(100, st.pct || 0));
+  const cardClass = kind === 'good' ? 'is-good' : kind === 'bad' ? 'is-bad' : '';
+  const history = (st.history || []).map(item => (
+    `<div class="op-progress-history-item ${esc(item.kind || '')}">${item.kind === 'good' ? '✓' : item.kind === 'bad' ? '!' : '•'} ${esc(item.text)}</div>`
+  )).join('');
+
+  return `
+    <div class="upload-progress-card op-progress-card ${cardClass}" id="${escAttr(id)}ProgressCard" style="--upload-pct:${pct.toFixed(1)};">
+      <div class="upload-progress-ring" style="--upload-pct:${pct.toFixed(1)};">
+        <div class="upload-progress-inner">
+          <div class="upload-progress-percent">${Math.round(pct)}%</div>
+          <div class="upload-progress-state">${esc(_operationProgressKindLabel(kind, pct))}</div>
+        </div>
+      </div>
+      <div class="upload-progress-copy">
+        <div class="upload-progress-title">${esc(title || 'Processando')}</div>
+        <div class="upload-progress-detail">${esc(detail || 'Processando…')}${dots}</div>
+        <div class="upload-progress-track">
+          <div class="op-progress-fill" style="width:${pct.toFixed(1)}%;"></div>
+        </div>
+        <div class="op-progress-history">${history}</div>
+        ${opts.extra || ''}
+      </div>
+    </div>
+  `;
+}
+
+function _renderBurnProgressHtml(detail, dots = 0, queueLabel = '', pct) {
   const suffix = '.'.repeat(Math.max(0, dots || 0));
   const showQueue = !!criacaoState.showBurnQueue;
-  return `
+  const extra = `
     <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;">
-      <span class="hint" style="color:var(--muted);">⏳ ${esc(detail || 'Processando…')}${queueLabel}${suffix}</span>
       <button class="btn" onclick="cancelBurnJob()" ${criacaoState.activeBurnJobId ? '' : 'disabled'}>Cancelar</button>
       <button id="btnToggleBurnQueue" class="btn" onclick="_toggleBurnQueueView()">${showQueue ? 'Ocultar fila' : 'Ver fila'}</button>
     </div>
     <div id="burnQueueView" class="hint" style="margin-top:6px;display:${showQueue ? 'block' : 'none'};"></div>
   `;
+  return _renderOperationProgressHtml(
+    'burn',
+    criacaoState.burnSkipSubtitles ? 'Queimar logo' : 'Queimar logo e legenda',
+    `${detail || 'Processando…'}${queueLabel}${suffix}`,
+    { pct, extra }
+  );
 }
 
 function _toggleBurnQueueView(forceOpen = null) {
@@ -9806,11 +11187,19 @@ async function _refreshBurnQueueView(opts = {}) {
       }
 
       const lines = [];
+      const fmtBurnQueueItem = (x, fallback) => {
+        const detail = String(x.detail || fallback || 'processando');
+        const pctNum = Number(x.progress_pct);
+        const pct = Number.isFinite(pctNum) ? `${Math.max(0, Math.min(100, Math.round(pctNum)))}%` : '';
+        const detailWithPct = pct && !/%/.test(detail) ? `${pct} · ${detail}` : detail;
+        const run = x.run_id ? ` · run ${(x.run_id || '').slice(0, 8)}` : '';
+        return `${(x.job_id || '').slice(0, 8)} (${detailWithPct}${run})`;
+      };
       if (running.length) {
-        lines.push(`Rodando: ${running.map(x => `${(x.job_id || '').slice(0, 8)} (${x.detail || 'processando'})`).join(' · ')}`);
+        lines.push(`Rodando: ${running.map(x => fmtBurnQueueItem(x, 'processando')).join(' · ')}`);
       }
       if (pending.length) {
-        const top = pending.slice(0, 5).map(x => `#${x.position} ${(x.job_id || '').slice(0, 8)}`).join(' · ');
+        const top = pending.slice(0, 5).map(x => `#${x.position} ${fmtBurnQueueItem(x, 'aguardando')}`).join(' · ');
         lines.push(`Fila: ${top}${pending.length > 5 ? ` · +${pending.length - 5}` : ''}`);
       }
       box.textContent = lines.join(' | ');
@@ -9891,6 +11280,148 @@ function _burnApplyResult(videoUrl, filename, area, objectKey, warning = '') {
   applyResult(videoUrl);
 }
 
+function _collectBurnRequestBody(videoObjectKey) {
+  _syncCriacaoDraftsFromDom();
+  const linkChanged = _syncLogoLayoutLinkBeforeRender();
+  if (linkChanged) _persistWizardState({ immediate: true });
+
+  const burnQuality = qs('burnQuality')?.value || criacaoState.burnedQuality || '26';
+  const burnResolution = qs('burnResolution')?.value || criacaoState.burnedResolution || '1080';
+  const burnPreset = qs('burnPreset')?.value || criacaoState.burnedPreset || 'ultrafast';
+  criacaoState.burnedQuality = burnQuality;
+  criacaoState.burnedResolution = burnResolution;
+  criacaoState.burnedPreset = burnPreset;
+  _persistWizardState();
+
+  const bodyObj = {
+    run_id: criacaoState.runId,
+    font_size: parseInt(qs('burnFontSize')?.value || String(criacaoState.burnFontSize || 22), 10),
+    font_color: qs('burnFontColor')?.value || criacaoState.burnFontColor || 'white',
+    sub_delay_secs: parseFloat(qs('burnSubDelay')?.value || String(criacaoState.burnSubDelay || 0)),
+    output_crf: parseInt(burnQuality, 10),
+    max_height: parseInt(burnResolution, 10),
+    x264_preset: burnPreset,
+    logo_profile_id: criacaoState.logoProfileId || null,
+    logo_profile_name: criacaoState.logoProfileName || null,
+    logo_profile_layout_linked: criacaoState.logoProfileLayoutLinked !== false,
+    logo_x: criacaoState.logoX,
+    logo_y: criacaoState.logoY,
+    logo_scale_pct: criacaoState.logoScalePct,
+    logo_opacity: criacaoState.logoOpacity,
+  };
+
+  const burnLogoPayload = _burnLogoPayloadList();
+  if (burnLogoPayload.length) {
+    bodyObj.logos = burnLogoPayload;
+    const firstLogo = burnLogoPayload[0];
+    bodyObj.logo_b64 = firstLogo.b64;
+    bodyObj.logo_x = firstLogo.x;
+    bodyObj.logo_y = firstLogo.y;
+    bodyObj.logo_scale_pct = firstLogo.scale_pct;
+    bodyObj.logo_opacity = firstLogo.opacity;
+  }
+
+  const logoList = _burnLogoList();
+  if (logoList.length) {
+    bodyObj.logo_position_overrides = logoList.slice(0, parseInt(criacaoState.burnLogoTargetCount || 1, 10) || 1).map(l => ({
+      x: _toNum(l.x, criacaoState.logoX, 0, 100),
+      y: _toNum(l.y, criacaoState.logoY, 0, 100),
+      scale_pct: _toNum(l.scale_pct, criacaoState.logoScalePct, 5, 100),
+      opacity: _toNum(l.opacity, criacaoState.logoOpacity, 5, 100),
+    }));
+  }
+
+  const normalizedVideoObjectKey = _normalizeObjectKeyish(videoObjectKey);
+  if (normalizedVideoObjectKey) bodyObj.video_object_key = normalizedVideoObjectKey;
+  if (!bodyObj.logo_b64 && criacaoState.logoB64) bodyObj.logo_b64 = criacaoState.logoB64;
+  if (criacaoState.burnSkipSubtitles) bodyObj.skip_subtitles = true;
+
+  const srtFromEditor = (qs('transcriptSrtEdit')?.value || criacaoState.transcriptDraft || '').trim();
+  if (srtFromEditor) bodyObj.srt_content = srtFromEditor;
+  return bodyObj;
+}
+
+function _burnClock(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function _renderBurnDiagnostics(data) {
+  const coverage = data?.coverage || {};
+  const timing = data?.timing || {};
+  const warnings = data?.warnings || [];
+  const gaps = coverage.large_gaps || [];
+  const warningHtml = warnings.length
+    ? warnings.map(w => `<div style="color:#ffcc66;margin-top:4px;">⚠ ${esc(w)}</div>`).join('')
+    : '<div style="color:var(--ok);margin-top:4px;">✓ Nenhum buraco gigante detectado no SRT.</div>';
+  const gapHtml = gaps.length
+    ? gaps.slice(0, 8).map(g => `<div style="display:flex;gap:8px;justify-content:space-between;border-top:1px solid rgba(255,255,255,.06);padding:5px 0;font-size:12px;">
+        <span>${_burnClock(g.start)} → ${_burnClock(g.end)}</span>
+        <strong>${_burnClock(g.duration)}</strong>
+      </div>`).join('')
+    : '<div class="hint" style="margin-top:6px;">Sem gaps acima de 2 minutos.</div>';
+  return `<div style="padding:12px;border:1px solid rgba(32,213,255,.25);border-radius:12px;background:rgba(5,8,14,.62);">
+    <div style="font-weight:800;margin-bottom:6px;">Diagnóstico da legenda</div>
+    <div class="hint">Cues: ${coverage.segments_count || 0} · Última legenda: ${_burnClock(coverage.last_end_seconds)} · Duração do vídeo: ${_burnClock(coverage.media_duration_seconds)}</div>
+    <div class="hint">Tempo coberto por texto: ${_burnClock(coverage.active_subtitle_seconds)} · Maior buraco: ${_burnClock(coverage.longest_gap_seconds)}</div>
+    ${warningHtml}
+    ${timing?.likely_synthetic_chunk_timing ? '<div style="color:#ffcc66;margin-top:4px;">⚠ Timing sintético detectado; o backend tenta redistribuir antes da queima.</div>' : ''}
+    <div style="margin-top:10px;">${gapHtml}</div>
+  </div>`;
+}
+
+async function burnDiagnoseSubtitles() {
+  if (!criacaoState.runId) return toast('Nenhum run selecionado', 'bad');
+  const area = qs('burnPreviewArea');
+  if (area) area.innerHTML = '<div class="hint">Analisando SRT e duração do vídeo…</div>';
+  try {
+    const data = await apiFetch('/api/burn-subtitles/diagnose', {
+      method: 'POST',
+      body: JSON.stringify(_collectBurnRequestBody()),
+    });
+    if (area) area.innerHTML = _renderBurnDiagnostics(data);
+    if ((data.warnings || []).length) toast('Diagnóstico encontrou buracos na legenda', 'bad');
+    else toast('Diagnóstico concluído', 'good');
+  } catch (e) {
+    if (area) area.innerHTML = `<div style="color:var(--bad);padding:10px;border:1px solid rgba(255,80,80,.35);border-radius:10px;">${esc(e.message)}</div>`;
+    toast(e.message, 'bad');
+  }
+}
+
+async function burnQuickPreview() {
+  if (!criacaoState.runId) return toast('Nenhum run selecionado', 'bad');
+  const area = qs('burnPreviewArea');
+  const minute = Math.max(0, parseFloat(qs('burnPreviewMinute')?.value || '0') || 0);
+  const bodyObj = _collectBurnRequestBody();
+  bodyObj.timestamp = minute * 60;
+  bodyObj.duration_seconds = 60;
+  if (area) area.innerHTML = `<div class="hint">Gerando prévia de 60s a partir de ${_burnClock(bodyObj.timestamp)}…</div>`;
+  try {
+    const data = await apiFetch('/api/burn-subtitles/preview', {
+      method: 'POST',
+      body: JSON.stringify(bodyObj),
+    });
+    const diagnostics = data.diagnostics?.coverage ? _renderBurnDiagnostics({ coverage: data.diagnostics.coverage, timing: data.diagnostics.before || {}, warnings: [] }) : '';
+    if (area) {
+      area.innerHTML = `<div style="padding:12px;border:1px solid rgba(32,213,255,.25);border-radius:12px;background:rgba(5,8,14,.62);">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px;">
+          <strong>Prévia rápida: ${_burnClock(data.start_seconds)} → ${_burnClock((data.start_seconds || 0) + (data.duration_seconds || 0))}</strong>
+          <button class="btn" onclick="window.open('${escAttr(data.video_url || '')}','_blank')">Abrir</button>
+        </div>
+        <video src="${escAttr(data.video_url || '')}" controls playsinline preload="metadata" style="width:100%;max-height:360px;background:#000;border-radius:10px;"></video>
+      </div>
+      <div style="margin-top:8px;">${diagnostics}</div>`;
+    }
+    toast('Prévia rápida pronta', 'good');
+  } catch (e) {
+    if (area) area.innerHTML = `<div style="color:var(--bad);padding:10px;border:1px solid rgba(255,80,80,.35);border-radius:10px;">${esc(e.message)}</div>`;
+    toast(e.message, 'bad');
+  }
+}
+
 async function burnSubtitles(videoObjectKey) {
   if (!criacaoState.runId) return toast('Nenhum run selecionado', 'bad');
   if (criacaoState.burnStartInFlight || criacaoState.activeBurnJobId) {
@@ -9904,61 +11435,13 @@ async function burnSubtitles(videoObjectKey) {
   criacaoState.burnedWarning = null;
   criacaoState.showBurnQueue = false;
   _burnQueueLastRefreshAt = 0;
+  _operationProgressReset('burn');
   if (area) area.innerHTML = _renderBurnProgressHtml('Iniciando processamento…', 0);
 
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (state.apiKey) headers['X-API-Key'] = state.apiKey;
-
-    const burnQuality = qs('burnQuality')?.value || criacaoState.burnedQuality || '26';
-    const burnResolution = qs('burnResolution')?.value || criacaoState.burnedResolution || '1080';
-    const burnPreset = qs('burnPreset')?.value || criacaoState.burnedPreset || 'ultrafast';
-    criacaoState.burnedQuality = burnQuality;
-    criacaoState.burnedResolution = burnResolution;
-    criacaoState.burnedPreset = burnPreset;
-    _persistWizardState();
-
-    const bodyObj = {
-      run_id: criacaoState.runId,
-      font_size: parseInt(qs('burnFontSize')?.value || '22', 10),
-      font_color: qs('burnFontColor')?.value || 'white',
-      sub_delay_secs: parseFloat(qs('burnSubDelay')?.value || '0'),
-      output_crf: parseInt(burnQuality, 10),
-      max_height: parseInt(burnResolution, 10),
-      x264_preset: burnPreset,
-      logo_profile_id: criacaoState.logoProfileId || null,
-      logo_profile_name: criacaoState.logoProfileName || null,
-      logo_profile_layout_linked: criacaoState.logoProfileLayoutLinked !== false,
-      logo_x: criacaoState.logoX,
-      logo_y: criacaoState.logoY,
-      logo_scale_pct: criacaoState.logoScalePct,
-      logo_opacity: criacaoState.logoOpacity,
-    };
-    const burnLogoPayload = _burnLogoPayloadList();
-    if (burnLogoPayload.length) {
-      bodyObj.logos = burnLogoPayload;
-      const firstLogo = burnLogoPayload[0];
-      bodyObj.logo_b64 = firstLogo.b64;
-      bodyObj.logo_x = firstLogo.x;
-      bodyObj.logo_y = firstLogo.y;
-      bodyObj.logo_scale_pct = firstLogo.scale_pct;
-      bodyObj.logo_opacity = firstLogo.opacity;
-    }
-    // Always send position overrides so backend applies user adjustments even when logos have no b64
-    const _logoList = _burnLogoList();
-    if (_logoList.length) {
-      bodyObj.logo_position_overrides = _logoList.slice(0, parseInt(criacaoState.burnLogoTargetCount || 1, 10) || 1).map(l => ({
-        x: _toNum(l.x, criacaoState.logoX, 0, 100),
-        y: _toNum(l.y, criacaoState.logoY, 0, 100),
-        scale_pct: _toNum(l.scale_pct, criacaoState.logoScalePct, 5, 100),
-        opacity: _toNum(l.opacity, criacaoState.logoOpacity, 5, 100),
-      }));
-    }
-
-    const normalizedVideoObjectKey = _normalizeObjectKeyish(videoObjectKey);
-    if (normalizedVideoObjectKey) bodyObj.video_object_key = normalizedVideoObjectKey;
-    if (!bodyObj.logo_b64 && criacaoState.logoB64) bodyObj.logo_b64 = criacaoState.logoB64;
-    if (criacaoState.burnSkipSubtitles) bodyObj.skip_subtitles = true;
+    const bodyObj = _collectBurnRequestBody(videoObjectKey);
 
     const res = await fetch('/api/burn-subtitles', { method: 'POST', headers, body: JSON.stringify(bodyObj) });
     if (!res.ok) {
@@ -9978,7 +11461,15 @@ async function burnSubtitles(videoObjectKey) {
   } catch (e) {
     criacaoState.burnStartInFlight = false;
     criacaoState.activeBurnJobId = null;
-    if (area) area.innerHTML = `<span class="hint" style="color:var(--bad);">Erro: ${e.message} <button class="btn" style="margin-left:8px;" onclick="burnSubtitles()">Tentar novamente</button></span>`;
+    if (area) area.innerHTML = _renderOperationProgressHtml(
+      'burn',
+      criacaoState.burnSkipSubtitles ? 'Queimar logo' : 'Queimar logo e legenda',
+      `Erro: ${e.message}`,
+      {
+        kind: 'bad',
+        extra: '<button class="btn" style="margin-top:10px;" onclick="burnSubtitles()">Tentar novamente</button>',
+      },
+    );
     toast('Erro: ' + e.message, 'bad');
   }
 }
@@ -9997,7 +11488,16 @@ async function cancelBurnJob() {
     if (data.status === 'cancelled') {
       criacaoState.activeBurnJobId = null;
       criacaoState.burnStartInFlight = false;
-      if (area) area.innerHTML = `<span class="hint" style="color:var(--muted);">⏹ Processamento cancelado. <button class="btn" style="margin-left:8px;" onclick="burnSubtitles()">Gerar novamente</button></span>`;
+      if (area) area.innerHTML = _renderOperationProgressHtml(
+        'burn',
+        criacaoState.burnSkipSubtitles ? 'Queimar logo' : 'Queimar logo e legenda',
+        'Processamento cancelado.',
+        {
+          pct: 100,
+          kind: 'bad',
+          extra: '<button class="btn" style="margin-top:10px;" onclick="burnSubtitles()">Gerar novamente</button>',
+        },
+      );
       toast('Job cancelado', 'good');
       return;
     }
@@ -10046,14 +11546,23 @@ async function _pollBurnJob(jobId, area) {
           const total = job.queue_size || job.queue_position;
           queueLabel = ` (fila ${job.queue_position}/${total})`;
         }
-        if (area) area.innerHTML = _renderBurnProgressHtml(detail, dots, queueLabel);
+        if (area) area.innerHTML = _renderBurnProgressHtml(detail, dots, queueLabel, job.progress_pct);
         if (criacaoState.showBurnQueue) void _refreshBurnQueueView({ quiet: true });
         continue;
       }
       if (job.status === 'cancelled') {
         criacaoState.activeBurnJobId = null;
         criacaoState.burnStartInFlight = false;
-        if (area) area.innerHTML = `<span class="hint" style="color:var(--muted);">⏹ Processamento cancelado. <button class="btn" style="margin-left:8px;" onclick="burnSubtitles()">Gerar novamente</button></span>`;
+        if (area) area.innerHTML = _renderOperationProgressHtml(
+          'burn',
+          criacaoState.burnSkipSubtitles ? 'Queimar logo' : 'Queimar logo e legenda',
+          'Processamento cancelado.',
+          {
+            pct: 100,
+            kind: 'bad',
+            extra: '<button class="btn" style="margin-top:10px;" onclick="burnSubtitles()">Gerar novamente</button>',
+          },
+        );
         toast('Processamento cancelado', 'good');
         return;
       }
@@ -10078,7 +11587,15 @@ async function _pollBurnJob(jobId, area) {
       }
       criacaoState.activeBurnJobId = null;
       criacaoState.burnStartInFlight = false;
-      if (area) area.innerHTML = `<span class="hint" style="color:var(--bad);">Erro: ${e.message} <button class="btn" style="margin-left:8px;" onclick="burnSubtitles()">Tentar novamente</button></span>`;
+      if (area) area.innerHTML = _renderOperationProgressHtml(
+        'burn',
+        criacaoState.burnSkipSubtitles ? 'Queimar logo' : 'Queimar logo e legenda',
+        `Erro: ${e.message}`,
+        {
+          kind: 'bad',
+          extra: '<button class="btn" style="margin-top:10px;" onclick="burnSubtitles()">Tentar novamente</button>',
+        },
+      );
       toast('Erro: ' + e.message, 'bad');
       return;
     }
@@ -10206,7 +11723,8 @@ async function generateTeaser() {
   }
   const teaserLogoPayload = _teaserLogoPayloadList();
 
-  area.innerHTML = `<span class="hint" style="color:var(--muted);">⏳ Iniciando geração do teaser…</span>`;
+  _operationProgressReset('teaser');
+  area.innerHTML = _renderOperationProgressHtml('teaser', 'Gerar teaser', 'Iniciando geração do teaser…', { pct: 8 });
 
   try {
     const headers = { 'Content-Type': 'application/json' };
@@ -10265,7 +11783,15 @@ async function generateTeaser() {
     if (!job_id) throw new Error('Servidor não retornou job_id');
     await _pollTeaserJob(job_id, area);
   } catch (e) {
-    area.innerHTML = `<span style="color:var(--bad);font-size:12px;">Erro: ${e.message} <button class="btn" style="margin-left:8px;" onclick="generateTeaser()">Tentar novamente</button></span>`;
+    area.innerHTML = _renderOperationProgressHtml(
+      'teaser',
+      'Gerar teaser',
+      `Erro: ${e.message}`,
+      {
+        kind: 'bad',
+        extra: '<button class="btn" style="margin-top:10px;" onclick="generateTeaser()">Tentar novamente</button>',
+      },
+    );
     toast('Erro ao gerar teaser: ' + e.message, 'bad');
   }
 }
@@ -10284,16 +11810,25 @@ async function _pollTeaserJob(jobId, area) {
       const job = await res.json();
       if (job.status === 'pending' || job.status === 'running') {
         const detail = job.detail || (job.status === 'running' ? 'Processando…' : 'Aguardando…');
-        area.innerHTML = `<span class="hint" style="color:var(--muted);">⏳ ${detail}${'.'.repeat(dots)}</span>`;
+        area.innerHTML = _renderOperationProgressHtml('teaser', 'Gerar teaser', detail, { dots });
         continue;
       }
       if (job.status === 'done') {
+        area.innerHTML = _renderOperationProgressHtml('teaser', 'Gerar teaser', 'Teaser concluído. Carregando preview…', { pct: 100, kind: 'good' });
         await _updateTeaserPreview(job.video_url, job.object_key, area, job);
         return;
       }
       throw new Error(job.detail || job.error || 'Erro no servidor');
     } catch (e) {
-      area.innerHTML = `<span style="color:var(--bad);font-size:12px;">Erro: ${e.message} <button class="btn" style="margin-left:8px;" onclick="generateTeaser()">Tentar novamente</button></span>`;
+      area.innerHTML = _renderOperationProgressHtml(
+        'teaser',
+        'Gerar teaser',
+        `Erro: ${e.message}`,
+        {
+          kind: 'bad',
+          extra: '<button class="btn" style="margin-top:10px;" onclick="generateTeaser()">Tentar novamente</button>',
+        },
+      );
       toast('Erro: ' + e.message, 'bad');
       return;
     }
@@ -10369,7 +11904,8 @@ async function prependTeaser() {
   const area = qs('teaserArea');
   if (!area) return;
 
-  area.innerHTML = _renderTeaserResultHtml() + `<div id="prependArea" style="margin-top:10px;"><span class="hint" style="color:var(--muted);">⏳ Concatenando teaser + vídeo…</span></div>`;
+  _operationProgressReset('teaserConcat');
+  area.innerHTML = _renderTeaserResultHtml() + `<div id="prependArea" style="margin-top:10px;">${_renderOperationProgressHtml('teaserConcat', 'Concatenar teaser', 'Concatenando teaser + vídeo…', { pct: 8 })}</div>`;
   const prependArea = qs('prependArea');
 
   try {
@@ -10403,7 +11939,7 @@ async function prependTeaser() {
       if (!sr.ok) throw new Error(`Status ${sr.status}`);
       const job = await sr.json();
       if (job.status === 'pending' || job.status === 'running') {
-        if (prependArea) prependArea.innerHTML = `<span class="hint" style="color:var(--muted);">⏳ Concatenando${'.'.repeat(dots)}</span>`;
+        if (prependArea) prependArea.innerHTML = _renderOperationProgressHtml('teaserConcat', 'Concatenar teaser', job.detail || 'Concatenando teaser + vídeo…', { dots });
         continue;
       }
       if (job.status === 'done') {
@@ -10415,6 +11951,7 @@ async function prependTeaser() {
         }
         criacaoState.teaserCombinedUrl = combinedUrl;
         _persistWizardState({ immediate: true });
+        if (prependArea) prependArea.innerHTML = _renderOperationProgressHtml('teaserConcat', 'Concatenar teaser', 'Vídeo completo concluído.', { pct: 100, kind: 'good' });
         if (area) area.innerHTML = _renderTeaserResultHtml();
         if (criacaoState.postResult) renderPostResult(criacaoState.postResult);
         toast('Vídeo completo pronto!', 'good');
@@ -10423,7 +11960,7 @@ async function prependTeaser() {
       throw new Error(job.detail || job.error || 'Erro no servidor');
     }
   } catch (e) {
-    if (prependArea) prependArea.innerHTML = `<span style="color:var(--bad);font-size:12px;">Erro: ${e.message}</span>`;
+    if (prependArea) prependArea.innerHTML = _renderOperationProgressHtml('teaserConcat', 'Concatenar teaser', `Erro: ${e.message}`, { kind: 'bad' });
     toast('Erro ao concatenar: ' + e.message, 'bad');
   }
 }
@@ -10434,22 +11971,36 @@ async function burnSubtitlesReupload() {
   const area = qs('burnSubsArea');
 
   try {
-    if (area) area.innerHTML = `<span class="hint">📤 Enviando vídeo… 0%</span>`;
+    _operationProgressReset('burnUpload');
+    if (area) area.innerHTML = _renderOperationProgressHtml('burnUpload', 'Enviar vídeo para queima', 'Preparando upload…', { pct: 0 });
     const proxy = await _uploadViaProxy(file, {
       prefix: 'burn-temp',
       validateVideo: true,
       deleteIfInvalid: true,
       onProgress: (loaded, total) => {
         if (total > 0 && area) {
-          area.innerHTML = `<span class="hint">📤 Enviando vídeo… ${Math.round(loaded / total * 100)}%</span>`;
+          area.innerHTML = _renderOperationProgressHtml(
+            'burnUpload',
+            'Enviar vídeo para queima',
+            `Enviando vídeo… ${Math.round(loaded / total * 100)}%`,
+            { pct: Math.round(loaded / total * 100) },
+          );
         }
       },
     });
 
-    if (area) area.innerHTML = `<span class="hint" style="color:var(--muted);">⏳ Queimando legenda…</span>`;
+    if (area) area.innerHTML = _renderOperationProgressHtml('burnUpload', 'Enviar vídeo para queima', 'Upload concluído. Iniciando queima…', { pct: 100, kind: 'good' });
     await burnSubtitles(proxy.object_key);
   } catch (e) {
-    if (area) area.innerHTML = `<span class="hint" style="color:var(--bad);">Erro: ${e.message} <button class="btn" style="margin-left:8px;" onclick="_showBurnReupload(qs('burnSubsArea'))">Tentar novamente</button></span>`;
+    if (area) area.innerHTML = _renderOperationProgressHtml(
+      'burnUpload',
+      'Enviar vídeo para queima',
+      `Erro: ${e.message}`,
+      {
+        kind: 'bad',
+        extra: '<button class="btn" style="margin-top:10px;" onclick="_showBurnReupload(qs(\'burnSubsArea\'))">Tentar novamente</button>',
+      },
+    );
     toast('Erro: ' + e.message, 'bad');
   }
 }
@@ -10544,16 +12095,22 @@ function initButtons() {
   qs('btnCopyB').onclick = () => copyText(qs('cmpOutB').textContent || '');
 
   qs('btnRunsReload').onclick = reloadRuns;
+  qs('btnRunDeleteSelected').onclick = deleteSelectedRun;
   qs('btnMediaRefresh').onclick = () => loadMediaManagerPage(true);
   qs('btnMediaDriveSave').onclick = saveGoogleDriveConfig;
   qs('btnMediaDriveReload').onclick = () => refreshGoogleDriveConfig();
   qs('btnMediaDriveIntakeReload').onclick = () => reloadDriveIntakeFiles();
   qs('btnMediaDriveImportSelected').onclick = importSelectedDriveIntakeFiles;
+  qs('btnMediaDriveSelectAll').onclick = selectAllDriveIntakeFiles;
   qs('btnMediaDriveClearSelected').onclick = clearDriveIntakeSelection;
   qs('btnMediaSelectFiltered').onclick = selectAllManagedMediaFiltered;
   qs('btnMediaClearSelection').onclick = clearManagedMediaSelection;
   qs('btnMediaBulkDrive').onclick = bulkSendManagedMediaToDrive;
   qs('btnMediaBulkDelete').onclick = bulkDeleteManagedMedia;
+  qs('btnMediaViewIcons').onclick = () => setMediaManagerViewMode('icons');
+  qs('btnMediaViewList').onclick = () => setMediaManagerViewMode('list');
+  qs('mediaManagerTileSize').addEventListener('input', (e) => setMediaManagerTileSize(e.target.value));
+  qs('mediaManagerTileShape').addEventListener('change', (e) => setMediaManagerTileShape(e.target.value));
   qs('mediaManagerSearch').addEventListener('input', (e) => setMediaManagerSearch(e.target.value));
   qs('mediaManagerLimit').addEventListener('change', () => loadMediaManagerPage(true));
   qs('mediaDriveCreatorSelect').addEventListener('change', (e) => {
@@ -10563,6 +12120,8 @@ function initButtons() {
   });
 
   qs('btnCriacaoReload').onclick = loadCriacaoRuns;
+  qs('btnCriacaoClearSelected').onclick = clearSelectedCriacaoRun;
+  qs('btnCriacaoDeleteSelected').onclick = deleteSelectedCriacaoRun;
 
   qs('btnScrAnalyze').onclick = analyzeScreenshot;
 

@@ -24,7 +24,8 @@
 6. Atualizar CHANGELOG em app/ui/app.js
 7. Atualizar cache bust do app.js em index.html (?v=XXXXX)
 8. Validar que todos os 4 lugares têm a mesma versão
-9. Só então dizer "pronto"
+9. Fazer commit e push para o GitHub depois da validação
+10. Só então dizer "pronto"
 ```
 
 ---
@@ -103,7 +104,23 @@ Tipos: `feat` (nova funcionalidade), `fix` (correção), `perf` (performance), `
 
 ---
 
-## 7. Arquivos Críticos — Mapa do Projeto
+## 7. GitHub Sempre Atualizado
+
+Depois de validar uma entrega, manter o repositorio remoto atualizado:
+
+```bash
+git status -sb
+git diff --check
+git add <arquivos-intencionais>
+git commit -m "descricao objetiva"
+git push
+```
+
+Nunca commitar `.env`, banco, midia, logs, tokens ou arquivos locais do servidor. Se o push falhar por autenticacao, deixar o commit local pronto e informar o bloqueio.
+
+---
+
+## 8. Arquivos Críticos — Mapa do Projeto
 
 | Arquivo | Responsabilidade |
 |---------|-----------------|
@@ -118,11 +135,12 @@ Tipos: `feat` (nova funcionalidade), `fix` (correção), `perf` (performance), `
 
 ---
 
-## 8. Regras Gerais
+## 9. Regras Gerais
 
 - **Nunca** confirmar que algo funciona sem testar
 - **Nunca** fazer deploy sem validar versão nos 4 lugares
 - **Sempre** explicar o que vai mudar antes de mudar
 - **Sempre** atualizar o CHANGELOG
+- **Sempre** manter o GitHub atualizado depois da entrega validada
 - **Sempre** ler o arquivo antes de editar
 - **Sempre** consultar este arquivo antes de qualquer alteração

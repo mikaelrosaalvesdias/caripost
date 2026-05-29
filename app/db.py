@@ -209,6 +209,17 @@ def upload_meta_get_many(object_keys: List[str]) -> Dict[str, Dict[str, Any]]:
 
 
 @_sqlite_retry
+def upload_meta_delete_many(object_keys: List[str]) -> int:
+    keys = [str(k or "").strip() for k in object_keys if str(k or "").strip()]
+    if not keys:
+        return 0
+    placeholders = ",".join("?" * len(keys))
+    with get_conn() as conn:
+        cur = conn.execute(f"DELETE FROM upload_metadata WHERE object_key IN ({placeholders})", keys)
+        return cur.rowcount
+
+
+@_sqlite_retry
 def insert_run(
     *,
     run_id: str,
@@ -251,6 +262,54 @@ def get_run(run_id: str) -> Optional[dict]:
         cur = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+@_sqlite_retry
+def delete_run(run_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        return cur.rowcount > 0
+
+
+def _json_value_contains_media_ref(value: Any, media_ref: str) -> bool:
+    if isinstance(value, dict):
+        return any(_json_value_contains_media_ref(child, media_ref) for child in value.values())
+    if isinstance(value, list):
+        return any(_json_value_contains_media_ref(child, media_ref) for child in value)
+    if not isinstance(value, str):
+        return False
+
+    if value == media_ref:
+        return True
+    media_ref_enc = quote(media_ref, safe="")
+    if media_ref_enc and media_ref_enc in value:
+        return True
+    return media_ref in value and (
+        "local-media" in value
+        or "/api/video-" in value
+        or "object_key=" in value
+        or "ref=" in value
+    )
+
+
+@_sqlite_retry
+def media_ref_used_by_other_runs(*, media_ref: str, exclude_run_id: str) -> bool:
+    if not media_ref:
+        return False
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, request_json, result_json FROM runs WHERE id <> ?",
+            (exclude_run_id,),
+        ).fetchall()
+    for row in rows:
+        for col in ("request_json", "result_json"):
+            try:
+                payload = json.loads(row[col]) if isinstance(row[col], str) else (row[col] or {})
+            except Exception:
+                payload = {}
+            if _json_value_contains_media_ref(payload, media_ref):
+                return True
+    return False
 
 
 def _replace_media_ref_in_json_value(value: Any, old_ref: str, new_ref: str) -> tuple[Any, bool]:
@@ -429,6 +488,30 @@ def delete_scheduled_post(*, id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM scheduled_posts WHERE id=?", (id,))
         return cur.rowcount > 0
+
+
+@_sqlite_retry
+def list_scheduled_posts_for_run(run_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM scheduled_posts WHERE run_id = ? ORDER BY created_at DESC",
+            (run_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        if isinstance(r.get("post_data"), str):
+            try:
+                r["post_data"] = json.loads(r["post_data"])
+            except Exception:
+                pass
+    return rows
+
+
+@_sqlite_retry
+def delete_scheduled_posts_for_run(run_id: str) -> int:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM scheduled_posts WHERE run_id = ?", (run_id,))
+        return cur.rowcount
 
 
 @_sqlite_retry
@@ -696,6 +779,63 @@ def async_job_list(*, kind: str, statuses: Optional[List[str]] = None, limit: in
     return items
 
 
+def _payload_matches_run_id(value: Any, run_id: str) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"run_id", "video_id"} and str(child or "") == run_id:
+                return True
+            if _payload_matches_run_id(child, run_id):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_payload_matches_run_id(child, run_id) for child in value)
+    return False
+
+
+@_sqlite_retry
+def list_async_jobs_for_run(*, run_id: str, kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    safe_kinds = [str(k) for k in (kinds or []) if str(k).strip()]
+    sql = "SELECT kind, job_id, status, payload_json, created_at, updated_at FROM async_jobs"
+    params: List[Any] = []
+    if safe_kinds:
+        placeholders = ",".join("?" for _ in safe_kinds)
+        sql += f" WHERE kind IN ({placeholders})"
+        params.extend(safe_kinds)
+    sql += " ORDER BY created_at DESC"
+    with get_conn() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        decoded = _async_job_decode(row)
+        if decoded is not None and _payload_matches_run_id(decoded, run_id):
+            out.append(decoded)
+    return out
+
+
+@_sqlite_retry
+def delete_async_jobs_for_run(*, run_id: str, kinds: Optional[List[str]] = None) -> int:
+    safe_kinds = [str(k) for k in (kinds or []) if str(k).strip()]
+    sql = "SELECT kind, job_id, status, payload_json, created_at, updated_at FROM async_jobs"
+    params: List[Any] = []
+    if safe_kinds:
+        placeholders = ",".join("?" for _ in safe_kinds)
+        sql += f" WHERE kind IN ({placeholders})"
+        params.extend(safe_kinds)
+    with get_conn() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        deleted = 0
+        for row in rows:
+            decoded = _async_job_decode(row)
+            if decoded is None or not _payload_matches_run_id(decoded, run_id):
+                continue
+            cur = conn.execute(
+                "DELETE FROM async_jobs WHERE kind = ? AND job_id = ?",
+                (row["kind"], row["job_id"]),
+            )
+            deleted += cur.rowcount
+    return deleted
+
+
 @_sqlite_retry
 def async_jobs_fail_incomplete(*, kinds: Optional[List[str]] = None, error: str, detail: str) -> int:
     safe_kinds = [str(k) for k in (kinds or []) if str(k).strip()]
@@ -734,5 +874,3 @@ def async_jobs_fail_incomplete(*, kinds: Optional[List[str]] = None, error: str,
             )
             updated += 1
     return updated
-
-

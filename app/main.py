@@ -13,11 +13,13 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import textwrap
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, Form, Request, UploadFile, File
@@ -31,13 +33,16 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from .db import (
-    init_db, insert_run, list_runs, get_run, settings_get, settings_list, settings_set,
+    init_db, insert_run, list_runs, get_run, delete_run, settings_get, settings_list, settings_set,
     insert_scheduled_post, list_scheduled_posts, update_scheduled_post_status,
-    update_scheduled_post_sent, delete_scheduled_post, list_scheduled_posts_due,
+    update_scheduled_post_sent, delete_scheduled_post, list_scheduled_posts_for_run,
+    delete_scheduled_posts_for_run, list_scheduled_posts_due,
     update_run_request_field, update_run_result_sources, replace_media_ref_in_runs,
     multipart_create, multipart_get, multipart_add_part, multipart_delete, multipart_purge_old,
     async_job_get, async_job_put, async_job_merge, async_job_list, async_jobs_fail_incomplete,
-    upload_meta_set, upload_meta_get, upload_meta_get_many,
+    list_async_jobs_for_run, delete_async_jobs_for_run,
+    upload_meta_set, upload_meta_get, upload_meta_get_many, upload_meta_delete_many,
+    media_ref_used_by_other_runs,
 )
 from .xvideos_source import fetch_top_videos, fetch_search_videos, fetch_pornstar_videos, fetch_channel_videos
 from .llm import ProviderSpec, merge_streams, run_providers_to_completion, _OLLAMA_BASE_URL
@@ -58,7 +63,7 @@ from .routers.video_enhancer import router as video_enhancer_router
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-app = FastAPI(title="Adult Meta (internal)", version="1.14.5")
+app = FastAPI(title="Adult Meta (internal)", version="1.18.18")
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,11 +75,11 @@ app.add_middleware(
 
 
 class NoCacheHtmlMiddleware(BaseHTTPMiddleware):
-    """Force no-cache on HTML so browsers always load the latest index.html."""
+    """Force no-cache on HTML/JS so browsers always load the latest UI."""
     async def dispatch(self, request, call_next):
         response = await call_next(request)
         ct = response.headers.get("content-type", "")
-        if "text/html" in ct:
+        if "text/html" in ct or request.url.path.startswith("/ui/"):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -146,6 +151,8 @@ _burn_controls: Dict[str, Dict[str, Any]] = {}
 _burn_state_lock = threading.Lock()
 _preview_locks: Dict[str, asyncio.Lock] = {}
 _preview_state_lock = threading.Lock()
+_media_probe_cache: Dict[str, Dict[str, Any]] = {}
+_media_probe_cache_lock = threading.Lock()
 _ASYNC_JOB_KIND_BURN = "burn"
 _ASYNC_JOB_KIND_TEASER = "teaser"
 _ASYNC_JOB_KIND_DRIVE_UPLOAD = "drive_upload"
@@ -979,6 +986,104 @@ def _logo_profile_to_payload_logos(profile: Dict[str, Any]) -> List[Dict[str, An
     return out[:MAX_LOGO_OVERLAYS]
 
 
+def _logo_wide_scale_boost(width: int, height: int) -> float:
+    # Width is the user's explicit size control. Do not auto-expand it for
+    # ultra-wide logos, otherwise preview and burn stop matching.
+    return 1.0
+
+
+def _logo_wide_height_scale(width: int, height: int) -> float:
+    # Never distort the logo artwork. Earlier versions tried to compensate
+    # ultra-wide logos by stretching their height, but that made real burns
+    # diverge from the saved logo design.
+    return 1.0
+
+
+def _prepare_logo_overlay_image(
+    path: str,
+    *,
+    is_gif: bool = False,
+    requested_scale_pct: float = 20.0,
+) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {
+        "width": 0,
+        "height": 0,
+        "trimmed": False,
+        "layout_canvas": False,
+        "scale_boost": 1.0,
+        "height_scale": 1.0,
+    }
+    if is_gif:
+        return meta
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            rgba = im.convert("RGBA")
+            w, h = rgba.size
+            bbox = rgba.getchannel("A").getbbox()
+            if bbox:
+                x0, y0, x1, y1 = bbox
+                bw = max(1, x1 - x0)
+                bh = max(1, y1 - y0)
+                aspect = (float(w) / float(h)) if h else 0.0
+                # Some company watermarks are intentionally authored as a full
+                # 16:9 video canvas (for example 3840x2160 with a lower-third
+                # logo already positioned inside it). Preserve those only when
+                # the saved size also says "use it like a canvas" (near full
+                # width). If a 3840x2160 PNG is saved at 15%-45%, treating the
+                # whole transparent canvas as the logo makes the visible mark
+                # almost disappear, which looks like "logo did not burn".
+                try:
+                    scale_hint = max(5.0, min(float(requested_scale_pct or 20.0), 100.0))
+                except Exception:
+                    scale_hint = 20.0
+                preserve_layout_canvas = (
+                    scale_hint >= 80.0
+                    and
+                    w >= 1280
+                    and h >= 720
+                    and 1.60 <= aspect <= 1.90
+                    and bw >= 1
+                    and bh >= 1
+                    and (
+                        x0 <= int(w * 0.08)
+                        or y0 >= int(h * 0.35)
+                        or x1 >= int(w * 0.92)
+                        or y1 >= int(h * 0.92)
+                    )
+                )
+                if preserve_layout_canvas:
+                    meta["layout_canvas"] = True
+                    meta["width"] = int(w)
+                    meta["height"] = int(h)
+                    meta["scale_boost"] = _logo_wide_scale_boost(int(w), int(h))
+                    meta["height_scale"] = _logo_wide_height_scale(int(w), int(h))
+                    return meta
+                pad = max(2, int(max(bw, bh) * 0.015))
+                crop = (
+                    max(0, x0 - pad),
+                    max(0, y0 - pad),
+                    min(w, x1 + pad),
+                    min(h, y1 + pad),
+                )
+                cw = max(1, crop[2] - crop[0])
+                ch = max(1, crop[3] - crop[1])
+                should_trim = cw < int(w * 0.97) or ch < int(h * 0.97)
+                if should_trim:
+                    rgba = rgba.crop(crop)
+                    rgba.save(path)
+                    w, h = rgba.size
+                    meta["trimmed"] = True
+            meta["width"] = int(w)
+            meta["height"] = int(h)
+            meta["scale_boost"] = _logo_wide_scale_boost(int(w), int(h))
+            meta["height_scale"] = _logo_wide_height_scale(int(w), int(h))
+    except Exception:
+        pass
+    return meta
+
+
 def _write_logo_overlay_specs(
     *,
     raw_logos: Optional[List[Dict[str, Any]]],
@@ -1007,13 +1112,22 @@ def _write_logo_overlay_specs(
             path = os.path.join(tmpdir, f"logo_{len(specs)}{ext}")
             with open(path, "wb") as f:
                 f.write(base64.b64decode(payload))
+            is_gif = bool(mime == "image/gif" or path.lower().endswith(".gif"))
+            scale_pct = max(5.0, min(float(raw_logo.get("scale_pct", raw_logo.get("logo_scale_pct", 20.0))), 100.0))
+            logo_meta = _prepare_logo_overlay_image(path, is_gif=is_gif, requested_scale_pct=scale_pct)
             specs.append({
                 "path": path,
-                "is_gif": bool(mime == "image/gif" or path.lower().endswith(".gif")),
+                "is_gif": is_gif,
                 "x": max(0.0, min(float(raw_logo.get("x", raw_logo.get("logo_x", 97.0))), 100.0)),
                 "y": max(0.0, min(float(raw_logo.get("y", raw_logo.get("logo_y", 97.0))), 100.0)),
-                "scale_pct": max(5.0, min(float(raw_logo.get("scale_pct", raw_logo.get("logo_scale_pct", 20.0))), 100.0)),
+                "scale_pct": scale_pct,
                 "opacity": max(5.0, min(float(raw_logo.get("opacity", raw_logo.get("logo_opacity", 85.0))), 100.0)),
+                "width": int(logo_meta.get("width") or 0),
+                "height": int(logo_meta.get("height") or 0),
+                "trimmed": bool(logo_meta.get("trimmed")),
+                "layout_canvas": bool(logo_meta.get("layout_canvas")),
+                "scale_boost": max(1.0, min(float(logo_meta.get("scale_boost") or 1.0), 1.6)),
+                "height_scale": max(1.0, min(float(logo_meta.get("height_scale") or 1.0), 1.6)),
                 "remove_bg": bool(raw_logo.get("remove_bg")),
                 "bg_key_color": _normalize_hex_color(raw_logo.get("bg_key_color") or "#ffffff", "#ffffff"),
                 "bg_similarity": max(0.01, min(float(raw_logo.get("bg_similarity", 0.18)), 0.60)),
@@ -1030,13 +1144,22 @@ def _write_logo_overlay_specs(
                 path = os.path.join(tmpdir, f"logo_legacy{ext}")
                 with open(path, "wb") as f:
                     f.write(base64.b64decode(payload))
+                is_gif = bool(mime == "image/gif" or path.lower().endswith(".gif"))
+                legacy_scale = max(5.0, min(float(legacy_scale_pct or 20.0), 100.0))
+                logo_meta = _prepare_logo_overlay_image(path, is_gif=is_gif, requested_scale_pct=legacy_scale)
                 specs.append({
                     "path": path,
-                    "is_gif": bool(mime == "image/gif" or path.lower().endswith(".gif")),
+                    "is_gif": is_gif,
                     "x": max(0.0, min(float(legacy_x or 97.0), 100.0)),
                     "y": max(0.0, min(float(legacy_y or 97.0), 100.0)),
-                    "scale_pct": max(5.0, min(float(legacy_scale_pct or 20.0), 100.0)),
+                    "scale_pct": legacy_scale,
                     "opacity": max(5.0, min(float(legacy_opacity or 85.0), 100.0)),
+                    "width": int(logo_meta.get("width") or 0),
+                    "height": int(logo_meta.get("height") or 0),
+                    "trimmed": bool(logo_meta.get("trimmed")),
+                    "layout_canvas": bool(logo_meta.get("layout_canvas")),
+                    "scale_boost": max(1.0, min(float(logo_meta.get("scale_boost") or 1.0), 1.6)),
+                    "height_scale": max(1.0, min(float(logo_meta.get("height_scale") or 1.0), 1.6)),
                     "remove_bg": False,
                     "bg_key_color": "#ffffff",
                     "bg_similarity": 0.18,
@@ -1045,6 +1168,73 @@ def _write_logo_overlay_specs(
         except Exception:
             pass
     return specs[:MAX_LOGO_OVERLAYS]
+
+
+def _probe_video_sar(in_path: str) -> float:
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=sample_aspect_ratio",
+             "-of", "default=noprint_wrappers=1:nokey=1", in_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        raw = proc.stdout.strip()
+        if raw and ":" in raw:
+            num, den = raw.split(":")
+            return float(num) / float(den) if float(den) != 0 else 1.0
+        return 1.0
+    except Exception:
+        return 1.0
+
+
+def _append_logo_aspect_locked_scale(
+    parts: List[str],
+    *,
+    input_idx: int,
+    base_ref: str,
+    logo_scaled_label: str,
+    base_label: str,
+    scale_ratio: float,
+    tag: str,
+    height_scale: float = 1.0,
+    video_sar: float = 1.0,
+) -> None:
+    """Scale a logo by width while explicitly preserving its source aspect ratio."""
+    safe_ratio = max(0.01, min(float(scale_ratio or 0.20), 1.0))
+    safe_tag = re.sub(r"[^A-Za-z0-9_]", "_", str(tag or "logo"))
+    norm_label = f"{safe_tag}_norm"
+    width_expr = f"ref_w*{safe_ratio:.4f}"
+    # In FFmpeg 7 scale2ref, ref_w/ref_h refer to the second input (the
+    # video/base), while main_w/main_h refer to the first input (the logo).
+    # Keep the user's width as a percent of the video, but derive height from
+    # the logo's own aspect ratio. Using ih/iw here resolves to the video in
+    # this filter and flattens wide logos into 16:9.
+    safe_height_scale = max(0.2, min(float(height_scale or 1.0), 2.0))
+    height_expr = f"{width_expr}*main_h/main_w"
+    if abs(safe_height_scale - 1.0) > 0.001:
+        height_expr = f"{height_expr}*{safe_height_scale:.6f}"
+    parts.append(f"[{input_idx}:v]format=rgba,setsar=1[{norm_label}]")
+    parts.append(
+        f"[{norm_label}]{base_ref}"
+        f"scale2ref=w={width_expr}:h={height_expr}:flags=lanczos"
+        f"[{logo_scaled_label}][{base_label}]"
+    )
+
+
+def _logo_overlay_y_expr(y_pct: float, **kwargs) -> str:
+    return f"(H-h)*{max(0.0, min(float(y_pct or 0.0), 100.0)):.4f}/100"
+
+
+def _has_logo_layout_payload(body: Dict[str, Any]) -> bool:
+    # Distinguish "user sent explicit layout" from backend defaults. Without
+    # this, a request that only references a saved company profile can look
+    # like a custom layout of 97/97/20 and accidentally shrink canvas logos.
+    if not isinstance(body, dict):
+        return False
+    for key in ("logo_x", "logo_y", "logo_scale_pct", "logo_opacity"):
+        if key in body and body.get(key) not in (None, ""):
+            return True
+    return False
 
 
 def _find_logo_profile(*, profile_id: str = "", company_name: str = "") -> Optional[Dict[str, Any]]:
@@ -1138,6 +1328,11 @@ def _estimate_requested_teaser_duration(
 _local_whisper_model = None
 _LOCAL_WHISPER_MODEL_SIZE = "small"  # 465MB, bom custo-benefício no CPU
 
+# Modelo premium — cache separado, carregado sob demanda
+_premium_whisper_model = None
+_premium_whisper_model_name = ""
+_LOCAL_WHISPER_PREMIUM_MODEL = os.environ.get("ADULT_META_PREMIUM_WHISPER_MODEL", "large-v3").strip() or "large-v3"
+
 def _get_local_whisper():
     global _local_whisper_model
     if _local_whisper_model is None:
@@ -1153,40 +1348,447 @@ def _get_local_whisper():
         )
     return _local_whisper_model
 
-def _transcribe_local(audio_path: str, language: str = "") -> Dict[str, Any]:
+def _transcribe_local(
+    audio_path: str,
+    language: str = "",
+    *,
+    strict: bool = True,
+    include_vocalizations: bool = False,
+    vad_filter: bool = True,
+) -> Dict[str, Any]:
     model = _get_local_whisper()
+    if strict:
+        vad_parameters = {
+            "min_speech_duration_ms": 300,
+            "min_silence_duration_ms": 700,
+            "speech_pad_ms": 160,
+        }
+    else:
+        vad_parameters = {
+            "min_speech_duration_ms": 150,
+            "min_silence_duration_ms": 900,
+            "speech_pad_ms": 350,
+        }
     kwargs: Dict[str, Any] = {
-        "beam_size": 5,
-        # VAD ativo: filtra silêncios, gemidos e respirações que causam alucinações
-        "vad_filter": True,
-        "vad_parameters": {
-            "min_speech_duration_ms": 300,   # ignora fala menor que 300ms
-            "min_silence_duration_ms": 1500, # agrupa segmentos com silêncio < 1.5s
-            "speech_pad_ms": 200,            # margem ao redor de cada segmento de fala
-        },
-        # Limites de qualidade para filtrar transcrições ruins
-        "no_speech_threshold": 0.55,         # descarta segmentos com alta prob. de não-fala
-        "log_prob_threshold": -1.0,          # descarta previsões de baixa confiança
-        "compression_ratio_threshold": 2.4,  # detecta alucinações repetitivas
-        "condition_on_previous_text": False, # evita alucinações que deslocam timestamps
+        "beam_size": 1 if strict else 5,
+        "temperature": 0.0,
+        "task": "transcribe",
+        "vad_filter": bool(vad_filter),
+        "vad_parameters": vad_parameters,
+        # Modo estrito: melhor retornar vazio do que transformar ruído em fala.
+        "no_speech_threshold": 0.72 if strict else 0.86,
+        "log_prob_threshold": -0.95 if strict else -1.25,
+        "compression_ratio_threshold": 2.25 if strict else 2.8,
+        "condition_on_previous_text": False,
+        "initial_prompt": PORN_BR_WHISPER_INITIAL_PROMPT,
     }
-    if language:
-        kwargs["language"] = language
+    kwargs["language"] = _norm_lang_code(language) or "pt"
+    if not vad_filter:
+        kwargs.pop("vad_parameters", None)
+        kwargs["no_speech_threshold"] = 0.92
+        kwargs["log_prob_threshold"] = -1.85
+        kwargs["compression_ratio_threshold"] = 3.25
     segments_gen, info = model.transcribe(audio_path, **kwargs)
     segments = []
     for s in segments_gen:
         text = s.text.strip()
         if not text:
             continue
-        # Filtra segmentos com alta probabilidade de não-fala
-        if hasattr(s, "no_speech_prob") and s.no_speech_prob > 0.75:
+        no_speech_prob = getattr(s, "no_speech_prob", None)
+        avg_logprob = getattr(s, "avg_logprob", None)
+        compression_ratio = getattr(s, "compression_ratio", None)
+        if strict and vad_filter and no_speech_prob is not None and no_speech_prob > 0.82:
             continue
-        # Filtra segmentos de muito baixa confiança (costumam ser garbage)
-        if hasattr(s, "avg_logprob") and s.avg_logprob < -1.8:
+        if not strict and vad_filter and no_speech_prob is not None and no_speech_prob > 0.94:
             continue
-        segments.append({"start": s.start, "end": s.end, "text": text})
+        if strict and avg_logprob is not None and avg_logprob < -1.45:
+            continue
+        if not strict and avg_logprob is not None and avg_logprob < -2.35:
+            continue
+        if strict and compression_ratio is not None and compression_ratio > 3.00:
+            continue
+        norm_text = re.sub(r"[^\w\s]", "", text.lower(), flags=re.UNICODE).strip()
+        if strict and not include_vocalizations and norm_text in {"ah", "ahh", "ai", "hmm", "hum", "hm", "uh", "uhm", "um", "oh", "oooh"}:
+            continue
+        segments.append({
+            "start": s.start,
+            "end": s.end,
+            "text": text,
+            "avg_logprob": float(avg_logprob) if avg_logprob is not None else None,
+            "no_speech_prob": float(no_speech_prob) if no_speech_prob is not None else None,
+            "compression_ratio": float(compression_ratio) if compression_ratio is not None else None,
+        })
     text = " ".join(s["text"] for s in segments if s["text"])
     return {"language": info.language, "text": text, "segments": segments}
+
+
+def _get_premium_whisper():
+    global _premium_whisper_model, _premium_whisper_model_name
+    if _premium_whisper_model is None:
+        from faster_whisper import WhisperModel
+        db_path = os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")
+        model_dir = os.path.join(os.path.dirname(db_path), "models", "faster-whisper")
+        os.makedirs(model_dir, exist_ok=True)
+        requested = _LOCAL_WHISPER_PREMIUM_MODEL
+        last_exc: Optional[Exception] = None
+        for model_name in [requested, "large-v3"]:
+            if not model_name:
+                continue
+            try:
+                _premium_whisper_model = WhisperModel(
+                    model_name,
+                    device="cpu",
+                    compute_type="int8",
+                    download_root=model_dir,
+                )
+                _premium_whisper_model_name = model_name
+                break
+            except Exception as exc:
+                last_exc = exc
+                print(f"[transcribe] premium model load failed ({model_name}): {exc}", flush=True)
+        if _premium_whisper_model is None and last_exc:
+            raise last_exc
+    return _premium_whisper_model
+
+
+PORN_BR_WHISPER_INITIAL_PROMPT = (
+    "Português brasileiro de putaria raiz, cena de sexo real amador ou profissional. "
+    "Fala suja, gemidos altos e baixos, respiração pesada, tapa, repetições constantes "
+    "e dirty talk explícito. Vocabulário esperado: ai ai ai, ahhh, aah, ah, hum hum hum, "
+    "hmm, ui, oi, vai vai vai, isso isso isso, mete, mete forte, mete devagar, entra, "
+    "mais fundo, goza, goza pra mim, me enche de leite, porra, caralho, buceta molhada, "
+    "pau, pica grossa, cu, chupa gostoso, delícia, gostosa, safada, filha da puta, "
+    "tesão, que delícia, que gostoso, me fode, squirt, creampie. "
+    "Mantenha repetições reais, gemidos e fala baixa; não invente inglês, nomes ou spam."
+)
+
+
+def _premium_vad_attempts() -> List[tuple[str, Dict[str, Any]]]:
+    """Tentativas CPU-friendly para fala baixa em conteúdo adulto PT-BR.
+
+    A ordem importa:
+    - balanced: primeira escolha, preserva fala real sem abrir demais.
+    - low_speech: captura fala/gemido vocalizado mais curto.
+    - noise_guard: mais conservador quando a tentativa anterior parece inglesa/lixo.
+    """
+    return [
+        (
+            "porn_br_balanced",
+            {
+                "beam_size": 5,
+                "temperature": 0.0,
+                "task": "transcribe",
+                "vad_filter": True,
+                "vad_parameters": {
+                    "threshold": 0.38,
+                    "min_speech_duration_ms": 160,
+                    "min_silence_duration_ms": 650,
+                    "speech_pad_ms": 320,
+                },
+                "no_speech_threshold": 0.72,
+                "log_prob_threshold": -1.35,
+                "compression_ratio_threshold": 2.65,
+                "condition_on_previous_text": False,
+                "word_timestamps": True,
+                "initial_prompt": PORN_BR_WHISPER_INITIAL_PROMPT,
+            },
+        ),
+        (
+            "porn_br_low_speech",
+            {
+                "beam_size": 5,
+                "temperature": 0.0,
+                "task": "transcribe",
+                "vad_filter": True,
+                "vad_parameters": {
+                    "threshold": 0.35,
+                    "min_speech_duration_ms": 80,
+                    "min_silence_duration_ms": 420,
+                    "speech_pad_ms": 420,
+                },
+                "no_speech_threshold": 0.80,
+                "log_prob_threshold": -1.70,
+                "compression_ratio_threshold": 3.05,
+                "condition_on_previous_text": False,
+                "word_timestamps": True,
+                "initial_prompt": PORN_BR_WHISPER_INITIAL_PROMPT,
+            },
+        ),
+        (
+            "porn_br_noise_guard",
+            {
+                "beam_size": 3,
+                "temperature": 0.0,
+                "task": "transcribe",
+                "vad_filter": True,
+                "vad_parameters": {
+                    "threshold": 0.40,
+                    "min_speech_duration_ms": 240,
+                    "min_silence_duration_ms": 900,
+                    "speech_pad_ms": 220,
+                },
+                "no_speech_threshold": 0.62,
+                "log_prob_threshold": -1.10,
+                "compression_ratio_threshold": 2.35,
+                "condition_on_previous_text": False,
+                "word_timestamps": True,
+                "initial_prompt": PORN_BR_WHISPER_INITIAL_PROMPT,
+            },
+        ),
+    ]
+
+
+def _whisper_words_payload(segment: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for w in getattr(segment, "words", None) or []:
+        word = str(getattr(w, "word", "") or "").strip()
+        if not word:
+            continue
+        out.append({
+            "start": float(getattr(w, "start", getattr(segment, "start", 0.0)) or 0.0),
+            "end": float(getattr(w, "end", getattr(segment, "end", 0.0)) or 0.0),
+            "word": word,
+            "probability": float(getattr(w, "probability", 0.0) or 0.0),
+        })
+    return out
+
+
+def _segments_from_word_timestamps(
+    segments: List[Dict[str, Any]],
+    *,
+    max_words: int = 8,
+    max_duration: float = 4.8,
+    gap_threshold: float = 0.75,
+) -> List[Dict[str, Any]]:
+    """Reconstrói legendas curtas usando word_timestamps do Whisper.
+
+    O faster-whisper pode devolver um segmento enorme com centenas de segundos,
+    mesmo tendo timestamps por palavra corretos. Para burn, o que importa é o
+    tempo das palavras, então reagrupamos em cues curtos.
+    """
+    out: List[Dict[str, Any]] = []
+    fallback: List[Dict[str, Any]] = []
+    current: List[Dict[str, Any]] = []
+
+    def flush_current() -> None:
+        nonlocal current
+        if not current:
+            return
+        text = " ".join(str(w.get("word") or "").strip() for w in current).strip()
+        if text:
+            out.append({
+                "start": float(current[0].get("start") or 0.0),
+                "end": float(current[-1].get("end") or current[-1].get("start") or 0.0),
+                "text": _transcript_clean_text(text),
+                "confidence": min(float(w.get("probability") or 0.0) for w in current),
+            })
+        current = []
+
+    for seg in segments or []:
+        words = seg.get("words") or []
+        if not words:
+            fallback.append(seg)
+            continue
+        for raw in words:
+            word = str(raw.get("word") or "").strip()
+            if not word:
+                continue
+            try:
+                start = float(raw.get("start") or 0.0)
+                end = float(raw.get("end") or start)
+            except Exception:
+                continue
+            item = {
+                "word": word,
+                "start": max(0.0, start),
+                "end": max(0.0, end),
+                "probability": float(raw.get("probability") or 0.0),
+            }
+            if current:
+                gap = item["start"] - float(current[-1].get("end") or current[-1].get("start") or 0.0)
+                duration = float(current[-1].get("end") or current[0].get("start") or 0.0) - float(current[0].get("start") or 0.0)
+                text_len = len(" ".join(str(w.get("word") or "") for w in current))
+                if gap > gap_threshold or duration >= max_duration or len(current) >= max_words or text_len >= 58:
+                    flush_current()
+            current.append(item)
+    flush_current()
+
+    if out:
+        return out
+    return fallback
+
+
+def _premium_hard_filter_segment(
+    segment: Any,
+    *,
+    include_vocalizations: bool,
+    mode: str,
+) -> tuple[bool, str]:
+    text = str(getattr(segment, "text", "") or "").strip()
+    if not text:
+        return False, "empty"
+    no_speech_prob = getattr(segment, "no_speech_prob", None)
+    avg_logprob = getattr(segment, "avg_logprob", None)
+    compression_ratio = getattr(segment, "compression_ratio", None)
+
+    # Filtros duros apenas para lixo óbvio. A limpeza semântica vem depois.
+    if no_speech_prob is not None and float(no_speech_prob) > 0.97:
+        return False, "no_speech_prob"
+    if avg_logprob is not None and float(avg_logprob) < -2.65:
+        return False, "avg_logprob"
+    if compression_ratio is not None and float(compression_ratio) > 4.40:
+        return False, "compression_ratio"
+    if not include_vocalizations:
+        norm_text = re.sub(r"[^\w\s]", "", text.lower(), flags=re.UNICODE).strip()
+        if norm_text in {"ah", "ahh", "ai", "hmm", "hum", "hm", "uh", "uhm", "um", "oh", "oooh"}:
+            return False, "vocalization_disabled"
+    return True, ""
+
+
+def _score_transcript_quality(
+    segments: List[Dict[str, Any]],
+    *,
+    expected_lang: str = "pt",
+    duration_seconds: float = 0.0,
+) -> Dict[str, Any]:
+    text = " ".join((s.get("text") or "").strip() for s in segments if (s.get("text") or "").strip())
+    total_tokens, pt_hits, foreign_hits = _pt_transcript_signal_counts(text) if _norm_lang_code(expected_lang) == "pt" else (0, 0, 0)
+    hallucination_hits = 0
+    for seg in segments:
+        if _transcript_segment_hallucination_reason(seg.get("text") or "", expected_lang, expected_lang):
+            hallucination_hits += 1
+    avg_no_speech_vals = [float(s["no_speech_prob"]) for s in segments if s.get("no_speech_prob") is not None]
+    avg_logprob_vals = [float(s["avg_logprob"]) for s in segments if s.get("avg_logprob") is not None]
+    avg_no_speech = sum(avg_no_speech_vals) / len(avg_no_speech_vals) if avg_no_speech_vals else 0.0
+    avg_logprob = sum(avg_logprob_vals) / len(avg_logprob_vals) if avg_logprob_vals else 0.0
+    chars = len(text)
+    span_seconds = sum(max(0.0, float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0)) for s in segments)
+    foreign_ratio = foreign_hits / max(1, total_tokens)
+    hallucination_ratio = hallucination_hits / max(1, len(segments))
+
+    score = 100.0
+    score -= min(45.0, foreign_ratio * 130.0)
+    score -= min(35.0, hallucination_ratio * 100.0)
+    score -= min(20.0, max(0.0, avg_no_speech - 0.55) * 55.0)
+    if avg_logprob and avg_logprob < -1.0:
+        score -= min(20.0, abs(avg_logprob + 1.0) * 12.0)
+    if chars < 18 and duration_seconds >= 45:
+        score -= 15.0
+    if chars > 0 and pt_hits == 0 and _norm_lang_code(expected_lang) == "pt":
+        score -= 18.0
+    if span_seconds <= 0 and chars:
+        score -= 10.0
+    score = max(0.0, min(100.0, score))
+
+    reasons: List[str] = []
+    if chars < 18 and duration_seconds >= 45:
+        reasons.append("too_short")
+    if foreign_ratio >= 0.24:
+        reasons.append("foreign_ratio_high")
+    if hallucination_ratio >= 0.18:
+        reasons.append("hallucination_ratio_high")
+    if avg_no_speech >= 0.82:
+        reasons.append("no_speech_high")
+    if chars > 0 and pt_hits == 0 and _norm_lang_code(expected_lang) == "pt":
+        reasons.append("no_pt_signal")
+
+    return {
+        "score": round(score, 2),
+        "chars": chars,
+        "segments": len(segments),
+        "span_seconds": round(span_seconds, 3),
+        "tokens": total_tokens,
+        "pt_hits": pt_hits,
+        "foreign_hits": foreign_hits,
+        "foreign_ratio": round(foreign_ratio, 4),
+        "hallucination_hits": hallucination_hits,
+        "hallucination_ratio": round(hallucination_ratio, 4),
+        "avg_no_speech_prob": round(avg_no_speech, 4),
+        "avg_logprob": round(avg_logprob, 4),
+        "retry_reasons": reasons,
+        "should_retry": bool(reasons and score < 78.0),
+    }
+
+
+def _transcribe_premium(
+    audio_path: str,
+    language: str = "",
+    *,
+    include_vocalizations: bool = False,
+) -> Dict[str, Any]:
+    model = _get_premium_whisper()
+    expected_lang = _norm_lang_code(language) or "pt"
+    attempts = _premium_vad_attempts()
+    if str(os.environ.get("ADULT_META_PREMIUM_NO_VAD_RESCUE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        attempts.append((
+            "no_vad_rescue",
+            {
+                "beam_size": 5,
+                "temperature": 0.0,
+                "task": "transcribe",
+                "vad_filter": False,
+                "no_speech_threshold": 0.92,
+                "log_prob_threshold": -2.20,
+                "compression_ratio_threshold": 3.60,
+                "condition_on_previous_text": False,
+                "word_timestamps": True,
+                "initial_prompt": PORN_BR_WHISPER_INITIAL_PROMPT,
+            },
+        ))
+    try:
+        duration_seconds = float((_probe_metadata(audio_path) or {}).get("duration_seconds") or 0.0)
+    except Exception:
+        duration_seconds = 0.0
+
+    best_result: Dict[str, Any] = {"language": expected_lang, "text": "", "segments": [], "premium_mode": "", "quality": {"score": 0.0}}
+    attempt_meta: List[Dict[str, Any]] = []
+    for mode, kwargs in attempts:
+        run_kwargs = dict(kwargs)
+        run_kwargs["language"] = expected_lang
+        segments_gen, info = model.transcribe(audio_path, **run_kwargs)
+        segments = []
+        dropped: Dict[str, int] = {}
+        for s in segments_gen:
+            keep, reason = _premium_hard_filter_segment(s, include_vocalizations=include_vocalizations, mode=mode)
+            if not keep:
+                dropped[reason] = dropped.get(reason, 0) + 1
+                continue
+            text = str(getattr(s, "text", "") or "").strip()
+            no_speech_prob = getattr(s, "no_speech_prob", None)
+            avg_logprob = getattr(s, "avg_logprob", None)
+            compression_ratio = getattr(s, "compression_ratio", None)
+            segments.append({
+                "start": float(getattr(s, "start", 0.0) or 0.0),
+                "end": float(getattr(s, "end", 0.0) or 0.0),
+                "text": text,
+                "avg_logprob": float(avg_logprob) if avg_logprob is not None else None,
+                "no_speech_prob": float(no_speech_prob) if no_speech_prob is not None else None,
+                "compression_ratio": float(compression_ratio) if compression_ratio is not None else None,
+                "premium_mode": mode,
+                "words": _whisper_words_payload(s),
+            })
+        quality = _score_transcript_quality(segments, expected_lang=expected_lang, duration_seconds=duration_seconds)
+        attempt_meta.append({
+            "mode": mode,
+            "quality": quality,
+            "dropped": dropped,
+            "segment_count": len(segments),
+        })
+        text = " ".join(s["text"] for s in segments if s["text"]).strip()
+        candidate = {
+            "language": getattr(info, "language", "") or expected_lang,
+            "text": text,
+            "segments": segments,
+            "premium_mode": mode,
+            "quality": quality,
+            "attempts": attempt_meta[:],
+            "model": _premium_whisper_model_name or _LOCAL_WHISPER_PREMIUM_MODEL,
+        }
+        if quality.get("score", 0.0) > float((best_result.get("quality") or {}).get("score") or 0.0):
+            best_result = candidate
+        if segments and not quality.get("should_retry"):
+            return candidate
+    return best_result
 
 
 def _norm_lang_code(value: str) -> str:
@@ -1197,6 +1799,448 @@ def _norm_lang_code(value: str) -> str:
         return ""
     # Keep common two-letter language code used by our UI selectors.
     return v.replace("-", "_").split("_")[0]
+
+
+_TRANSCRIBE_NON_LATIN_LANGS = {"ar", "he", "ja", "ko", "ru", "th", "uk", "zh"}
+_TRANSCRIBE_LANG_NAMES = {
+    "pt": "Portuguese",
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "ja": "Japanese",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "th": "Thai",
+    "ru": "Russian",
+}
+
+_PT_TRANSCRIPT_KEEP_WORDS = {
+    "a", "ai", "ah", "aham", "ahem", "assim", "ate", "bem", "bom", "bora", "cada", "cade",
+    "caralho", "caramba", "ce", "ceu", "chupa", "com", "como", "da", "de", "deixa",
+    "delicia", "delicioso", "denise", "deus", "do", "doce", "ela", "ele", "em", "enche",
+    "entra", "essa", "esse", "esta", "eu", "fazer", "filha", "foi", "foda", "fode",
+    "fundo", "gosa", "goza", "gozar", "gostosa", "gostoso", "gostosa", "gostou",
+    "gustoso", "hmm", "hum", "isso", "leite", "macia", "mais", "mano", "me", "mete",
+    "meu", "mim", "muito", "nao", "no", "nossa", "oh", "oi", "olha", "para", "pai",
+    "pode", "porra", "puta", "que", "querido", "sim", "so", "sua", "ta", "tava",
+    "tchau", "te", "tesao", "tesao", "toma", "um", "uma", "vai", "vem", "voce",
+}
+_PT_TRANSCRIPT_FOREIGN_WORDS = {
+    "air", "all", "aye", "bitch", "boy", "delicious", "dog", "doing", "fine", "got",
+    "good", "goodness", "guts", "happening", "harder", "he", "hey", "hi", "is", "it",
+    "its", "jika", "magic", "mister", "mom", "my", "nice", "ohyeah", "password",
+    "please", "right", "sadamsakumesama", "see", "shh", "support", "thank", "thanks",
+    "this", "tommy", "well", "what", "whats", "whoa", "why", "yeah", "yes", "you",
+    "your", "youre",
+}
+_PT_TRANSCRIPT_HALLUCINATION_PHRASES = (
+    "as a language model",
+    "como dog",
+    "doing so well",
+    "eu nao sei o que fazer",
+    "i got it",
+    "is this",
+    "it is fine",
+    "its all right",
+    "its delicious",
+    "its fine",
+    "magiccao",
+    "my goodness",
+    "my god",
+    "oh my",
+    "please support",
+    "sadamsakumesama",
+    "thank you",
+    "thank you tommy",
+    "hi hi hi",
+    "this is",
+    "t es un",
+    "what a delicious",
+    "whats your password",
+    "why is this happening",
+    "you are doing so well",
+    "youre doing so well",
+    "your password",
+)
+
+# Whitelist forte para pornografia BR. Ela existe para preservar dirty talk,
+# gemidos escritos e repetições reais, sem moralizar nem "corrigir" o conteúdo.
+_PT_TRANSCRIPT_KEEP_WORDS.update({
+    "abaixa", "abre", "abriu", "agacha", "agora", "aguenta", "ainda", "anal",
+    "aperta", "arromba", "arrombada", "assim", "babando", "bater", "bate",
+    "beija", "boca", "boquete", "bota", "botando", "brava", "bravo", "buceta",
+    "bundinha", "bunda", "cabeca", "cacete", "cadela", "cachorra", "cara",
+    "cavala", "cavalgando", "cavalga", "chupando", "chupar", "chupa", "cima",
+    "comer", "come", "comigo", "continua", "cu", "dedo", "dentro", "desce",
+    "devagar", "dilicia", "diz", "duro", "empina", "empurra", "enfia", "enfiando",
+    "engole", "entao", "entrando", "esporra", "fazer", "fazendo",
+    "fode", "fodendo", "foder", "fodeu", "forte", "fraco", "fundinho", "fundo",
+    "gemendo", "geme", "gozada", "gozando", "gozei", "gozou", "grita", "grosso", "grossa", "gulosinha",
+    "leite", "linda", "louca", "mamada", "mamar", "mamando", "maozinha", "mete",
+    "metendo", "meter", "molhada", "molhadinha", "novinha", "pau", "pica", "piroca",
+    "piranha", "porra", "profundo", "quero", "rabao", "rabuda", "rebola", "rebolando",
+    "rola", "senta", "sentando", "senta", "tesuda", "tesudo", "tirar", "tira",
+    "todinha", "tudo", "vem", "vindo", "xota",
+    "arrombado", "creampie", "pauzao", "putinha", "safada", "squirt",
+    "ahhh", "aaah", "aah", "humm", "huum", "mmm", "mmmm", "uhh", "ui", "aaa",
+})
+_PT_TRANSCRIPT_FOREIGN_WORDS.update({
+    "hi", "hello", "bye", "goodbye", "password", "tommy", "thanks", "thankyou",
+    "support", "subscribe", "channel", "dog", "mister", "goodness", "delicious",
+    "happening", "doing", "fine", "alright", "right", "japanese", "subtitle",
+})
+
+
+def _fold_transcript_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    folded = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    folded = folded.lower().replace("’", "'").replace("`", "'")
+    folded = re.sub(r"[^a-z0-9'\s]+", " ", folded)
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def _transcript_word_tokens_folded(text: str) -> List[str]:
+    return re.findall(r"[a-z0-9']+", _fold_transcript_text(text))
+
+
+def _pt_transcript_signal_counts(text: str) -> tuple[int, int, int]:
+    tokens = _transcript_word_tokens_folded(text)
+    normalized_tokens = [t.replace("'", "") for t in tokens]
+    pt_hits = sum(1 for t in normalized_tokens if t in _PT_TRANSCRIPT_KEEP_WORDS)
+    foreign_hits = sum(1 for t in normalized_tokens if t in _PT_TRANSCRIPT_FOREIGN_WORDS)
+    return len(normalized_tokens), pt_hits, foreign_hits
+
+
+def _pt_transcript_language_reason(text: str) -> str:
+    folded = _fold_transcript_text(text)
+    if not folded:
+        return ""
+    if folded in {"musica", "music", "legend", "legenda", "subtitles"}:
+        return "pt_asr_music_or_caption"
+    if folded in {"amem", "amen"}:
+        return "pt_known_asr_hallucination"
+    if any(phrase in folded for phrase in _PT_TRANSCRIPT_HALLUCINATION_PHRASES):
+        return "pt_known_asr_hallucination"
+    total, pt_hits, foreign_hits = _pt_transcript_signal_counts(folded)
+    if total == 0:
+        return ""
+    if foreign_hits >= 2 and pt_hits == 0:
+        return "pt_wrong_language"
+    if total >= 5 and foreign_hits / max(1, total) >= 0.34 and pt_hits < 2:
+        return "pt_wrong_language"
+    if total >= 3 and pt_hits == 0 and foreign_hits >= 1:
+        return "pt_wrong_language"
+    # Garbage-like long tokens appear often when ASR tries to interpret moans
+    # as Japanese/English names. Keep real Portuguese/adult words even repeated.
+    for token in _transcript_word_tokens_folded(folded):
+        compact = token.replace("'", "")
+        if len(compact) >= 12 and compact not in _PT_TRANSCRIPT_KEEP_WORDS:
+            vowels = sum(1 for ch in compact if ch in "aeiou")
+            if vowels <= 2 or compact in _PT_TRANSCRIPT_FOREIGN_WORDS:
+                return "pt_gibberish"
+    return ""
+
+
+def _default_transcribe_prompt(
+    language: str = "",
+    *,
+    adult_mode: bool = True,
+    include_vocalizations: bool = True,
+) -> str:
+    # Intentionally empty: Whisper prompt fields are previous-transcript context,
+    # not instructions. Long instructions leak into subtitles.
+    return ""
+
+
+def _transcript_clean_text(text: str) -> str:
+    txt = str(text or "")
+    txt = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", txt)
+    txt = re.sub(r"[ \t]+", " ", txt)
+    return txt.strip()
+
+
+def _transcript_script_counts(text: str) -> Dict[str, int]:
+    return {
+        "cjk": sum(1 for ch in text if "\u3040" <= ch <= "\u30ff" or "\u3400" <= ch <= "\u9fff"),
+        "hangul": sum(1 for ch in text if "\uac00" <= ch <= "\ud7af"),
+        "thai": sum(1 for ch in text if "\u0e00" <= ch <= "\u0e7f"),
+        "cyrillic": sum(1 for ch in text if "\u0400" <= ch <= "\u052f"),
+        "arabic": sum(1 for ch in text if "\u0600" <= ch <= "\u06ff"),
+        "hebrew": sum(1 for ch in text if "\u0590" <= ch <= "\u05ff"),
+    }
+
+
+def _transcript_repetition_reason(text: str) -> str:
+    # Adult content naturally contains repeated words/phrases/vocalizations.
+    # Never classify repetition alone as hallucination; only explicit spam,
+    # prompt leaks and unexpected scripts are filtered elsewhere.
+    return ""
+
+
+def _transcript_segment_hallucination_reason(text: str, expected_lang: str = "", detected_lang: str = "") -> str:
+    txt = _transcript_clean_text(text)
+    if not txt:
+        return "empty"
+    expected = _norm_lang_code(expected_lang)
+    detected = _norm_lang_code(detected_lang)
+    # Se o usuário não escolheu explicitamente um idioma não-latino, não aceitamos
+    # surtos de script inesperado gerados pelo Whisper em trechos sem fala clara.
+    allows_non_latin = expected in _TRANSCRIBE_NON_LATIN_LANGS
+    counts = _transcript_script_counts(txt)
+    unexpected = counts["cjk"] + counts["hangul"] + counts["thai"] + counts["cyrillic"] + counts["arabic"] + counts["hebrew"]
+    letters = sum(1 for ch in txt if ch.isalpha())
+    if not allows_non_latin and unexpected >= 4 and unexpected / max(1, letters) >= 0.18:
+        return f"unexpected_script:{detected or 'auto'}"
+    rep = _transcript_repetition_reason(txt)
+    if rep:
+        return rep
+    lower = txt.lower()
+    spam_bits = (
+        "subscribe", "subtitles by", "amara.org",
+        "se inscreva", "inscreva-se", "inscreva no canal", "ative o sininho", "deixe seu like",
+        "suscríbete", "suscribete", "subtítulos", "subtitulado por",
+        "字幕", "訂閱", "подпис",
+    )
+    if any(bit in lower for bit in spam_bits):
+        return "known_spam"
+    prompt_leak_bits = (
+        "capture low-volume speech",
+        "transcribe real spoken dialogue",
+        "transcribe only real spoken dialogue",
+        "do not invent subtitles",
+        "do not translate",
+        "without censorship or moralizing",
+        "adult/pornographic content",
+        "if speech is unclear",
+        "prefer portuguese, english or spanish",
+    )
+    if any(bit in lower for bit in prompt_leak_bits):
+        return "prompt_leak"
+    if expected == "pt":
+        pt_reason = _pt_transcript_language_reason(txt)
+        if pt_reason:
+            return pt_reason
+    return ""
+
+
+def _clean_transcript_segments(
+    segments: List[Dict[str, Any]],
+    expected_lang: str = "",
+    detected_lang: str = "",
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    cleaned: List[Dict[str, Any]] = []
+    reason_counts: Dict[str, int] = {}
+    for seg in segments or []:
+        text = _transcript_clean_text(seg.get("text") or "")
+        reason = _transcript_segment_hallucination_reason(text, expected_lang, detected_lang)
+        if not reason and _norm_lang_code(expected_lang) == "pt":
+            try:
+                confidence = float(seg.get("confidence")) if seg.get("confidence") is not None else 1.0
+            except Exception:
+                confidence = 1.0
+            total, pt_hits, foreign_hits = _pt_transcript_signal_counts(text)
+            if confidence < 0.12 and total >= 2 and pt_hits == 0:
+                reason = "pt_low_confidence_no_signal"
+            elif confidence < 0.20 and foreign_hits > pt_hits:
+                reason = "pt_low_confidence_foreign"
+        if reason:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            continue
+        cleaned.append({
+            "start": float(seg.get("start", 0.0) or 0.0),
+            "end": float(seg.get("end", 0.0) or 0.0),
+            "text": text,
+        })
+    return cleaned, {
+        "removed_count": max(0, len(segments or []) - len(cleaned)),
+        "kept_count": len(cleaned),
+        "reason_counts": reason_counts,
+        "expected_lang": _norm_lang_code(expected_lang) or "auto",
+        "detected_lang": _norm_lang_code(detected_lang) or "auto",
+    }
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("empty_json")
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(raw[start:end + 1])
+    raise ValueError("json_object_not_found")
+
+
+def _chunk_segments_for_llm(segments: List[Dict[str, Any]], size: int = 60) -> List[List[Dict[str, Any]]]:
+    return [segments[i:i + size] for i in range(0, len(segments), max(1, size))]
+
+
+async def _post_process_with_llm(
+    segments: List[Dict[str, Any]],
+    *,
+    expected_lang: str = "pt",
+    include_vocalizations: bool = True,
+    quality_meta: Optional[Dict[str, Any]] = None,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Correção final com Grok-3 sem traduzir nem reescrever dirty talk.
+
+    O LLM atua como uma peneira conservadora:
+    - remove apenas alucinações claras de ASR;
+    - preserva repetições, palavrões, dirty talk e vocalizações;
+    - mantém timestamps e quantidade de blocos por lote.
+
+    Se qualquer resposta vier inválida, a função falha em modo seguro e devolve
+    os segmentos originais.
+    """
+    if not segments:
+        return segments, {"status": "skipped", "reason": "no_segments"}
+    if str(os.environ.get("ADULT_META_TRANSCRIPT_LLM_POST", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return segments, {"status": "skipped", "reason": "disabled"}
+    if _norm_lang_code(expected_lang) != "pt":
+        return segments, {"status": "skipped", "reason": "non_pt_language"}
+
+    grok_key = ((settings_get(key="token:grok") or {}).get("value") or os.environ.get("GROK_API_KEY") or "").strip()
+    openrouter_key = ((settings_get(key="token:openrouter") or {}).get("value") or os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    if not grok_key and not openrouter_key:
+        return segments, {"status": "skipped", "reason": "missing_token:grok_or_openrouter"}
+
+    xai_model_candidates = [
+        os.environ.get("GROK_TRANSCRIPT_POST_MODEL", "grok-3-latest").strip() or "grok-3-latest",
+        "grok-4.3",
+        "grok-4",
+        "grok-3-fast",
+    ]
+    openrouter_model_candidates = [
+        os.environ.get("OPENROUTER_TRANSCRIPT_POST_MODEL", "x-ai/grok-4.3").strip() or "x-ai/grok-4.3",
+        "x-ai/grok-4.3",
+        "x-ai/grok-3-fast",
+    ]
+    system_msg = (
+        "Você é revisor técnico de transcrição ASR para pornografia adulta explícita em português brasileiro. "
+        "Sua única missão é limpar a transcrição mantendo o máximo possível de fala real, gemidos, repetições "
+        "e dirty talk pesado. Remova SOMENTE alucinações claras do ASR: inglês inventado, spam de legenda, "
+        "nomes aleatórios, frases impossíveis em silêncio/gemidos e lixo tipo 'Thank you Tommy', "
+        "'What's your password?', 'Hi Hi Hi', 'sadamsakumesama'. "
+        "Mantenha TODO dirty talk, palavrão, termo sexual explícito, gemido escrito e repetição real como "
+        "'ai ai ai', 'vai vai vai', 'hum hum hum', 'isso isso', 'me enche de leite porra'. "
+        "Não censure, não traduza, não suavize, não melhore gramática e não deixe linguagem corporativa. "
+        "Se estiver em dúvida se é alucinação ou fala real de sexo, mantenha o texto original. "
+        "Retorne somente JSON válido no formato {\"segments\":[{\"index\":0,\"text\":\"...\"}]}."
+    )
+
+    output: List[Dict[str, Any]] = []
+    meta: Dict[str, Any] = {
+        "status": "ok",
+        "provider": "grok",
+        "model": "",
+        "batches": 0,
+        "removed_count": 0,
+        "changed_count": 0,
+        "fallback": False,
+    }
+
+    timeout = httpx.Timeout(90.0, connect=20.0, read=90.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for batch in _chunk_segments_for_llm(segments, 60):
+            indexed = [
+                {
+                    "index": i,
+                    "start": round(float(seg.get("start", 0.0) or 0.0), 3),
+                    "end": round(float(seg.get("end", 0.0) or 0.0), 3),
+                    "text": str(seg.get("text") or ""),
+                }
+                for i, seg in enumerate(batch)
+            ]
+            user_msg = json.dumps({
+                "language": "pt-BR",
+                "adult_mode": True,
+                "porn_context": True,
+                "include_vocalizations": bool(include_vocalizations),
+                "quality": quality_meta or {},
+                "segments": indexed,
+                "rules": [
+                    "Mantenha exatamente o mesmo número de segmentos e índices.",
+                    "Para remover alucinação clara, retorne text vazio.",
+                    "Nunca altere timestamps.",
+                    "Remova apenas alucinações claras em inglês ou frases impossíveis.",
+                    "Mantenha toda putaria, repetições, gemidos e dirty talk original.",
+                    "Não traduza inglês real caso o trecho seja obviamente fala inglesa; mas se for frase clássica inventada em meio a PT-BR, remova.",
+                    "Se tiver dúvida, mantenha o texto original.",
+                ],
+            }, ensure_ascii=False)
+
+            last_error = ""
+            parsed: Optional[Dict[str, Any]] = None
+            used_model = ""
+            attempts: List[tuple[str, str, str]] = []
+            if grok_key:
+                attempts.extend(("xai", "https://api.x.ai/v1/chat/completions", m) for m in dict.fromkeys(xai_model_candidates))
+            if openrouter_key:
+                attempts.extend(("openrouter", "https://openrouter.ai/api/v1/chat/completions", m) for m in dict.fromkeys(openrouter_model_candidates))
+            for provider_name, url, model in attempts:
+                try:
+                    token = grok_key if provider_name == "xai" else openrouter_key
+                    response = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system_msg},
+                                {"role": "user", "content": user_msg},
+                            ],
+                            "temperature": 0.0,
+                            "max_tokens": 4096,
+                        },
+                    )
+                    if response.status_code >= 400:
+                        last_error = f"{provider_name}/{model}:http_{response.status_code}:{(response.text or '')[:220]}"
+                        continue
+                    content = (((response.json().get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+                    parsed = _extract_json_object(content)
+                    used_model = f"{provider_name}:{model}"
+                    break
+                except Exception as exc:
+                    last_error = f"{provider_name}/{model}:{_safe_error_detail(exc, 'grok_postprocess_failed')}"
+                    continue
+            if not parsed:
+                return segments, {"status": "skipped", "reason": "llm_failed", "detail": last_error[:300], "fallback": True}
+
+            returned = parsed.get("segments")
+            if not isinstance(returned, list) or len(returned) != len(batch):
+                return segments, {
+                    "status": "skipped",
+                    "reason": "invalid_segment_count",
+                    "expected": len(batch),
+                    "received": len(returned) if isinstance(returned, list) else None,
+                    "fallback": True,
+                }
+
+            meta["model"] = used_model or meta.get("model") or ""
+            meta["batches"] = int(meta.get("batches") or 0) + 1
+            for original, item in zip(batch, returned):
+                if not isinstance(item, dict):
+                    return segments, {"status": "skipped", "reason": "invalid_item", "fallback": True}
+                new_text = _transcript_clean_text(item.get("text") if item.get("text") is not None else original.get("text") or "")
+                old_text = _transcript_clean_text(original.get("text") or "")
+                if not new_text:
+                    meta["removed_count"] = int(meta.get("removed_count") or 0) + 1
+                    continue
+                if new_text != old_text:
+                    meta["changed_count"] = int(meta.get("changed_count") or 0) + 1
+                updated = dict(original)
+                updated["text"] = new_text
+                output.append(updated)
+
+    if not output:
+        return segments, {"status": "skipped", "reason": "llm_removed_all", "fallback": True}
+    return output, meta
 
 
 async def _translate_text_google(text: str, target_lang: str, source_lang: str = "") -> str:
@@ -1267,13 +2311,53 @@ async def _translate_segments_google(segments: List[Dict[str, Any]], target_lang
     return out
 
 
+_TRANSLATION_THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL)
+_TRANSLATION_CODE_FENCE_RE = re.compile(r'```[\w]*\n|```\n?')
+
+def _clean_llm_translation_response(raw: str) -> str:
+    """Remove thinking blocks, markdown fences, and trailing delimiters from LLM response."""
+    raw = _TRANSLATION_THINK_RE.sub('', raw)
+    raw = _TRANSLATION_CODE_FENCE_RE.sub('', raw)
+    raw = raw.strip()
+    if raw.endswith('|||SEG|||'):
+        raw = raw[:-len('|||SEG|||')].strip()
+    return raw
+
+
+def _map_translated_texts(
+    segments: List[Dict[str, Any]],
+    texts: List[str],
+    translated_texts: List[str],
+) -> Optional[List[Dict[str, Any]]]:
+    """Mapeia textos traduzidos de volta aos segmentos originais.
+    Retorna None se a contagem não bater após limpeza.
+    """
+    cleaned = [t.strip() for t in translated_texts]
+    # Remove trailing empty entry caused by trailing delimiter
+    while cleaned and not cleaned[-1]:
+        cleaned.pop()
+    # Remove leading empty entry
+    while cleaned and not cleaned[0]:
+        cleaned.pop(0)
+    if len(cleaned) != len(texts):
+        return None
+    return [
+        {
+            "start": float(s.get("start", 0) or 0),
+            "end": float(s.get("end", 0) or 0),
+            "text": t or texts[i],
+        }
+        for i, (s, t) in enumerate(zip(segments, cleaned))
+    ]
+
+
 async def _translate_segments_llm(
     segments: List[Dict[str, Any]],
     target_lang: str,
     source_lang: str = "",
 ) -> List[Dict[str, Any]]:
-    """Traduz segmentos via LLM: Grok (xAI) → DeepSeek via OpenRouter → OpenAI.
-    Retorna os segmentos traduzidos ou lança exceção se todos falharem.
+    """Traduz segmentos via LLM: Grok (xAI) → modelos via OpenRouter → OpenAI.
+    Fallback para Google Translate se todos os LLMs falharem.
     """
     if not segments:
         return []
@@ -1283,7 +2367,6 @@ async def _translate_segments_llm(
     if _norm_lang_code(source_lang) == tgt:
         return segments
 
-    # Constrói texto concatenado de todos os segmentos para enviar em uma chamada
     sep = "\n|||SEG|||\n"
     texts = [((s.get("text") or "").strip()) for s in segments]
     combined = sep.join(texts)
@@ -1297,11 +2380,12 @@ async def _translate_segments_llm(
     src_label = (lang_map.get(_norm_lang_code(source_lang) or "", source_lang or "auto")).capitalize()
 
     system_msg = (
-        "You are a professional subtitle translator. "
-        "You will receive subtitle segments separated by the delimiter '|||SEG|||'. "
-        "Translate each segment from " + src_label + " to " + lang_name + ". "
-        "Return ONLY the translated segments separated by the same delimiter '|||SEG|||', "
-        "preserving the exact number of segments. Do not add explanations or extra text."
+        "Você é tradutor especialista em legendas de pornografia adulta explícita. "
+        "Você receberá segmentos separados pelo delimitador '|||SEG|||'. "
+        "Traduza cada segmento de " + src_label + " para " + lang_name + ", mantendo tom safado, natural, "
+        "palavrões, gemidos, repetições e dirty talk. Não suavize, não censure e não use linguagem corporativa. "
+        "Retorne APENAS os segmentos traduzidos separados pelo mesmo delimitador '|||SEG|||', "
+        "na mesma ordem e quantidade exata. Sem explicação, sem bloco de código, sem tags de raciocínio."
     )
     user_msg = combined
 
@@ -1312,83 +2396,70 @@ async def _translate_segments_llm(
 
     last_error: str = "no_provider_available"
 
+    async def _try_provider(url: str, headers: dict, json_data: dict) -> Optional[List[Dict[str, Any]]]:
+        nonlocal last_error
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(url, headers=headers, json=json_data)
+            if r.status_code < 400:
+                raw = (((r.json().get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+                cleaned = _clean_llm_translation_response(raw)
+                translated_texts = cleaned.split("|||SEG|||")
+                result = _map_translated_texts(segments, texts, translated_texts)
+                if result is not None:
+                    return result
+                last_error = f"bad_seg_count_{r.status_code}"
+            else:
+                last_error = f"error_{r.status_code}"
+        except Exception as ex:
+            last_error = f"exception: {ex}"
+        return None
+
     # 1. Grok (xAI)
     grok_key = (settings_get(key="token:grok") or {}).get("value")
     if grok_key:
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                r = await client.post(
-                    "https://api.x.ai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {grok_key}", "Content-Type": "application/json"},
-                    json={"model": "grok-3-fast", "messages": messages, "max_tokens": 4096},
-                )
-            if r.status_code < 400:
-                raw_content = (((r.json().get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-                translated_texts = raw_content.split("|||SEG|||")
-                if len(translated_texts) == len(texts):
-                    return [
-                        {"start": float(s.get("start", 0) or 0), "end": float(s.get("end", 0) or 0), "text": t.strip() or texts[i]}
-                        for i, (s, t) in enumerate(zip(segments, translated_texts))
-                    ]
-            last_error = f"grok_error_{r.status_code}"
-        except Exception as ex:
-            last_error = f"grok_exception: {ex}"
+        result = await _try_provider(
+            "https://api.x.ai/v1/chat/completions",
+            {"Authorization": f"Bearer {grok_key}", "Content-Type": "application/json"},
+            {"model": "grok-3-fast", "messages": messages, "max_tokens": 4096},
+        )
+        if result is not None:
+            return result
 
-    # 2. DeepSeek via OpenRouter
+    # 2. Modelos via OpenRouter (apenas modelos não-reasoning)
     openrouter_key = (settings_get(key="token:openrouter") or {}).get("value")
     if openrouter_key:
-        for or_model in ["deepseek/deepseek-r1-0528", "deepseek/deepseek-r1", "x-ai/grok-3-fast"]:
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    r = await client.post(
-                        "https://openrouter.ai/api/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {openrouter_key}",
-                            "Content-Type": "application/json",
-                            "HTTP-Referer": "https://metaporn.n8nmikael.com.br",
-                            "X-Title": "MetaPorn Translation",
-                        },
-                        json={"model": or_model, "messages": messages, "max_tokens": 4096},
-                    )
-                if r.status_code < 400:
-                    raw_content = (((r.json().get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-                    translated_texts = raw_content.split("|||SEG|||")
-                    if len(translated_texts) == len(texts):
-                        return [
-                            {"start": float(s.get("start", 0) or 0), "end": float(s.get("end", 0) or 0), "text": t.strip() or texts[i]}
-                            for i, (s, t) in enumerate(zip(segments, translated_texts))
-                        ]
-                    last_error = f"openrouter_{or_model}_bad_seg_count"
-                    continue
-                last_error = f"openrouter_{or_model}_error_{r.status_code}"
-                if r.status_code in (400, 404):
-                    continue
-                break
-            except Exception as ex:
-                last_error = f"openrouter_{or_model}_exception: {ex}"
-                continue
+        or_models = ["x-ai/grok-3-fast", "x-ai/grok-3-mini-fast", "openai/gpt-4o-mini"]
+        or_headers = {
+            "Authorization": f"Bearer {openrouter_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://metaporn.n8nmikael.com.br",
+            "X-Title": "MetaPorn Translation",
+        }
+        for or_model in or_models:
+            result = await _try_provider(
+                "https://openrouter.ai/api/v1/chat/completions",
+                or_headers,
+                {"model": or_model, "messages": messages, "max_tokens": 4096},
+            )
+            if result is not None:
+                return result
 
     # 3. OpenAI
     openai_key = (settings_get(key="token:openai") or {}).get("value")
     if openai_key:
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                r = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
-                    json={"model": "gpt-4o-mini", "messages": messages, "max_tokens": 4096},
-                )
-            if r.status_code < 400:
-                raw_content = (((r.json().get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-                translated_texts = raw_content.split("|||SEG|||")
-                if len(translated_texts) == len(texts):
-                    return [
-                        {"start": float(s.get("start", 0) or 0), "end": float(s.get("end", 0) or 0), "text": t.strip() or texts[i]}
-                        for i, (s, t) in enumerate(zip(segments, translated_texts))
-                    ]
-            last_error = f"openai_error_{r.status_code}"
-        except Exception as ex:
-            last_error = f"openai_exception: {ex}"
+        result = await _try_provider(
+            "https://api.openai.com/v1/chat/completions",
+            {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+            {"model": "gpt-4o-mini", "messages": messages, "max_tokens": 4096},
+        )
+        if result is not None:
+            return result
+
+    # 4. Fallback: Google Translate
+    fallback = await _translate_segments_google(segments, target_lang, source_lang)
+    if fallback:
+        return fallback
 
     raise RuntimeError(f"translation_llm_failed: {last_error}")
 
@@ -1409,17 +2480,21 @@ _UUID_FNAME_RE = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-',
     re.IGNORECASE,
 )
-_CODE_PREFIX_RE = re.compile(r'^[^_]+_-')
+_CODE_PREFIX_RE = re.compile(r'^.*?_-(?=_)')
 
 
 def _clean_upload_filename(fname: str) -> str:
-    """Strip UUID prefix and optional leading code from S3 filename.
+    """Strip local: prefix, UUID and leading code from filename.
 
-    Example: d9be1321-...-0406_-_Cena_-_Sex_Saturn.mp4 → _Cena_-_Sex_Saturn.mp4
+    Example: local:uploads/.../uuid-0414_03_-_Cena_-_Slave.mp4 → _Cena_-_Slave.mp4
     """
-    fname = _UUID_FNAME_RE.sub('', fname)
-    fname = _CODE_PREFIX_RE.sub('', fname)
-    return fname or fname
+    raw = str(fname or '')
+    if raw.startswith('local:'):
+        raw = raw[6:]
+    base = raw.split('/')[-1] if '/' in raw else raw
+    cleaned = _UUID_FNAME_RE.sub('', base)
+    cleaned = _CODE_PREFIX_RE.sub('', cleaned)
+    return cleaned or base
 
 
 def _safe_storage_filename(filename: str, fallback: str = "upload.bin") -> str:
@@ -1826,6 +2901,208 @@ def _delete_media_ref(*, media_ref: str, s3: Any = None) -> None:
     s3.delete_object(Bucket=S3_BUCKET, Key=media_ref)
 
 
+_RUN_CLEANUP_MEDIA_PREFIXES = (
+    "uploads",
+    "burns",
+    "teasers",
+    "combined",
+    "previews",
+    "narrations-manual",
+    "teasers-openers",
+)
+_CREATION_CLEANUP_MEDIA_PREFIXES = ("burns", "teasers", "combined", "previews")
+_CREATION_WIZARD_MEDIA_KEYS = (
+    "burned_object_key",
+    "teaser_object_key",
+    "teaser_logo_object_key",
+    "teaser_combined_object_key",
+)
+
+
+def _normalize_media_refish(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith(("data:", "blob:")):
+        return ""
+    if _is_valid_object_key(raw):
+        return raw
+    if raw.lower().startswith("s3://"):
+        s3_path = raw[5:]
+        slash = s3_path.find("/")
+        candidate = s3_path[slash + 1:] if slash >= 0 else ""
+        return candidate if _is_valid_object_key(candidate) else ""
+
+    parsed = None
+    if raw.startswith("/") or re.match(r"^https?://", raw, re.I):
+        try:
+            parsed = urlparse(raw)
+        except Exception:
+            parsed = None
+    if parsed:
+        query = parse_qs(parsed.query or "")
+        for key in ("ref", "object_key"):
+            for item in query.get(key, []):
+                candidate = unquote(str(item or "").strip())
+                if _is_valid_object_key(candidate):
+                    return candidate
+        path = unquote(parsed.path or "").strip("/")
+        parts = [p for p in path.split("/") if p]
+        if parts and parts[0] == S3_BUCKET and len(parts) > 1:
+            candidate = "/".join(parts[1:])
+            if _is_valid_object_key(candidate):
+                return candidate
+        for idx, part in enumerate(parts):
+            if part in _RUN_CLEANUP_MEDIA_PREFIXES:
+                candidate = "/".join(parts[idx:])
+                if _is_valid_object_key(candidate):
+                    return candidate
+    return ""
+
+
+def _is_cleanup_media_ref(media_ref: str, prefixes: tuple[str, ...]) -> bool:
+    ref = str(media_ref or "").strip()
+    if not ref or not _is_valid_object_key(ref):
+        return False
+    return _media_ref_has_prefix(ref, *prefixes)
+
+
+def _collect_media_refs_from_value(
+    value: Any,
+    *,
+    prefixes: tuple[str, ...] = _RUN_CLEANUP_MEDIA_PREFIXES,
+    out: Optional[set[str]] = None,
+) -> set[str]:
+    refs = out if out is not None else set()
+    if isinstance(value, dict):
+        for child in value.values():
+            _collect_media_refs_from_value(child, prefixes=prefixes, out=refs)
+        return refs
+    if isinstance(value, list):
+        for child in value:
+            _collect_media_refs_from_value(child, prefixes=prefixes, out=refs)
+        return refs
+    if isinstance(value, str):
+        ref = _normalize_media_refish(value)
+        if ref and _is_cleanup_media_ref(ref, prefixes):
+            refs.add(ref)
+    return refs
+
+
+def _collect_creation_media_refs(req_data: Dict[str, Any]) -> List[str]:
+    wizard_state = _safe_json_obj(req_data.get("wizard_state"))
+    refs: set[str] = set()
+    for key in _CREATION_WIZARD_MEDIA_KEYS:
+        _collect_media_refs_from_value(
+            wizard_state.get(key),
+            prefixes=_CREATION_CLEANUP_MEDIA_PREFIXES,
+            out=refs,
+        )
+    return sorted(refs)
+
+
+def _collect_run_media_refs(
+    *,
+    run_row: Dict[str, Any],
+    scheduled_posts: Optional[List[Dict[str, Any]]] = None,
+    async_jobs: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
+    refs: set[str] = set()
+    req_data = _safe_json_obj(run_row.get("request_json"))
+    result_data = _safe_json_obj(run_row.get("result_json"))
+    _collect_media_refs_from_value(req_data, out=refs)
+    _collect_media_refs_from_value(result_data, out=refs)
+    for post in scheduled_posts or []:
+        _collect_media_refs_from_value(post, out=refs)
+    for job in async_jobs or []:
+        _collect_media_refs_from_value(job, out=refs)
+    return sorted(refs)
+
+
+async def _delete_media_refs_for_run(run_id: str, refs: List[str]) -> Dict[str, Any]:
+    deleted: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    errors: List[Dict[str, str]] = []
+    s3 = _s3_client()
+    for ref in sorted({str(r or "").strip() for r in refs if str(r or "").strip()}):
+        if not _is_cleanup_media_ref(ref, _RUN_CLEANUP_MEDIA_PREFIXES):
+            skipped.append({"object_key": ref, "reason": "not_cleanup_candidate"})
+            continue
+        try:
+            used_elsewhere = await asyncio.to_thread(
+                media_ref_used_by_other_runs,
+                media_ref=ref,
+                exclude_run_id=run_id,
+            )
+            if used_elsewhere:
+                skipped.append({"object_key": ref, "reason": "referenced_by_other_run"})
+                continue
+            exists = await asyncio.to_thread(_media_ref_exists, media_ref=ref, s3=s3)
+            if not exists:
+                skipped.append({"object_key": ref, "reason": "not_found"})
+                continue
+            await asyncio.to_thread(_delete_media_ref, media_ref=ref, s3=s3)
+            deleted.append(ref)
+        except Exception as exc:
+            errors.append({"object_key": ref, "error": _safe_error_detail(exc, "delete_failed")})
+    if deleted:
+        try:
+            await asyncio.to_thread(upload_meta_delete_many, deleted)
+        except Exception as exc:
+            errors.append({"object_key": "upload_metadata", "error": _safe_error_detail(exc, "metadata_delete_failed")})
+    return {"deleted_media": deleted, "skipped_media": skipped, "media_errors": errors}
+
+
+def _active_jobs_for_run(run_id: str, *, kinds: Optional[List[str]] = None) -> List[Dict[str, str]]:
+    safe_kinds = kinds or [_ASYNC_JOB_KIND_BURN, _ASYNC_JOB_KIND_TEASER, _ASYNC_JOB_KIND_ANALYZE]
+    active: List[Dict[str, str]] = []
+    try:
+        jobs = list_async_jobs_for_run(run_id=run_id, kinds=safe_kinds)
+    except Exception:
+        jobs = []
+    for job in jobs:
+        status = str(job.get("status") or "").lower()
+        if status in {"pending", "running"}:
+            active.append({
+                "kind": str(job.get("kind") or ""),
+                "job_id": str(job.get("job_id") or ""),
+                "status": status,
+            })
+    return active
+
+
+def _job_payload_matches_run_id(value: Any, run_id: str) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"run_id", "video_id"} and str(child or "") == run_id:
+                return True
+            if _job_payload_matches_run_id(child, run_id):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_job_payload_matches_run_id(child, run_id) for child in value)
+    return False
+
+
+def _drop_runtime_jobs_for_run(run_id: str, *, kinds: Optional[List[str]] = None) -> int:
+    safe_kinds = set(kinds or [_ASYNC_JOB_KIND_BURN, _ASYNC_JOB_KIND_TEASER, _ASYNC_JOB_KIND_DRIVE_UPLOAD, _ASYNC_JOB_KIND_DRIVE_IMPORT])
+    stores = {
+        _ASYNC_JOB_KIND_BURN: _burn_jobs,
+        _ASYNC_JOB_KIND_TEASER: _teaser_jobs,
+        _ASYNC_JOB_KIND_DRIVE_UPLOAD: _drive_upload_jobs,
+        _ASYNC_JOB_KIND_DRIVE_IMPORT: _drive_import_jobs,
+    }
+    dropped = 0
+    for kind, store in stores.items():
+        if kind not in safe_kinds:
+            continue
+        for job_id, payload in list(store.items()):
+            if not _job_payload_matches_run_id(payload, run_id):
+                continue
+            store.pop(job_id, None)
+            _burn_dequeue(job_id)
+            dropped += 1
+    return dropped
+
+
 def _google_drive_upload_path_sync(
     *,
     src_path: str,
@@ -1957,7 +3234,7 @@ def _declared_media_size_shortfall_check(*, meta: Dict[str, Any], actual_size: i
 
     ratio = actual_size / max(1, expected_payload_bytes)
     missing_bytes = expected_payload_bytes - actual_size
-    if ratio < 0.45 and missing_bytes > 512 * 1024 * 1024:
+    if ratio < 0.12 and missing_bytes > 512 * 1024 * 1024:
         return {
             "expected_payload_bytes": expected_payload_bytes,
             "actual_size": actual_size,
@@ -2233,6 +3510,111 @@ def _local_media_item_from_abs(abs_path: str) -> Dict[str, Any]:
         "storage_kind": "local",
         "storage_path": abs_path,
     }
+
+
+def _media_ref_signature(media_ref: str) -> tuple[str, Optional[str], int, float]:
+    """Stable cache signature for local media. Remote refs fall back to the ref only."""
+    if _is_local_media_ref(media_ref):
+        abs_path = _local_media_abs_path_from_ref(media_ref)
+        stat = os.stat(abs_path)
+        return (
+            f"{media_ref}|{int(stat.st_size or 0)}|{stat.st_mtime_ns}",
+            abs_path,
+            int(stat.st_size or 0),
+            float(stat.st_mtime or 0.0),
+        )
+    return (media_ref, None, 0, 0.0)
+
+
+def _probe_media_ref_metadata_cached(media_ref: str) -> Dict[str, Any]:
+    if not _is_valid_object_key(media_ref):
+        raise ValueError("invalid_object_key")
+    sig, abs_path, size_bytes, mtime = _media_ref_signature(media_ref)
+    cache_key = hashlib.sha1(sig.encode("utf-8")).hexdigest()
+    with _media_probe_cache_lock:
+        hit = _media_probe_cache.get(cache_key)
+        if hit:
+            return dict(hit)
+
+    if not abs_path:
+        # Avoid downloading multi-GB S3 objects just to decorate the file grid.
+        raise ValueError("metadata_available_for_local_media_only")
+    meta = _probe_metadata(abs_path)
+    out = {
+        **meta,
+        "object_key": media_ref,
+        "size_bytes": size_bytes,
+        "last_modified_ts": mtime,
+        "duration_clock": _format_media_clock(float(meta.get("duration_seconds") or 0.0)),
+    }
+    with _media_probe_cache_lock:
+        _media_probe_cache[cache_key] = dict(out)
+    return out
+
+
+def _media_manager_thumbnail_cache_ref(media_ref: str, *, width: int, seek_seconds: float) -> str:
+    sig, _, size_bytes, mtime = _media_ref_signature(media_ref)
+    payload = f"thumb-v2|{sig}|w{int(width)}|t{float(seek_seconds):.2f}|s{size_bytes}|m{mtime}"
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return _local_media_ref(f"thumbs/cache/{digest[:2]}/{digest}.jpg")
+
+
+def _media_manager_thumbnail_sync(media_ref: str, *, width: int = 480, seek_seconds: float = 8.0) -> Dict[str, Any]:
+    if not _is_valid_object_key(media_ref):
+        raise ValueError("invalid_object_key")
+    if not _is_local_media_ref(media_ref):
+        # Thumbnails for remote S3 objects would require downloading whole videos.
+        raise ValueError("thumbnail_available_for_local_media_only")
+    abs_path = _local_media_abs_path_from_ref(media_ref)
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(media_ref)
+
+    safe_w = max(220, min(int(width or 480), 960))
+    meta = _probe_media_ref_metadata_cached(media_ref)
+    duration = max(0.0, float(meta.get("duration_seconds") or 0.0))
+    if duration > 0:
+        safe_seek = max(0.1, min(float(seek_seconds or 8.0), max(0.1, duration - 0.2)))
+    else:
+        safe_seek = max(0.1, float(seek_seconds or 2.0))
+
+    thumb_ref = _media_manager_thumbnail_cache_ref(media_ref, width=safe_w, seek_seconds=safe_seek)
+    thumb_abs = _local_media_abs_path_from_ref(thumb_ref)
+    if os.path.exists(thumb_abs) and os.path.getsize(thumb_abs) > 1024:
+        return {"object_key": thumb_ref, "url": _build_local_media_url(thumb_ref), "metadata": meta}
+
+    os.makedirs(os.path.dirname(thumb_abs), exist_ok=True)
+
+    def _extract_at(seek: float) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-hide_banner", "-loglevel", "error",
+                "-ss", f"{seek:.3f}",
+                "-i", abs_path,
+                "-frames:v", "1",
+                "-vf", f"scale=min({safe_w}\\,iw):-2:flags=lanczos",
+                "-q:v", "5",
+                thumb_abs,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=25,
+        )
+
+    proc = _extract_at(safe_seek)
+    if proc.returncode != 0 or not os.path.exists(thumb_abs) or os.path.getsize(thumb_abs) <= 1024:
+        try:
+            if os.path.exists(thumb_abs):
+                os.remove(thumb_abs)
+        except Exception:
+            pass
+        proc = _extract_at(0.25)
+
+    if proc.returncode != 0 or not os.path.exists(thumb_abs) or os.path.getsize(thumb_abs) <= 1024:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(err or "thumbnail_extract_failed")
+
+    return {"object_key": thumb_ref, "url": _build_local_media_url(thumb_ref), "metadata": meta}
 
 
 def _list_local_media_items(prefix: str, max_keys: int = 100) -> List[Dict[str, Any]]:
@@ -2573,12 +3955,11 @@ _MEDIA_CORRUPTION_MARKERS = (
     "moov atom not found",
     "invalid data found when processing input",
     "input/output error",
-    "end of file",
     "truncated",
     "corrupt input packet",
     "missing picture",
-    "output file is empty",
-    "nothing was encoded",
+    # NOTE: "output file is empty" / "nothing was encoded" are intentionally excluded —
+    # they are false positives on VBR files where ffmpeg can't seek to a specific timestamp.
 )
 
 
@@ -2698,7 +4079,10 @@ def _quick_media_integrity_check(*, in_path: str, expected_duration: float) -> O
                 "timed_out": True,
             }
 
-        if proc.returncode != 0 or _looks_like_media_corruption(stderr_text):
+        has_corruption = _looks_like_media_corruption(stderr_text)
+        # returncode != 0 alone is not enough — VBR files often can't seek to a specific
+        # timestamp and ffmpeg exits non-zero with only "no filtered frames" noise.
+        if has_corruption:
             return {
                 "checkpoint_seconds": checkpoint,
                 "detail": _summarize_ffmpeg_stderr(stderr_text) or f"Falha ao validar trecho em {_format_media_clock(checkpoint)}.",
@@ -2789,46 +4173,106 @@ def _attempt_truncated_burn_recovery(
     }
 
 
-def _extract_audio_to_wav(*, in_path: str, out_path: str) -> None:
-    """Extrai áudio como WAV PCM 16kHz mono via pipe:1.
+def _extract_audio_to_wav(*, in_path: str, out_path: str, enhance_audio: bool = True, quality: str = "standard") -> None:
+    """Extrai áudio como WAV PCM mono via pipe:1.
+    quality="standard": 16kHz, lowpass=7800 (para modelos small/medium).
+    quality="premium":  24kHz, lowpass=11000 (para large-v3, preserva harmônicos).
     Usar pipe impede o ffmpeg de deletar o arquivo em caso de erro no decoder —
     problema comum com AAC não-conformes ('Reserved bit set', 'Number of bands exceeds limit').
     O ffmpeg escreve para stdout; nós redirecionamos para o arquivo, então mesmo que
     o ffmpeg saia com código de erro, o áudio já está no disco.
     """
-    cmd = [
+    is_premium = quality == "premium"
+    sample_rate = 24000 if is_premium else 16000
+    base_cmd = [
         "ffmpeg", "-y",
         "-err_detect", "ignore_err",
         "-fflags", "+discardcorrupt",
         "-i", in_path,
-        "-vn", "-ac", "1", "-ar", "16000",
-        "-c:a", "pcm_s16le",
-        "-f", "wav", "pipe:1",
+        "-vn", "-ac", "1", "-ar", str(sample_rate),
     ]
-    with open(out_path, "wb") as fout:
-        proc = subprocess.Popen(cmd, stdout=fout, stderr=subprocess.PIPE)
-        _, stderr_bytes = proc.communicate()
-    stderr = (stderr_bytes or b"").decode("utf-8", errors="replace").strip()
-    lowered = stderr.lower()
-    out_size = os.path.getsize(out_path) if os.path.exists(out_path) else 0
-    if out_size > 4096:
-        if proc.returncode != 0:
-            print(f"[transcribe] WAV pipe ok ({out_size}B), ignorando rc={proc.returncode}: {stderr[-200:]}", flush=True)
-        return
-    if "does not contain any stream" in lowered or "stream map 'a'" in lowered:
-        raise RuntimeError("missing_audio_stream")
-    print(f"[transcribe] WAV pipe erro fatal (rc={proc.returncode}):\n{stderr[-800:]}", flush=True)
-    raise RuntimeError(stderr[-600:] or "ffmpeg_failed")
+    if is_premium:
+        # Premium é otimizado para pornô BR em CPU: abre fala baixa sem esmagar
+        # gemidos/respiração em ruído branco. Ganho demais aqui aumenta alucinação.
+        adult_voice_filter = (
+            "highpass=f=70,"
+            "lowpass=f=11500,"
+            "afftdn=nf=-24,"
+            "dynaudnorm=f=150:g=10:p=0.86:m=8,"
+            "loudnorm=I=-17:TP=-1.5:LRA=9"
+        )
+    else:
+        adult_voice_filter = (
+            "highpass=f=65,"
+            "lowpass=f=7800,"
+            "afftdn=nf=-25,"
+            "dynaudnorm=f=180:g=18:p=0.92:m=10,"
+            "loudnorm=I=-18:TP=-1.5:LRA=9"
+        )
+
+    attempts: List[List[str]] = []
+    if enhance_audio:
+        attempts.append(base_cmd + ["-af", adult_voice_filter, "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"])
+    attempts.append(base_cmd + ["-c:a", "pcm_s16le", "-f", "wav", "pipe:1"])
+
+    last_stderr = ""
+    for idx, cmd in enumerate(attempts):
+        if os.path.exists(out_path):
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
+        with open(out_path, "wb") as fout:
+            proc = subprocess.Popen(cmd, stdout=fout, stderr=subprocess.PIPE)
+            _, stderr_bytes = proc.communicate()
+        stderr = (stderr_bytes or b"").decode("utf-8", errors="replace").strip()
+        last_stderr = stderr
+        lowered = stderr.lower()
+        out_size = os.path.getsize(out_path) if os.path.exists(out_path) else 0
+        if out_size > 4096:
+            if proc.returncode != 0:
+                print(f"[transcribe] WAV pipe ok ({out_size}B), ignorando rc={proc.returncode}: {stderr[-200:]}", flush=True)
+            if idx == 0 and enhance_audio:
+                print("[transcribe] audio enhance aplicado para fala baixa/adulta", flush=True)
+            return
+        if "does not contain any stream" in lowered or "stream map 'a'" in lowered:
+            raise RuntimeError("missing_audio_stream")
+        if idx == 0 and enhance_audio:
+            print(f"[transcribe] audio enhance falhou, tentando extração simples: {stderr[-200:]}", flush=True)
+
+    print(f"[transcribe] WAV pipe erro fatal:\n{last_stderr[-800:]}", flush=True)
+    raise RuntimeError(last_stderr[-600:] or "ffmpeg_failed")
 
 
-def _extract_audio_to_aac(*, in_path: str, out_path: str) -> None:
+def _preprocess_audio_for_porn_br_transcription(
+    *,
+    in_path: str,
+    out_path: str,
+    enhance_audio: bool = True,
+    premium: bool = True,
+) -> None:
+    """Pré-processa áudio para transcrição adulta PT-BR.
+
+    A meta é inteligibilidade, não "embelezamento": mono PCM, 24 kHz no premium,
+    leve redução de ruído e normalização moderada para fala baixa. Evitamos
+    compressão agressiva porque ela transforma gemido/respiração em falso texto.
+    """
+    _extract_audio_to_wav(
+        in_path=in_path,
+        out_path=out_path,
+        enhance_audio=enhance_audio,
+        quality="premium" if premium else "standard",
+    )
+
+
+def _extract_audio_to_aac(*, in_path: str, out_path: str, enhance_audio: bool = True) -> None:
     """Extrai áudio como AAC 32kbps para APIs (OpenAI/Groq, limite 25MB).
     Two-pass: primeiro extrai WAV via pipe (tolerante a erros no input AAC),
     depois re-encoda WAV→AAC (sempre funciona pois input é PCM limpo).
     """
     wav_tmp = out_path + ".wav"
     try:
-        _extract_audio_to_wav(in_path=in_path, out_path=wav_tmp)
+        _extract_audio_to_wav(in_path=in_path, out_path=wav_tmp, enhance_audio=enhance_audio)
         proc2 = subprocess.run(
             ["ffmpeg", "-y", "-i", wav_tmp,
              "-c:a", "aac", "-b:a", "32k", out_path],
@@ -2839,6 +4283,654 @@ def _extract_audio_to_aac(*, in_path: str, out_path: str) -> None:
     finally:
         if os.path.exists(wav_tmp):
             os.unlink(wav_tmp)
+
+
+def _assemblyai_language_code(lang: str) -> str:
+    v = _norm_lang_code(lang)
+    return {
+        "pt": "pt",
+        "en": "en_us",
+        "es": "es",
+        "fr": "fr",
+        "de": "de",
+        "it": "it",
+        "ja": "ja",
+        "zh": "zh",
+        "ko": "ko",
+    }.get(v, v)
+
+
+def _assemblyai_words_to_segments(words: List[Dict[str, Any]], *, min_confidence: float = 0.0) -> List[Dict[str, Any]]:
+    clean_words: List[Dict[str, Any]] = []
+    for raw in words or []:
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            confidence = float(raw.get("confidence") if raw.get("confidence") is not None else 1.0)
+        except Exception:
+            confidence = 1.0
+        if min_confidence > 0.0 and confidence < min_confidence:
+            continue
+        try:
+            start_ms = float(raw.get("start") or 0.0)
+            end_ms = float(raw.get("end") or start_ms)
+        except Exception:
+            continue
+        clean_words.append({
+            "text": text,
+            "start": max(0.0, start_ms / 1000.0),
+            "end": max(0.0, end_ms / 1000.0),
+            "confidence": confidence,
+        })
+
+    if not clean_words:
+        return []
+
+    segments: List[Dict[str, Any]] = []
+    current: List[Dict[str, Any]] = []
+
+    def flush_current() -> None:
+        nonlocal current
+        if not current:
+            return
+        text = " ".join(w["text"] for w in current).strip()
+        if text:
+            segments.append({
+                "start": float(current[0]["start"]),
+                "end": float(current[-1]["end"]),
+                "text": text,
+                "confidence": min(float(w.get("confidence", 1.0)) for w in current),
+            })
+        current = []
+
+    for word in clean_words:
+        if current:
+            gap = float(word["start"]) - float(current[-1]["end"])
+            duration = float(current[-1]["end"]) - float(current[0]["start"])
+            prev_text = str(current[-1].get("text") or "")
+            if gap > 0.9 or duration >= 7.5 or prev_text.endswith((".", "!", "?", "…")):
+                flush_current()
+        current.append(word)
+    flush_current()
+    return segments
+
+
+def _deepgram_language_code(lang: str) -> str:
+    v = _norm_lang_code(lang)
+    return {
+        "pt": "pt-BR",
+        "en": "en-US",
+        "es": "es",
+        "fr": "fr",
+        "de": "de",
+        "it": "it",
+        "ja": "ja",
+        "zh": "zh",
+    }.get(v, v)
+
+
+def _deepgram_words_to_segments(words: List[Dict[str, Any]], *, min_confidence: float = 0.0) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for raw in words or []:
+        text = str(raw.get("punctuated_word") or raw.get("word") or "").strip()
+        if not text:
+            continue
+        try:
+            confidence = float(raw.get("confidence") if raw.get("confidence") is not None else 1.0)
+        except Exception:
+            confidence = 1.0
+        if min_confidence > 0.0 and confidence < min_confidence:
+            folded = _fold_text(text)
+            # Mantém vocalizações/dirty talk comuns mesmo com confiança baixa:
+            # são exatamente os tokens que ASR costuma tratar como ruído.
+            if folded not in _PT_TRANSCRIPT_KEEP_WORDS and folded not in {"ai", "ah", "ahh", "hum", "hmm", "ui", "oi"}:
+                continue
+        try:
+            start = float(raw.get("start") or 0.0)
+            end = float(raw.get("end") or start)
+        except Exception:
+            continue
+        normalized.append({
+            "text": text,
+            "start": max(0.0, start),
+            "end": max(0.0, end),
+            "confidence": confidence,
+        })
+
+    if not normalized:
+        return []
+
+    segments: List[Dict[str, Any]] = []
+    current: List[Dict[str, Any]] = []
+
+    def flush_current() -> None:
+        nonlocal current
+        if not current:
+            return
+        text = " ".join(w["text"] for w in current).strip()
+        if text:
+            segments.append({
+                "start": float(current[0]["start"]),
+                "end": float(current[-1]["end"]),
+                "text": text,
+                "confidence": min(float(w.get("confidence", 1.0)) for w in current),
+            })
+        current = []
+
+    for word in normalized:
+        if current:
+            gap = float(word["start"]) - float(current[-1]["end"])
+            duration = float(current[-1]["end"]) - float(current[0]["start"])
+            text_len = len(" ".join(w["text"] for w in current))
+            prev_text = str(current[-1].get("text") or "")
+            if gap > 0.85 or duration >= 6.5 or text_len >= 54 or prev_text.endswith((".", "!", "?", "…")):
+                flush_current()
+        current.append(word)
+    flush_current()
+    return segments
+
+
+async def _transcribe_deepgram(audio_path: str, language: str = "", *, include_vocalizations: bool = False) -> Dict[str, Any]:
+    api_key = (
+        (settings_get(key="token:deepgram") or {}).get("value")
+        or os.environ.get("DEEPGRAM_API_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        raise RuntimeError("missing_deepgram_token")
+
+    lang_code = _deepgram_language_code(language)
+    # Nova-3 já suporta pt-BR e keyterm prompting; é o melhor default para
+    # legenda queimável porque devolve timestamps por palavra.
+    model = os.environ.get("DEEPGRAM_STT_MODEL", "nova-3").strip() or "nova-3"
+    params: List[tuple[str, str]] = [
+        ("model", model),
+        ("language", lang_code or "pt-BR"),
+        ("punctuate", "true"),
+        ("smart_format", "false"),
+        ("profanity_filter", "false"),
+        ("utterances", "true"),
+        ("filler_words", "true" if include_vocalizations else "false"),
+        ("detect_language", "false"),
+    ]
+    if include_vocalizations:
+        adult_terms = [
+            "ai", "ah", "ahh", "hum", "hmm", "ui", "isso", "vai", "mete",
+            "gostoso", "gostosa", "delicia", "tesao", "porra", "caralho",
+            "goza", "leite", "chupa", "buceta", "pau", "pica", "me enche de leite",
+            "goza pra mim", "que delicia", "que gostoso",
+        ]
+        if model.startswith("nova-3"):
+            for term in adult_terms:
+                params.append(("keyterm", term))
+        else:
+            for term in adult_terms:
+                params.append(("keywords", f"{term}:2"))
+
+    url = "https://api.deepgram.com/v1/listen"
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "audio/mp4",
+    }
+    timeout = httpx.Timeout(1800.0, connect=30.0, write=900.0, read=1800.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        with open(audio_path, "rb") as f:
+            response = await client.post(url, headers=headers, params=params, content=f.read())
+    if response.status_code >= 400:
+        detail = (response.text or "").strip()
+        try:
+            body = response.json()
+            detail = body.get("err_msg") or body.get("message") or detail
+        except Exception:
+            pass
+        raise RuntimeError(f"deepgram_failed:{response.status_code}:{detail[:500]}")
+
+    result = response.json() or {}
+    alt: Dict[str, Any] = {}
+    try:
+        channels = result.get("results", {}).get("channels") or []
+        if channels:
+            alternatives = channels[0].get("alternatives") or []
+            if alternatives:
+                alt = alternatives[0] or {}
+    except Exception:
+        alt = {}
+    transcript_text = str(alt.get("transcript") or "").strip()
+    words = alt.get("words") or []
+    segments = _deepgram_words_to_segments(words, min_confidence=0.0)
+    if not segments and transcript_text:
+        duration = float((result.get("metadata") or {}).get("duration") or 0.0)
+        segments = [{
+            "start": 0.0,
+            "end": duration,
+            "text": transcript_text,
+        }]
+    text = " ".join((s.get("text") or "").strip() for s in segments if (s.get("text") or "").strip()) or transcript_text
+    return {
+        "language": _norm_lang_code(language or "pt"),
+        "text": text,
+        "segments": segments,
+        "model": model,
+        "request_id": (result.get("metadata") or {}).get("request_id"),
+        "duration": (result.get("metadata") or {}).get("duration"),
+        "word_count_raw": len(words),
+        "word_count_kept": sum(len((s.get("text") or "").split()) for s in segments),
+    }
+
+
+async def _transcribe_assemblyai(audio_path: str, language: str = "", *, include_vocalizations: bool = False) -> Dict[str, Any]:
+    api_key = (
+        (settings_get(key="token:assemblyai") or {}).get("value")
+        or os.environ.get("ASSEMBLYAI_API_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        raise RuntimeError("missing_assemblyai_token")
+
+    base_url = os.environ.get("ASSEMBLYAI_BASE_URL", "https://api.assemblyai.com").rstrip("/")
+    headers = {"Authorization": api_key}
+    timeout = httpx.Timeout(1800.0, connect=30.0, write=600.0, read=1800.0)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+        upload = await client.post(
+            f"{base_url}/v2/upload",
+            headers={**headers, "Content-Type": "application/octet-stream"},
+            content=audio_bytes,
+        )
+        if upload.status_code >= 400:
+            raise RuntimeError(f"assemblyai_upload_failed:{upload.status_code}:{(upload.text or '')[:300]}")
+        upload_url = (upload.json() or {}).get("upload_url")
+        if not upload_url:
+            raise RuntimeError("assemblyai_upload_missing_url")
+
+        payload: Dict[str, Any] = {
+            "audio_url": upload_url,
+            "speech_models": ["universal-3-pro", "universal-2"],
+            "filter_profanity": False,
+            "punctuate": True,
+            "format_text": True,
+            "disfluencies": bool(include_vocalizations),
+            # Não use limite alto aqui: AssemblyAI aborta o job inteiro quando
+            # a fala global do áudio fica abaixo do threshold. Para vídeos com
+            # fala baixa, filtramos depois por confiança das palavras.
+            "speech_threshold": 0.20,
+        }
+        lang_code = _assemblyai_language_code(language)
+        if lang_code:
+            payload["language_code"] = lang_code
+        else:
+            payload["language_detection"] = True
+            payload["language_confidence_threshold"] = 0.45
+        if include_vocalizations:
+            pt_terms = [
+                "ah", "ahh", "ai", "hum", "hmm", "uh", "uhm",
+                "goza", "gozei", "gostoso", "delicia", "porra",
+            ]
+            en_terms = ["ah", "ahh", "hmm", "uh", "uhm", "fuck", "eat it", "harder", "yes"]
+            es_terms = ["ah", "ay", "hum", "delicia", "rico", "duro", "ven"]
+            if lang_code == "pt":
+                payload["keyterms_prompt"] = pt_terms
+            elif lang_code == "en_us":
+                payload["keyterms_prompt"] = en_terms
+            elif lang_code == "es":
+                payload["keyterms_prompt"] = es_terms
+            else:
+                payload["keyterms_prompt"] = pt_terms + en_terms[:5] + es_terms[:4]
+
+        submit = await client.post(f"{base_url}/v2/transcript", headers=headers, json=payload)
+        if submit.status_code >= 400:
+            raise RuntimeError(f"assemblyai_submit_failed:{submit.status_code}:{(submit.text or '')[:300]}")
+        transcript = submit.json() or {}
+        transcript_id = transcript.get("id")
+        if not transcript_id:
+            raise RuntimeError("assemblyai_missing_transcript_id")
+
+        deadline = time.time() + 1800
+        while True:
+            status = str(transcript.get("status") or "").lower()
+            if status == "completed":
+                break
+            if status == "error":
+                raise RuntimeError(f"assemblyai_transcript_error:{transcript.get('error') or 'unknown_error'}")
+            if time.time() > deadline:
+                raise RuntimeError("assemblyai_timeout")
+            await asyncio.sleep(3)
+            poll = await client.get(f"{base_url}/v2/transcript/{transcript_id}", headers=headers)
+            if poll.status_code >= 400:
+                raise RuntimeError(f"assemblyai_poll_failed:{poll.status_code}:{(poll.text or '')[:300]}")
+            transcript = poll.json() or {}
+
+    words = transcript.get("words") or []
+    segments = _assemblyai_words_to_segments(words)
+    if not segments and transcript.get("text"):
+        segments = [{
+            "start": 0.0,
+            "end": float(transcript.get("audio_duration") or 0.0),
+            "text": str(transcript.get("text") or "").strip(),
+        }]
+    text = " ".join((s.get("text") or "").strip() for s in segments if (s.get("text") or "").strip())
+    return {
+        "language": _norm_lang_code(transcript.get("language_code") or language or "auto"),
+        "text": text,
+        "segments": segments,
+        "transcript_id": transcript.get("id"),
+        "language_confidence": transcript.get("language_confidence"),
+        "speech_model": transcript.get("speech_model") or "universal-3-pro",
+        "word_count_raw": len(words),
+        "word_count_kept": sum(len((s.get("text") or "").split()) for s in segments),
+    }
+
+
+def _plain_text_to_timed_segments(
+    text: str,
+    *,
+    start_offset: float = 0.0,
+    duration_seconds: float = 0.0,
+    chunk_words: int = 10,
+    timing_source: str = "synthetic_plain_text",
+    spread_to_duration: bool = False,
+) -> List[Dict[str, Any]]:
+    """Cria segmentos estimados quando o provedor retorna apenas texto puro."""
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    if not clean:
+        return []
+    words = clean.split()
+    if not words:
+        return []
+    duration = max(float(duration_seconds or 0.0), len(words) / 2.4)
+    word_chunks = [
+        " ".join(words[idx:idx + max(4, chunk_words)]).strip()
+        for idx in range(0, len(words), max(4, chunk_words))
+    ]
+    word_chunks = [chunk for chunk in word_chunks if chunk]
+    segments: List[Dict[str, Any]] = []
+
+    if spread_to_duration and duration_seconds and len(word_chunks) > 1:
+        # OpenRouter currently returns plain text without per-word timing. The
+        # old fallback compressed all text into the first seconds of each
+        # 5-minute chunk. For burn, spreading cues across the full chunk is much
+        # safer: estimated, but not visually frozen/desynced by minutes.
+        window = max(1.0, float(duration_seconds or duration))
+        cue_duration = max(2.2, min(7.5, (window / max(len(word_chunks), 1)) * 0.45))
+        usable = max(0.0, window - cue_duration)
+        step = usable / max(len(word_chunks) - 1, 1)
+        for pos, chunk in enumerate(word_chunks):
+            start = start_offset + (pos * step)
+            end = min(start_offset + window, start + cue_duration)
+            item = {"start": start, "end": max(end, start + 1.2), "text": chunk}
+            if timing_source:
+                item["timing_source"] = timing_source
+            segments.append(item)
+        return segments
+
+    words_per_sec = max(1.35, min(3.2, len(words) / duration))
+    cursor = 0
+    for chunk in word_chunks:
+        chunk_len = len(chunk.split())
+        start = start_offset + (cursor / words_per_sec)
+        end = start_offset + ((cursor + chunk_len) / words_per_sec)
+        cursor += chunk_len
+        if end <= start:
+            end = start + max(1.2, chunk_len / 2.4)
+        item = {"start": start, "end": end, "text": chunk}
+        if timing_source:
+            item["timing_source"] = timing_source
+        segments.append(item)
+    return segments
+
+
+def _split_audio_for_openrouter_stt(audio_path: str, chunk_dir: str, *, segment_time: int = 300) -> List[str]:
+    pattern = os.path.join(chunk_dir, "openrouter_stt_%03d.wav")
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", audio_path,
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-c:a", "pcm_s16le",
+            "-f", "segment",
+            "-segment_time", str(max(60, int(segment_time))),
+            "-reset_timestamps", "1",
+            pattern,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    chunks = sorted(
+        os.path.join(chunk_dir, name)
+        for name in os.listdir(chunk_dir)
+        if name.startswith("openrouter_stt_") and name.endswith(".wav")
+    )
+    chunks = [p for p in chunks if os.path.getsize(p) > 512]
+    if proc.returncode != 0 or not chunks:
+        detail = (proc.stderr or "").strip()[-600:] or "openrouter_stt_split_failed"
+        print(f"[transcribe] OpenRouter STT split fallback: {detail}", flush=True)
+        return [audio_path]
+    return chunks
+
+
+async def _openrouter_stt_request(
+    client: httpx.AsyncClient,
+    *,
+    api_key: str,
+    audio_path: str,
+    model: str,
+    language: str = "",
+) -> Dict[str, Any]:
+    with open(audio_path, "rb") as f:
+        audio_b64 = base64.b64encode(f.read()).decode("ascii")
+    ext = os.path.splitext(audio_path)[1].lower().lstrip(".") or "wav"
+    audio_format = "wav" if ext not in {"mp3", "m4a", "wav", "webm", "ogg", "flac"} else ext
+    payload: Dict[str, Any] = {
+        "model": model,
+        "temperature": 0,
+        "input_audio": {
+            "data": audio_b64,
+            "format": audio_format,
+        },
+    }
+    if language:
+        payload["language"] = language
+        if _norm_lang_code(language) == "pt":
+            payload["prompt"] = PORN_BR_WHISPER_INITIAL_PROMPT
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://metaporn.com.br/",
+        "X-Title": "MetaPorn Admin",
+    }
+    response = await client.post(
+        "https://openrouter.ai/api/v1/audio/transcriptions",
+        headers=headers,
+        json=payload,
+    )
+    if response.status_code >= 400:
+        detail = (response.text or "").strip()
+        try:
+            body = response.json()
+            detail = body.get("error", {}).get("message") or body.get("message") or detail
+        except Exception:
+            pass
+        raise RuntimeError(f"openrouter_stt_failed:{response.status_code}:{detail[:500]}")
+    return response.json() or {}
+
+
+async def _transcribe_openrouter_stt(
+    audio_path: str,
+    language: str = "",
+    *,
+    duration_seconds: float = 0.0,
+) -> Dict[str, Any]:
+    api_key = (
+        (settings_get(key="token:openrouter") or {}).get("value")
+        or os.environ.get("OPENROUTER_API_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        raise RuntimeError("missing_openrouter_token")
+    model = os.environ.get("OPENROUTER_STT_MODEL", "openai/whisper-large-v3").strip() or "openai/whisper-large-v3"
+    total_duration = float(duration_seconds or 0.0)
+    if total_duration <= 0:
+        try:
+            total_duration = float((_probe_metadata(audio_path) or {}).get("duration_seconds") or 0.0)
+        except Exception:
+            total_duration = 0.0
+
+    with tempfile.TemporaryDirectory(prefix="openrouter-stt-", dir=_preferred_tmpdir_root("transcribe")) as chunk_dir:
+        chunk_paths = [audio_path]
+        if total_duration > 420 or os.path.getsize(audio_path) > 16 * 1024 * 1024:
+            try:
+                openrouter_chunk_seconds = int(os.environ.get("OPENROUTER_STT_CHUNK_SECONDS", "120") or "120")
+            except Exception:
+                openrouter_chunk_seconds = 120
+            chunk_paths = _split_audio_for_openrouter_stt(
+                audio_path,
+                chunk_dir,
+                segment_time=max(60, min(openrouter_chunk_seconds, 300)),
+            )
+
+        timeout = httpx.Timeout(240.0, connect=20.0, write=180.0, read=240.0)
+        segments: List[Dict[str, Any]] = []
+        texts: List[str] = []
+        offset = 0.0
+        attempts: List[Dict[str, Any]] = []
+        def _append_text_segments(chunk_text: str, *, base_offset: float, chunk_duration: float) -> None:
+            clean_text = str(chunk_text or "").strip()
+            if not clean_text:
+                return
+            texts.append(clean_text)
+            segments.extend(_plain_text_to_timed_segments(
+                clean_text,
+                start_offset=base_offset,
+                duration_seconds=chunk_duration,
+                timing_source="synthetic_openrouter_chunk",
+                spread_to_duration=True,
+            ))
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async def _retry_openrouter_subchunks(chunk_path: str, *, base_offset: float, chunk_duration: float, label: str) -> bool:
+                retry_dir = os.path.join(chunk_dir, f"retry_{len(attempts)}")
+                os.makedirs(retry_dir, exist_ok=True)
+                retry_paths = _split_audio_for_openrouter_stt(
+                    chunk_path,
+                    retry_dir,
+                    segment_time=60,
+                )
+                if not retry_paths or (len(retry_paths) == 1 and os.path.abspath(retry_paths[0]) == os.path.abspath(chunk_path)):
+                    return False
+                ok_any = False
+                retry_offset = base_offset
+                for idx, retry_path in enumerate(retry_paths):
+                    try:
+                        retry_probe = await asyncio.to_thread(_probe_metadata, retry_path)
+                        retry_duration = float(retry_probe.get("duration_seconds") or 0.0)
+                    except Exception:
+                        retry_duration = min(60.0, max(1.0, chunk_duration))
+                    try:
+                        retry_result = await _openrouter_stt_request(
+                            client,
+                            api_key=api_key,
+                            audio_path=retry_path,
+                            model=model,
+                            language=language,
+                        )
+                        retry_text = str(retry_result.get("text") or "").strip()
+                        attempts.append({
+                            "status": "ok" if retry_text else "empty",
+                            "chars": len(retry_text),
+                            "duration": retry_duration,
+                            "offset": retry_offset,
+                            "label": f"{label}.retry{idx}",
+                        })
+                        if retry_text:
+                            _append_text_segments(retry_text, base_offset=retry_offset, chunk_duration=retry_duration)
+                            ok_any = True
+                    except Exception as exc:
+                        attempts.append({
+                            "status": "error",
+                            "detail": _safe_error_detail(exc, "openrouter_stt_failed")[:240],
+                            "duration": retry_duration,
+                            "offset": retry_offset,
+                            "label": f"{label}.retry{idx}",
+                        })
+                        print(f"[transcribe] openrouter stt retry chunk failed: {exc}", flush=True)
+                    retry_offset += max(0.0, retry_duration)
+                return ok_any
+
+            for idx, chunk_path in enumerate(chunk_paths):
+                try:
+                    chunk_probe = await asyncio.to_thread(_probe_metadata, chunk_path)
+                    chunk_duration = float(chunk_probe.get("duration_seconds") or 0.0)
+                except Exception:
+                    chunk_duration = total_duration if len(chunk_paths) == 1 else 300.0
+                chunk_label = f"chunk{idx}"
+                try:
+                    result = await _openrouter_stt_request(
+                        client,
+                        api_key=api_key,
+                        audio_path=chunk_path,
+                        model=model,
+                        language=language,
+                    )
+                    chunk_text = str(result.get("text") or "").strip()
+                    attempts.append({
+                        "status": "ok" if chunk_text else "empty",
+                        "chars": len(chunk_text),
+                        "duration": chunk_duration,
+                        "offset": offset,
+                        "label": chunk_label,
+                    })
+                    if chunk_text:
+                        _append_text_segments(chunk_text, base_offset=offset, chunk_duration=chunk_duration)
+                    elif chunk_duration >= 70.0:
+                        await _retry_openrouter_subchunks(
+                            chunk_path,
+                            base_offset=offset,
+                            chunk_duration=chunk_duration,
+                            label=chunk_label,
+                        )
+                except Exception as exc:
+                    attempts.append({
+                        "status": "error",
+                        "detail": _safe_error_detail(exc, "openrouter_stt_failed")[:240],
+                        "duration": chunk_duration,
+                        "offset": offset,
+                        "label": chunk_label,
+                    })
+                    print(f"[transcribe] openrouter stt chunk failed: {exc}", flush=True)
+                    if chunk_duration >= 70.0:
+                        await _retry_openrouter_subchunks(
+                            chunk_path,
+                            base_offset=offset,
+                            chunk_duration=chunk_duration,
+                            label=chunk_label,
+                        )
+                offset += max(0.0, chunk_duration)
+
+    text = " ".join(t for t in texts if t).strip()
+    if not text:
+        details = "; ".join(str(a.get("detail") or a.get("status")) for a in attempts[-3:])
+        raise RuntimeError(f"openrouter_stt_empty:{details or 'empty'}")
+    return {
+        "language": language or "auto",
+        "text": text,
+        "segments": segments or _plain_text_to_timed_segments(text, duration_seconds=total_duration),
+        "model": model,
+        "chunks": len(attempts),
+        "chunk_fail_count": sum(1 for a in attempts if a.get("status") == "error"),
+        "chunk_empty_count": sum(1 for a in attempts if a.get("status") == "empty"),
+        "attempts": attempts,
+        "timing_quality": "synthetic_spread_estimated",
+        "burn_safe": True,
+        "timing_warning": (
+            "OpenRouter STT retornou texto sem timestamps reais; os tempos foram reespalhados pelo bloco. "
+            "É seguro para queima visual, mas não é alinhamento palavra-a-palavra."
+        ),
+    }
 
 
 def _detect_scene_timestamps(in_path: str, threshold: float, duration: float, quick: bool = False) -> List[float]:
@@ -3128,6 +5220,45 @@ def _format_srt(segments: List[Dict[str, Any]]) -> str:
         end = _format_srt_timestamp(s.get("end", 0.0))
         text = (s.get("text") or "").strip()
         lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+    return "\n".join(lines)
+
+
+def _format_srt_premium(segments: List[Dict[str, Any]]) -> str:
+    """SRT premium: merge segments <1.5s, capitalize sentences, smart line breaks."""
+    if not segments:
+        return ""
+
+    merged: List[Dict[str, Any]] = []
+    for s in segments:
+        text = (s.get("text") or "").strip()
+        if not text:
+            continue
+        end = s.get("end", 0.0)
+        start = s.get("start", 0.0)
+        dur = end - start
+        if merged and dur < 1.5:
+            prev = merged[-1]
+            prev["end"] = max(prev["end"], end)
+            gap = start - prev["end"]
+            if gap < 0.5:
+                prev["text"] += " " + text
+                continue
+        merged.append({"start": start, "end": end, "text": text})
+
+    lines = []
+    for i, s in enumerate(merged, start=1):
+        start = _format_srt_timestamp(s["start"])
+        end = _format_srt_timestamp(s["end"])
+        raw = s["text"]
+
+        raw = raw[0].upper() + raw[1:] if raw else raw
+
+        if len(raw) > 40:
+            mid = raw.rfind(" ", 0, 40)
+            if mid > 20:
+                raw = raw[:mid] + "\n" + raw[mid + 1:]
+
+        lines.append(f"{i}\n{start} --> {end}\n{raw}\n")
     return "\n".join(lines)
 
 
@@ -4054,6 +6185,99 @@ async def run_wizard_state_set(run_id: str, request: Request):
     return {"ok": True}
 
 
+@app.delete("/runs/{run_id}/creation")
+async def run_creation_delete(run_id: str, request: Request):
+    """Remove somente os artefatos e o estado da aba Criação deste run."""
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    row = get_run(run_id)
+    if not row:
+        return JSONResponse({"error": "run_not_found"}, status_code=404)
+
+    active = _active_jobs_for_run(run_id, kinds=[_ASYNC_JOB_KIND_BURN, _ASYNC_JOB_KIND_TEASER])
+    if active:
+        return JSONResponse(
+            {
+                "error": "run_has_active_jobs",
+                "detail": "Há processamento de criação em andamento. Cancele ou aguarde terminar antes de excluir.",
+                "active_jobs": active,
+            },
+            status_code=409,
+        )
+
+    req_data = _safe_json_obj(row.get("request_json"))
+    media_refs = _collect_creation_media_refs(req_data)
+    media_result = await _delete_media_refs_for_run(run_id, media_refs)
+    update_run_request_field(run_id=run_id, field="wizard_state", value={})
+    deleted_jobs = delete_async_jobs_for_run(
+        run_id=run_id,
+        kinds=[_ASYNC_JOB_KIND_BURN, _ASYNC_JOB_KIND_TEASER],
+    )
+    dropped_runtime_jobs = _drop_runtime_jobs_for_run(
+        run_id,
+        kinds=[_ASYNC_JOB_KIND_BURN, _ASYNC_JOB_KIND_TEASER],
+    )
+    deleted_posts = delete_scheduled_posts_for_run(run_id)
+    return JSONResponse({
+        "ok": True,
+        "run_id": run_id,
+        "deleted_jobs": deleted_jobs,
+        "dropped_runtime_jobs": dropped_runtime_jobs,
+        "deleted_scheduled_posts": deleted_posts,
+        **media_result,
+    })
+
+
+@app.delete("/runs/{run_id}")
+async def runs_delete(run_id: str, request: Request, delete_media: bool = True):
+    """Delete o run e, por padrão, os arquivos ligados só a ele."""
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    row = get_run(run_id)
+    if not row:
+        return JSONResponse({"error": "run_not_found"}, status_code=404)
+
+    active = _active_jobs_for_run(run_id)
+    if active:
+        return JSONResponse(
+            {
+                "error": "run_has_active_jobs",
+                "detail": "Há processamento em andamento para este run. Cancele ou aguarde terminar antes de excluir.",
+                "active_jobs": active,
+            },
+            status_code=409,
+        )
+
+    scheduled_posts = list_scheduled_posts_for_run(run_id)
+    async_jobs = list_async_jobs_for_run(run_id=run_id)
+    media_result: Dict[str, Any] = {"deleted_media": [], "skipped_media": [], "media_errors": []}
+    if delete_media:
+        refs = _collect_run_media_refs(
+            run_row=row,
+            scheduled_posts=scheduled_posts,
+            async_jobs=async_jobs,
+        )
+        media_result = await _delete_media_refs_for_run(run_id, refs)
+
+    deleted_posts = delete_scheduled_posts_for_run(run_id)
+    deleted_jobs = delete_async_jobs_for_run(run_id=run_id)
+    dropped_runtime_jobs = _drop_runtime_jobs_for_run(run_id)
+    ok = delete_run(run_id)
+    if not ok:
+        return JSONResponse({"error": "run_not_found"}, status_code=404)
+    return JSONResponse({
+        "ok": True,
+        "run_id": run_id,
+        "deleted_run": True,
+        "deleted_scheduled_posts": deleted_posts,
+        "deleted_jobs": deleted_jobs,
+        "dropped_runtime_jobs": dropped_runtime_jobs,
+        **media_result,
+    })
+
+
 @app.post("/api/thumbnail/highres")
 async def thumbnail_highres(request: Request):
     """Extract one high-res frame from source video based on selected screenshot index."""
@@ -4210,13 +6434,21 @@ async def thumbnail_highres(request: Request):
                         base_label = f"lb{idx}"
                         logo_label = f"lg{idx}"
                         out_label = f"vlogo{idx}"
-                        scale_ratio = max(0.05, min(float(spec.get("scale_pct", 20.0)) / 100.0, 1.0))
+                        scale_boost = max(1.0, min(float(spec.get("scale_boost", 1.0) or 1.0), 1.6))
+                        scale_ratio = max(0.05, min((float(spec.get("scale_pct", 20.0)) / 100.0) * scale_boost, 1.0))
+                        height_scale = max(1.0, min(float(spec.get("height_scale", 1.0) or 1.0), 1.6))
                         alpha_ratio = max(0.05, min(float(spec.get("opacity", 85.0)) / 100.0, 1.0))
-                        parts.append(
-                            f"[{input_idx}:v]{current_label}scale2ref=w=main_w*{scale_ratio:.4f}:h=-1:flags=lanczos"
-                            f"[{logo_scaled_label}][{base_label}]"
+                        _append_logo_aspect_locked_scale(
+                            parts,
+                            input_idx=input_idx,
+                            base_ref=current_label,
+                            logo_scaled_label=logo_scaled_label,
+                            base_label=base_label,
+                            scale_ratio=scale_ratio,
+                            tag=f"preview_logo_{idx}",
+                            height_scale=height_scale,
                         )
-                        chain = f"[{logo_scaled_label}]format=rgba"
+                        chain = f"[{logo_scaled_label}]format=rgba,setsar=1"
                         if bool(spec.get("remove_bg")):
                             col = str(spec.get("bg_key_color") or "#ffffff").replace("#", "")
                             sim = max(0.01, min(float(spec.get("bg_similarity", 0.18)), 0.60))
@@ -4386,7 +6618,10 @@ async def _burn_subtitles_worker(
 
         if caller_object_key:
             object_key = caller_object_key
-            cleanup_temp = True
+            # Caller-supplied refs can be originals, burned videos, or teasers.
+            # Never delete those after a burn. Only clean explicit temporary
+            # media refs created under _tmp.
+            cleanup_temp = _media_ref_has_prefix(object_key, "_tmp")
         else:
             # Try video_object_key stored directly in the run (direct uploads)
             stored_key = (req_data.get("video_object_key") or "").strip()
@@ -4433,6 +6668,8 @@ async def _burn_subtitles_worker(
             # Aplica delay/avanço nos timestamps se solicitado
             if sub_delay_secs:
                 srt_content = _shift_srt(srt_content, sub_delay_secs)
+            if not skip_subtitles and srt_content:
+                srt_content = _wrap_srt_for_burn(srt_content)
 
             with open(srt_path, "w", encoding="utf-8") as f:
                 f.write(srt_content)
@@ -4449,6 +6686,23 @@ async def _burn_subtitles_worker(
                 duration_secs = float(fp.stdout.strip())
             except Exception:
                 duration_secs = 0.0
+
+            try:
+                fp_sar = await asyncio.to_thread(
+                    subprocess.run,
+                    ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=sample_aspect_ratio",
+                     "-of", "default=noprint_wrappers=1:nokey=1", in_path],
+                    capture_output=True, text=True, timeout=15,
+                )
+                raw_sar = fp_sar.stdout.strip()
+                if raw_sar and ":" in raw_sar:
+                    num, den = raw_sar.split(":")
+                    video_sar = float(num) / float(den) if float(den) != 0 else 1.0
+                else:
+                    video_sar = 1.0
+            except Exception:
+                video_sar = 1.0
 
             preflight_issue = None
             effective_output_crf = output_crf
@@ -4495,7 +6749,7 @@ async def _burn_subtitles_worker(
                     "black":  "&H00000000",
                 }
                 primary_colour = _color_map.get((font_color or "white").lower(), "&H00FFFFFF")
-                safe_font_size = max(10, min(int(font_size or 22), 72))
+                safe_font_size = max(6, min(int(font_size or 22), 72))
                 safe_crf = max(18, min(int(effective_output_crf or 26), 35))
                 safe_max_h = max(0, _int_with_default(max_height, 1080))
                 safe_preset = str(effective_x264_preset or "ultrafast").strip().lower()
@@ -4523,7 +6777,6 @@ async def _burn_subtitles_worker(
                     scale_filter = None  # sem escala, resolução original
 
                 if logo_specs:
-                    sub_filter = f"subtitles={srt_path}:charenc=utf-8:force_style='{sub_style}'"
                     parts: List[str] = []
                     if scale_filter:
                         parts.append(f"[0:v]{scale_filter}[vbase]")
@@ -4531,19 +6784,35 @@ async def _burn_subtitles_worker(
                     else:
                         current_label = "[0:v]"
 
+                    # Subtitles FIRST so logo (overlaid next) sits on top at its
+                    # original position and never gets pushed out of place.
+                    if not skip_subtitles:
+                        sub_filter = f"subtitles={srt_path}:charenc=utf-8:force_style='{sub_style}'"
+                        parts.append(f"{current_label}{sub_filter}[vsub]")
+                        current_label = "[vsub]"
+
                     for idx, spec in enumerate(logo_specs):
                         input_idx = idx + 1
                         logo_scaled_label = f"lgs{idx}"
                         base_label = f"lb{idx}"
                         logo_label = f"lg{idx}"
                         out_label = f"vlogo{idx}"
-                        scale_ratio = max(0.05, min(float(spec.get("scale_pct", 20.0)) / 100.0, 1.0))
+                        scale_boost = max(1.0, min(float(spec.get("scale_boost", 1.0) or 1.0), 1.6))
+                        scale_ratio = max(0.05, min((float(spec.get("scale_pct", 20.0)) / 100.0) * scale_boost, 1.0))
+                        height_scale = max(1.0, min(float(spec.get("height_scale", 1.0) or 1.0), 1.6))
                         alpha_ratio = max(0.05, min(float(spec.get("opacity", 85.0)) / 100.0, 1.0))
-                        parts.append(
-                            f"[{input_idx}:v]{current_label}scale2ref=w=main_w*{scale_ratio:.4f}:h=-1:flags=lanczos"
-                            f"[{logo_scaled_label}][{base_label}]"
+                        _append_logo_aspect_locked_scale(
+                            parts,
+                            input_idx=input_idx,
+                            base_ref=current_label,
+                            logo_scaled_label=logo_scaled_label,
+                            base_label=base_label,
+                            scale_ratio=scale_ratio,
+                            tag=f"burn_logo_{idx}",
+                            height_scale=height_scale,
+                            video_sar=video_sar,
                         )
-                        chain = f"[{logo_scaled_label}]format=rgba"
+                        chain = f"[{logo_scaled_label}]format=rgba,setsar=1"
                         if bool(spec.get("remove_bg")):
                             col = str(spec.get("bg_key_color") or "#ffffff").replace("#", "")
                             sim = max(0.01, min(float(spec.get("bg_similarity", 0.18)), 0.60))
@@ -4558,10 +6827,7 @@ async def _burn_subtitles_worker(
                         )
                         current_label = f"[{out_label}]"
 
-                    if skip_subtitles:
-                        parts.append(f"{current_label}format=yuv420p[out]")
-                    else:
-                        parts.append(f"{current_label}{sub_filter},format=yuv420p[out]")
+                    parts.append(f"{current_label}format=yuv420p[out]")
                     fcomplex = ";".join(parts)
                     logo_input_args: List[str] = []
                     for spec in logo_specs:
@@ -4630,9 +6896,9 @@ async def _burn_subtitles_worker(
                                 parts = kv.split("=", 1)[1].split(":")
                                 secs = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
                                 pct = min(99, int(secs / duration_secs * 100))
-                                _burn_jobs[job_id]["detail"] = f"Processando ffmpeg… {pct}%"
-                                if pct == 99 or pct >= (last_persisted_pct + 5):
-                                    _burn_job_patch(job_id, {"detail": f"Processando ffmpeg… {pct}%"})
+                                if pct >= (last_persisted_pct + 3):
+                                    _burn_jobs[job_id]["detail"] = f"Processando ffmpeg… {pct}%"
+                                    _burn_job_patch(job_id, {"detail": f"Processando ffmpeg… {pct}%", "progress_pct": pct})
                                     last_persisted_pct = pct
                             except Exception:
                                 pass
@@ -4643,6 +6909,7 @@ async def _burn_subtitles_worker(
                     raise
                 finally:
                     _burn_set_proc(job_id, None)
+                _burn_job_patch(job_id, {"detail": "Salvando vídeo queimado…", "progress_pct": 99})
                 try:
                     with open(stderr_path, "rb") as ferr:
                         stderr_text = ferr.read().decode("utf-8", errors="replace")
@@ -4735,7 +7002,7 @@ async def _burn_subtitles_worker(
             filename = f"legendado_{run_id[:8]}.mp4"
             effective_filename = output_filename or filename
             effective_prefix = output_prefix or f"burns/{run_id[:8]}"
-            _burn_job_patch(job_id, {"detail": "Salvando vídeo queimado…"})
+            _burn_job_patch(job_id, {"detail": "Salvando vídeo queimado…", "progress_pct": 99})
             try:
                 stored = await asyncio.to_thread(
                     _store_local_path,
@@ -4747,6 +7014,7 @@ async def _burn_subtitles_worker(
                 result_key = str(stored.get("object_key") or "")
                 done_payload = {
                     "status": "done",
+                    "progress_pct": 100,
                     "video_url": stored.get("public_url"),
                     "filename": effective_filename,
                     "object_key": result_key,
@@ -4852,27 +7120,34 @@ async def burn_subtitles(request: Request):
     body_logo_profile_id = str(body.get("logo_profile_id") or "").strip()
     body_logo_profile_name = str(body.get("logo_profile_name") or "").strip()
     body_logo_profile_layout_linked = _coerce_optional_bool(body.get("logo_profile_layout_linked"))
+    body_has_logo_layout_payload = _has_logo_layout_payload(body)
 
     r = get_run(run_id)
     if not r:
         return JSONResponse({"error": "run_not_found"}, status_code=404)
+    transcript_meta: Dict[str, Any] = {}
     try:
         req_data = json.loads(r["request_json"]) if isinstance(r["request_json"], str) else (r.get("request_json") or {})
+        transcript_meta = req_data.get("transcript") or {}
+        if not isinstance(transcript_meta, dict):
+            transcript_meta = {}
         wizard_state = _safe_json_obj(req_data.get("wizard_state"))
         effective_logo_profile_id = body_logo_profile_id or str(wizard_state.get("logo_profile_id") or "").strip()
         effective_logo_profile_name = body_logo_profile_name or str(wizard_state.get("logo_profile_name") or "").strip()
         effective_logo_profile_layout_linked = body_logo_profile_layout_linked
         if effective_logo_profile_layout_linked is None:
             effective_logo_profile_layout_linked = _coerce_optional_bool(wizard_state.get("logo_profile_layout_linked"))
-        if effective_logo_profile_layout_linked is None and (effective_logo_profile_id or effective_logo_profile_name):
+        has_logo_profile_ref = bool(effective_logo_profile_id or effective_logo_profile_name)
+        if effective_logo_profile_layout_linked is None and has_logo_profile_ref:
             effective_logo_profile_layout_linked = True
-        if effective_logo_profile_layout_linked:
-            linked_profile = _find_logo_profile(
-                profile_id=effective_logo_profile_id,
-                company_name=effective_logo_profile_name,
-            )
-            if linked_profile:
+        linked_profile = _find_logo_profile(
+            profile_id=effective_logo_profile_id,
+            company_name=effective_logo_profile_name,
+        ) if has_logo_profile_ref else None
+        if linked_profile:
                 def _layout_differs() -> bool:
+                    if not body_has_logo_layout_payload:
+                        return False
                     try:
                         return (
                             abs(float(logo_x) - float(linked_profile.get("logo_x") or 0.0)) > 0.05
@@ -4889,7 +7164,7 @@ async def burn_subtitles(request: Request):
                     logo_y = max(0, min(int(linked_profile.get("logo_y") or logo_y), 100))
                     logo_scale_pct = max(5.0, min(float(linked_profile.get("logo_scale_pct") or logo_scale_pct), 100.0))
                     logo_opacity = max(5.0, min(float(linked_profile.get("logo_opacity") or logo_opacity), 100.0))
-                if not logos and effective_logo_profile_layout_linked:
+                if not logos:
                     profile_logos = _logo_profile_to_payload_logos(linked_profile)
                     if profile_logos:
                         logos = profile_logos
@@ -4906,6 +7181,13 @@ async def burn_subtitles(request: Request):
                                 logos[i]["scale_pct"] = max(5.0, min(float(ov["scale_pct"]), 100.0))
                             if ov.get("opacity") is not None:
                                 logos[i]["opacity"] = max(5.0, min(float(ov["opacity"]), 100.0))
+                        if not effective_logo_profile_layout_linked and not pos_overrides and logos:
+                            # Layout desvinculado não pode bloquear a imagem da logo.
+                            # Sem overrides por-logo, usa a posição/tamanho enviados no payload legado.
+                            logos[0]["x"] = logo_x
+                            logos[0]["y"] = logo_y
+                            logos[0]["scale_pct"] = logo_scale_pct
+                            logos[0]["opacity"] = logo_opacity
                         first_logo = logos[0]
                         logo_b64 = str(first_logo.get("b64") or logo_b64)
                         logo_x = max(0, min(int(first_logo.get("x") or logo_x), 100))
@@ -4916,26 +7198,70 @@ async def burn_subtitles(request: Request):
                     profile_logo_ref = str(linked_profile.get("logo_object_key") or "").strip()
                     if profile_logo_ref:
                         logo_b64 = _media_ref_to_data_url(profile_logo_ref)
-        transcript = req_data.get("transcript") or {}
-        srt_content = (transcript.get("srt") or "").strip()
+        srt_content = (body.get("srt_content") or "").strip()
         if not srt_content:
-            segments = transcript.get("segments") or []
-            srt_content = _format_srt(segments)
-        if not srt_content:
-            raw_text = (transcript.get("text") or "").strip()
-            if raw_text:
-                words = raw_text.split()
-                chunk_size = 12
-                words_per_sec = 2.5
-                fake_segs = []
-                for idx in range(0, len(words), chunk_size):
-                    chunk = " ".join(words[idx: idx + chunk_size])
-                    fake_segs.append({"start": idx / words_per_sec, "end": (idx + chunk_size) / words_per_sec, "text": chunk})
-                srt_content = _format_srt(fake_segs)
+            srt_content = (transcript_meta.get("srt") or "").strip()
+            if not srt_content:
+                segments = transcript_meta.get("segments") or []
+                srt_content = _format_srt(segments)
     except Exception as e:
         return JSONResponse({"error": "parse_error", "detail": str(e)}, status_code=500)
     if not srt_content and not skip_subtitles:
         return JSONResponse({"error": "no_transcript", "detail": "Este run não tem transcrição disponível."}, status_code=400)
+
+    if srt_content and not skip_subtitles:
+        provider_meta = _safe_json_obj(transcript_meta.get("provider_meta")) if isinstance(transcript_meta, dict) else {}
+        timing_quality = str(
+            transcript_meta.get("timing_quality")
+            or provider_meta.get("timing_quality")
+            or ""
+        ).strip().lower()
+        burn_safe_flag = transcript_meta.get("burn_safe")
+        if burn_safe_flag is None:
+            burn_safe_flag = provider_meta.get("burn_safe")
+        duration_hint = 0.0
+        for src in (body.get("video_metadata"), body.get("probe"), req_data.get("video_metadata"), req_data.get("probe")):
+            meta_obj = _safe_json_obj(src)
+            try:
+                duration_hint = float(meta_obj.get("duration_seconds") or meta_obj.get("duration") or duration_hint or 0.0)
+            except Exception:
+                pass
+        timing_diag = _srt_timing_diagnostics(srt_content, media_duration_seconds=duration_hint)
+        if timing_diag.get("likely_synthetic_chunk_timing"):
+            repaired_srt = _retime_synthetic_chunk_srt(
+                srt_content,
+                media_duration_seconds=float(timing_diag.get("media_duration_seconds") or duration_hint or 0.0),
+            )
+            repaired_diag = _srt_timing_diagnostics(repaired_srt, media_duration_seconds=duration_hint)
+            if repaired_diag.get("likely_synthetic_chunk_timing"):
+                return JSONResponse(
+                    {
+                        "error": "subtitle_timing_not_burn_safe",
+                        "detail": (
+                            "Esta legenda tem timestamps estimados por blocos e o reparo automático não conseguiu "
+                            "corrigir com segurança. Transcreva novamente ou importe um SRT revisado."
+                        ),
+                        "timing_quality": timing_quality or "unknown",
+                        "timing": timing_diag,
+                        "repaired_timing": repaired_diag,
+                    },
+                    status_code=400,
+                )
+            srt_content = repaired_srt
+            timing_diag = repaired_diag
+        elif burn_safe_flag is False and "chunk" in timing_quality:
+            return JSONResponse(
+                {
+                    "error": "subtitle_timing_not_burn_safe",
+                    "detail": (
+                        "Esta legenda veio de texto sem timestamps reais e não parece reparável automaticamente. "
+                        "Use um SRT revisado ou transcreva novamente."
+                    ),
+                    "timing_quality": timing_quality or "unknown",
+                    "timing": timing_diag,
+                },
+                status_code=400,
+            )
 
     _merge_run_wizard_state(run_id, {
         "logo_x": logo_x,
@@ -4948,10 +7274,18 @@ async def burn_subtitles(request: Request):
         "burned_resolution": str(max_height),
         "burned_preset": str(x264_preset),
     })
+    import logging as _logging
+    _logging.getLogger("uvicorn.error").warning(
+        f"[burn-subtitles/start.logo] run_id={run_id} skip_subtitles={skip_subtitles} "
+        f"logo_present={bool(logo_b64) or bool(logos)} logo_count={len(logos) if logos else (1 if logo_b64 else 0)} "
+        f"profile_id={body_logo_profile_id or ''} profile_name={body_logo_profile_name or ''} "
+        f"layout_linked={effective_logo_profile_layout_linked}"
+    )
 
     job_id = str(uuid.uuid4())
     _burn_job_put(job_id, {
         "status": "pending",
+        "progress_pct": 0,
         "detail": "Aguardando fila de processamento…",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "cancel_requested": False,
@@ -5042,13 +7376,28 @@ async def burn_subtitles_queue(request: Request):
                 "position": idx,
                 "status": j.get("status") or "pending",
                 "detail": j.get("detail") or "Aguardando fila…",
+                "progress_pct": j.get("progress_pct", 0),
+                "run_id": j.get("run_id") or "",
+                "logo_count": j.get("logo_count", 0),
+                "updated_at": j.get("updated_at") or "",
                 "created_at": j.get("created_at") or "",
             }
         )
 
     running_items: List[Dict[str, Any]] = []
     for j in running_rows:
-        running_items.append({"job_id": j.get("job_id") or "", "detail": j.get("detail") or "Processando…"})
+        running_items.append(
+            {
+                "job_id": j.get("job_id") or "",
+                "status": j.get("status") or "running",
+                "detail": j.get("detail") or "Processando…",
+                "progress_pct": j.get("progress_pct", 0),
+                "run_id": j.get("run_id") or "",
+                "logo_count": j.get("logo_count", 0),
+                "updated_at": j.get("updated_at") or "",
+                "created_at": j.get("created_at") or "",
+            }
+        )
 
     return JSONResponse({"ok": True, "pending": pending_items, "running": running_items})
 
@@ -5525,14 +7874,21 @@ async def _teaser_worker(
                     logo_scaled_label = f"lgs{i}"
                     base_label = f"vb{i}"
                     out_label = "out" if i == (len(logo_specs) - 1) else f"v{i+1}"
-                    scale_ratio = max(0.05, min(float(spec.get("scale_pct", 20.0)) / 100.0, 0.60))
+                    scale_boost = max(1.0, min(float(spec.get("scale_boost", 1.0) or 1.0), 1.6))
+                    scale_ratio = max(0.05, min((float(spec.get("scale_pct", 20.0)) / 100.0) * scale_boost, 0.60))
+                    height_scale = max(1.0, min(float(spec.get("height_scale", 1.0) or 1.0), 1.6))
                     alpha_ratio = max(0.05, min(float(spec.get("opacity", 85.0)) / 100.0, 1.0))
-                    parts.append(
-                        f"[{input_idx}:v][{current_label}]scale2ref="
-                        f"w=main_w*{scale_ratio:.4f}:h=-1:flags=lanczos"
-                        f"[{logo_scaled_label}][{base_label}]"
+                    _append_logo_aspect_locked_scale(
+                        parts,
+                        input_idx=input_idx,
+                        base_ref=f"[{current_label}]",
+                        logo_scaled_label=logo_scaled_label,
+                        base_label=base_label,
+                        scale_ratio=scale_ratio,
+                        tag=f"teaser_logo_{i}",
+                        height_scale=height_scale,
                     )
-                    chain = f"[{logo_scaled_label}]format=rgba"
+                    chain = f"[{logo_scaled_label}]format=rgba,setsar=1"
                     if bool(spec.get("remove_bg")):
                         col = str(spec.get("bg_key_color") or "#ffffff").replace("#", "")
                         sim = max(0.01, min(float(spec.get("bg_similarity", 0.18)), 0.60))
@@ -6151,6 +8507,7 @@ async def teaser_generate(request: Request):
     body_logo_profile_id = str(body.get("logo_profile_id") or "").strip()
     body_logo_profile_name = str(body.get("logo_profile_name") or "").strip()
     body_logo_profile_layout_linked = _coerce_optional_bool(body.get("logo_profile_layout_linked"))
+    body_has_logo_layout_payload = _has_logo_layout_payload(body)
 
     def _num_logo(v: Any, default: float, min_v: float, max_v: float) -> float:
         try:
@@ -6163,10 +8520,10 @@ async def teaser_generate(request: Request):
     logos_raw = body.get("logos")
     logos: List[Dict[str, Any]] = []
     if isinstance(logos_raw, list):
-        for raw in logos_raw[:6]:
+        for raw in logos_raw[:MAX_LOGO_OVERLAYS]:
             if not isinstance(raw, dict):
                 continue
-            raw_b64 = str(raw.get("b64") or raw.get("logo_b64") or "").strip()
+            raw_b64 = str(raw.get("b64") or raw.get("logo_b64") or raw.get("src") or "").strip()
             if not raw_b64:
                 continue
             color_hex = _normalize_hex_color(str(raw.get("bg_key_color") or "#ffffff"), "#ffffff")
@@ -6201,13 +8558,13 @@ async def teaser_generate(request: Request):
         effective_logo_profile_name = body_logo_profile_name or str(wizard_state.get("logo_profile_name") or "").strip()
         if effective_logo_profile_layout_linked is None:
             effective_logo_profile_layout_linked = _coerce_optional_bool(wizard_state.get("logo_profile_layout_linked"))
-        if effective_logo_profile_layout_linked is None and (effective_logo_profile_id or effective_logo_profile_name):
+        has_logo_profile_ref = bool(effective_logo_profile_id or effective_logo_profile_name)
+        if effective_logo_profile_layout_linked is None and has_logo_profile_ref:
             effective_logo_profile_layout_linked = True
-        if effective_logo_profile_layout_linked:
-            linked_logo_profile = _find_logo_profile(
-                profile_id=effective_logo_profile_id,
-                company_name=effective_logo_profile_name,
-            )
+        linked_logo_profile = _find_logo_profile(
+            profile_id=effective_logo_profile_id,
+            company_name=effective_logo_profile_name,
+        ) if has_logo_profile_ref else None
     if run_id:
         _merge_run_wizard_state(
             run_id,
@@ -6219,6 +8576,8 @@ async def teaser_generate(request: Request):
         )
     if linked_logo_profile:
         def _layout_differs() -> bool:
+            if not body_has_logo_layout_payload:
+                return False
             try:
                 return (
                     abs(float(logo_x) - float(linked_logo_profile.get("logo_x") or 0.0)) > 0.05
@@ -6234,8 +8593,19 @@ async def teaser_generate(request: Request):
         linked_logo_name = str(linked_logo_profile.get("logo_name") or "").strip().lower()
         linked_company_name = str(linked_logo_profile.get("company_name") or "").strip().lower()
         # Só carrega logo do perfil quando o usuário quer aplicar logo no teaser.
-        if force_logo_overlay and not logo_b64 and not logos and linked_logo_ref:
-            logo_b64 = _media_ref_to_data_url(linked_logo_ref)
+        # A imagem do perfil é independente do vínculo de layout: desvincular
+        # posição/tamanho não pode transformar o job em "sem logo".
+        if force_logo_overlay and not logo_b64 and not logos:
+            profile_logos = _logo_profile_to_payload_logos(linked_logo_profile)
+            if profile_logos:
+                if not effective_logo_profile_layout_linked:
+                    profile_logos[0]["x"] = logo_x
+                    profile_logos[0]["y"] = logo_y
+                    profile_logos[0]["scale_pct"] = logo_scale_pct
+                    profile_logos[0]["opacity"] = logo_opacity
+                logos = profile_logos
+            elif linked_logo_ref:
+                logo_b64 = _media_ref_to_data_url(linked_logo_ref)
         next_logos: List[Dict[str, Any]] = []
         for idx, item in enumerate(logos):
             next_item = dict(item)
@@ -6277,6 +8647,13 @@ async def teaser_generate(request: Request):
     elif _media_ref_has_prefix(video_object_key, "burns", "combined"):
         logo_b64 = ""
         logos = []
+    import logging as _logging
+    _logging.getLogger("uvicorn.error").warning(
+        f"[teaser/generate.logo] force_logo={force_logo_overlay} source_type={source_type!r} "
+        f"logo_present={bool(logo_b64) or bool(logos)} logo_count={len(logos) if logos else (1 if logo_b64 else 0)} "
+        f"profile_id={body_logo_profile_id or ''} profile_name={body_logo_profile_name or ''} "
+        f"layout_linked={effective_logo_profile_layout_linked}"
+    )
     num_clips = max(2, min(int(body.get("num_clips") or 6), TEASER_MAX_NUM_CLIPS))
     clip_duration = max(2.0, min(float(body.get("clip_duration") or 5.0), TEASER_MAX_SCENE_DURATION_SEC))
     output_crf = max(20, min(int(body.get("output_crf") or 28), 35))
@@ -6428,6 +8805,30 @@ async def teaser_burn_logo(request: Request):
         return JSONResponse({"error": "invalid_teaser_object_key"}, status_code=400)
 
     logo_b64 = (body.get("logo_b64") or "").strip()
+    body_has_logo_layout_payload = _has_logo_layout_payload(body)
+    logos_raw = body.get("logos")
+    logos: List[Dict[str, Any]] = []
+    if isinstance(logos_raw, list):
+        for raw in logos_raw[:MAX_LOGO_OVERLAYS]:
+            if not isinstance(raw, dict):
+                continue
+            raw_b64 = str(raw.get("b64") or raw.get("logo_b64") or raw.get("src") or "").strip()
+            if not raw_b64:
+                continue
+            logos.append({
+                "b64": raw_b64,
+                "name": str(raw.get("name") or "").strip(),
+                "mime": str(raw.get("mime") or "").strip().lower(),
+                "x": max(0.0, min(float(raw.get("x", raw.get("logo_x", 97.0))), 100.0)),
+                "y": max(0.0, min(float(raw.get("y", raw.get("logo_y", 97.0))), 100.0)),
+                "scale_pct": max(5.0, min(float(raw.get("scale_pct", raw.get("logo_scale_pct", 20.0))), 100.0)),
+                "opacity": max(5.0, min(float(raw.get("opacity", raw.get("logo_opacity", 85.0))), 100.0)),
+                "enabled": raw.get("enabled") is not False,
+                "remove_bg": bool(raw.get("remove_bg")),
+                "bg_key_color": _normalize_hex_color(raw.get("bg_key_color") or "#ffffff", "#ffffff"),
+                "bg_similarity": max(0.01, min(float(raw.get("bg_similarity", 0.18)), 0.60)),
+                "bg_blend": max(0.0, min(float(raw.get("bg_blend", 0.08)), 0.40)),
+            })
     logo_x = max(0, min(int(body.get("logo_x") or 97), 100))
     logo_y = max(0, min(int(body.get("logo_y") or 97), 100))
     logo_scale_pct = max(5.0, min(float(body.get("logo_scale_pct") or 20.0), 100.0))
@@ -6452,16 +8853,18 @@ async def teaser_burn_logo(request: Request):
     effective_logo_profile_layout_linked = body_logo_profile_layout_linked
     if effective_logo_profile_layout_linked is None:
         effective_logo_profile_layout_linked = _coerce_optional_bool(wizard_state.get("logo_profile_layout_linked"))
-    if effective_logo_profile_layout_linked is None and (effective_logo_profile_id or effective_logo_profile_name):
+    has_logo_profile_ref = bool(effective_logo_profile_id or effective_logo_profile_name)
+    if effective_logo_profile_layout_linked is None and has_logo_profile_ref:
         effective_logo_profile_layout_linked = True
-    if effective_logo_profile_layout_linked:
-        linked_profile = _find_logo_profile(
-            profile_id=effective_logo_profile_id,
-            company_name=effective_logo_profile_name,
-        )
-        if linked_profile:
+    linked_profile = _find_logo_profile(
+        profile_id=effective_logo_profile_id,
+        company_name=effective_logo_profile_name,
+    ) if has_logo_profile_ref else None
+    if linked_profile:
             # Igual ao /api/burn-subtitles: só usa layout do perfil se o usuário não customizou.
             def _burn_logo_layout_differs() -> bool:
+                if not body_has_logo_layout_payload:
+                    return False
                 try:
                     return (
                         abs(float(logo_x) - float(linked_profile.get("logo_x") or 0.0)) > 0.05
@@ -6478,7 +8881,16 @@ async def teaser_burn_logo(request: Request):
                 logo_y = max(0, min(int(linked_profile.get("logo_y") or logo_y), 100))
                 logo_scale_pct = max(5.0, min(float(linked_profile.get("logo_scale_pct") or logo_scale_pct), 100.0))
                 logo_opacity = max(5.0, min(float(linked_profile.get("logo_opacity") or logo_opacity), 100.0))
-            if not logo_b64:
+            if not logo_b64 and not logos:
+                profile_logos = _logo_profile_to_payload_logos(linked_profile)
+                if profile_logos:
+                    if not effective_logo_profile_layout_linked:
+                        profile_logos[0]["x"] = logo_x
+                        profile_logos[0]["y"] = logo_y
+                        profile_logos[0]["scale_pct"] = logo_scale_pct
+                        profile_logos[0]["opacity"] = logo_opacity
+                    logos = profile_logos
+            if not logo_b64 and not logos:
                 profile_logo_ref = str(linked_profile.get("logo_object_key") or "").strip()
                 if profile_logo_ref:
                     logo_b64 = _media_ref_to_data_url(profile_logo_ref)
@@ -6486,10 +8898,12 @@ async def teaser_burn_logo(request: Request):
     import logging as _logging
     _logging.getLogger("uvicorn.error").warning(
         f"[teaser/burn-logo] logo_x={logo_x} logo_y={logo_y} logo_scale_pct={logo_scale_pct} "
-        f"logo_opacity={logo_opacity} max_height={max_height} profile_linked={effective_logo_profile_layout_linked}"
+        f"logo_opacity={logo_opacity} max_height={max_height} profile_linked={effective_logo_profile_layout_linked} "
+        f"logo_present={bool(logo_b64) or bool(logos)} logo_count={len(logos) if logos else (1 if logo_b64 else 0)} "
+        f"profile_id={body_logo_profile_id or ''} profile_name={body_logo_profile_name or ''}"
     )
 
-    if not logo_b64:
+    if not logo_b64 and not logos:
         return JSONResponse({"error": "missing_logo", "detail": "Envie uma logo antes de queimar o teaser."}, status_code=400)
 
     job_id = str(uuid.uuid4())
@@ -6504,7 +8918,7 @@ async def teaser_burn_logo(request: Request):
     _burn_enqueue(job_id)
     asyncio.create_task(_burn_subtitles_worker(
         job_id, run_id, teaser_object_key, "", req_data,
-        logo_b64=logo_b64, font_size=22, font_color="white", sub_delay_secs=0.0,
+        logo_b64=logo_b64, logos=logos, font_size=22, font_color="white", sub_delay_secs=0.0,
         output_crf=output_crf, max_height=max_height, logo_x=logo_x, logo_y=logo_y,
         logo_scale_pct=logo_scale_pct, logo_opacity=logo_opacity, x264_preset=x264_preset,
         skip_subtitles=True,
@@ -6863,7 +9277,10 @@ class TranscribeRequest(BaseModel):
     language: Optional[str] = None
     translate_to: Optional[str] = None
     prompt: Optional[str] = None
-    provider: Optional[str] = "auto"  # "auto" | "groq" | "openai" | "local"
+    provider: Optional[str] = "auto"  # "auto" | "whisper_sync" | "deepgram" | "assemblyai" | "groq/openrouter" | "openai" | "local" | "premium"
+    adult_mode: Optional[bool] = True
+    include_vocalizations: Optional[bool] = True
+    enhance_audio: Optional[bool] = True
 
 
 class ScreenshotAnalyzeRequest(BaseModel):
@@ -7217,6 +9634,10 @@ class UploadMetaRequest(BaseModel):
     company_name: str = ""
 
 
+class MediaMetadataBatchRequest(BaseModel):
+    object_keys: List[str] = Field(default_factory=list)
+
+
 @app.post("/uploads/set-meta")
 async def uploads_set_meta(req: UploadMetaRequest, request: Request):
     auth_err = _require_api_key(request)
@@ -7290,6 +9711,66 @@ async def list_uploads(request: Request, prefix: str = "uploads", max_keys: int 
         if meta.get("company_id"):
             it["company_id"] = meta["company_id"]
     return {"ok": True, "items": result_items}
+
+
+@app.post("/api/media-manager/metadata/batch")
+async def media_manager_metadata_batch(req: MediaMetadataBatchRequest, request: Request):
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    raw_keys = [str(v or "").strip() for v in (req.object_keys or [])]
+    keys: List[str] = []
+    seen: set[str] = set()
+    for key in raw_keys:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+        if len(keys) >= 120:
+            break
+    items: Dict[str, Any] = {}
+    errors: Dict[str, str] = {}
+    for key in keys:
+        if not _is_valid_object_key(key):
+            errors[key] = "invalid_object_key"
+            continue
+        try:
+            meta = await asyncio.to_thread(_probe_media_ref_metadata_cached, key)
+            items[key] = meta
+        except Exception as exc:
+            errors[key] = _safe_error_detail(exc, "metadata_unavailable")
+    return {"ok": True, "items": items, "errors": errors}
+
+
+@app.get("/api/media-manager/thumbnail-url")
+async def media_manager_thumbnail_url(object_key: str, request: Request, width: int = 480, t: float = 8.0):
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    object_key = str(object_key or "").strip()
+    if not _is_valid_object_key(object_key):
+        return JSONResponse({"error": "invalid_object_key"}, status_code=400)
+    try:
+        sig_ref = await asyncio.to_thread(
+            _media_manager_thumbnail_cache_ref,
+            object_key,
+            width=max(220, min(int(width or 480), 960)),
+            seek_seconds=max(0.1, float(t or 8.0)),
+        )
+        lock = await _preview_lock_for(sig_ref)
+        async with lock:
+            out = await asyncio.to_thread(
+                _media_manager_thumbnail_sync,
+                object_key,
+                width=width,
+                seek_seconds=t,
+            )
+        return {"ok": True, **out}
+    except Exception as exc:
+        return JSONResponse(
+            {"error": "thumbnail_unavailable", "detail": _safe_error_detail(exc, "thumbnail_unavailable")},
+            status_code=422,
+        )
 
 
 @app.post("/uploads/validate")
@@ -7773,7 +10254,17 @@ async def transcribe(req: TranscribeRequest, request: Request):
     if lang.lower() == "auto" or not lang:
         lang = ""
     translate_to = _norm_lang_code(req.translate_to or "")
-    prompt_hint = (req.prompt or "").strip()
+    adult_mode = req.adult_mode is not False
+    include_vocalizations = req.include_vocalizations is not False
+    enhance_audio = req.enhance_audio is not False
+    if adult_mode and not lang:
+        # O fluxo real da plataforma é majoritariamente PT-BR. Deixar vazio
+        # faz o Whisper alternar idioma ou retornar vazio em gemidos/fala baixa.
+        lang = "pt"
+    # Whisper "prompt"/faster-whisper "initial_prompt" is previous transcript
+    # context, not a system instruction. Passing instructions here makes the
+    # model repeat those instructions as subtitles, so we intentionally never
+    # forward req.prompt to the transcription engine.
 
     with tempfile.TemporaryDirectory(prefix="metaporn-", dir=_preferred_tmpdir_root("transcribe")) as td:
         in_path      = os.path.join(td, "input")
@@ -7787,16 +10278,17 @@ async def transcribe(req: TranscribeRequest, request: Request):
 
         probe = await asyncio.to_thread(_probe_metadata, in_path)
 
-        # ── Monta lista de candidatos (fallback chain) ──────────────────────
-        # "auto" → Groq → OpenAI → Local  (igual ao padrão da vision)
+        # ── Monta lista de candidatos ───────────────────────────────────────
+        # "auto" começa local/conservador, mas não pode morrer em transcrição
+        # vazia: tenta Whisper Sync e OpenRouter como resgate explícito.
         if provider == "auto":
-            groq_key   = (settings_get(key="token:groq")   or {}).get("value")
-            openai_key = (settings_get(key="token:openai") or {}).get("value")
-            candidates: List[str] = []
-            if groq_key:   candidates.append("groq")
-            if openai_key: candidates.append("openai")
-            candidates.append("local")  # sempre disponível como último recurso
-        elif provider in ("groq", "openai", "local"):
+            configured_auto = [
+                c.strip().lower()
+                for c in str(os.environ.get("ADULT_META_TRANSCRIBE_AUTO_CANDIDATES", "")).split(",")
+                if c.strip()
+            ]
+            candidates = configured_auto or ["local", "whisper_sync", "openrouter"]
+        elif provider in ("whisper_sync", "deepgram", "assemblyai", "groq", "openrouter", "openai", "local", "premium"):
             candidates = [provider]
         else:
             candidates = ["local"]
@@ -7810,16 +10302,77 @@ async def transcribe(req: TranscribeRequest, request: Request):
         txt = ""
         detected_lang = ""
         provider_used = ""
+        provider_meta: Dict[str, Any] = {}
 
         for candidate in candidates:
             tried.append(candidate)
             print(f"[transcribe] trying {candidate}…", flush=True)
 
-            # ── LOCAL ──────────────────────────────────────────────────────
-            if candidate == "local":
+            # ── DEEPGRAM ──────────────────────────────────────────────────
+            if candidate == "deepgram":
+                deepgram_key_present = bool(
+                    ((settings_get(key="token:deepgram") or {}).get("value") or os.environ.get("DEEPGRAM_API_KEY") or "").strip()
+                )
+                if not deepgram_key_present:
+                    last_error = {"error": "missing_deepgram_token", "detail": "Configure token:deepgram em Settings"}
+                    print("[transcribe] deepgram skipped: missing token", flush=True)
+                    continue
+                if not os.path.exists(out_audio_aac):
+                    try:
+                        await asyncio.to_thread(_extract_audio_to_aac, in_path=in_path, out_path=out_audio_aac, enhance_audio=enhance_audio)
+                    except Exception as e:
+                        detail = _safe_error_detail(e, "ffmpeg_failed")
+                        if "missing_audio_stream" in detail:
+                            return {"error": "missing_audio_stream", "detail": "O vídeo não possui faixa de áudio."}
+                        last_error = {"error": "ffmpeg_failed", "detail": detail}
+                        continue
+                    try:
+                        if os.path.getsize(out_audio_aac) == 0:
+                            return {"error": "missing_audio_stream", "detail": "Áudio não encontrado ou arquivo vazio."}
+                    except OSError:
+                        last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
+                        continue
+                try:
+                    result = await _transcribe_deepgram(out_audio_aac, lang or "pt", include_vocalizations=include_vocalizations)
+                except Exception as e:
+                    detail = _safe_error_detail(e, "deepgram_failed")
+                    if "missing_deepgram_token" in detail:
+                        last_error = {"error": "missing_deepgram_token", "detail": "Configure token:deepgram em Settings"}
+                    else:
+                        last_error = {"error": "deepgram_failed", "detail": detail}
+                    print(f"[transcribe] deepgram failed: {detail}", flush=True)
+                    continue
+                txt = result.get("text", "").strip()
+                if not txt:
+                    last_error = {"error": "empty_transcript", "detail": "Deepgram retornou transcrição vazia."}
+                    continue
+                raw_segments = _segments_from_word_timestamps(result.get("segments") or [])
+                detected_lang = lang or _norm_lang_code(result.get("language") or "pt")
+                provider_used = f"deepgram_{result.get('model') or 'nova-2'}"
+                provider_meta = {
+                    "deepgram_model": result.get("model") or "nova-2",
+                    "deepgram_request_id": result.get("request_id"),
+                    "deepgram_duration": result.get("duration"),
+                    "deepgram_word_count_raw": result.get("word_count_raw"),
+                    "deepgram_word_count_kept": result.get("word_count_kept"),
+                    "timing_quality": "word_timestamps",
+                    "burn_safe": True,
+                    "skip_llm_postprocess": True,
+                    "timing_warning": "Deepgram retorna timestamps por palavra; pós-processamento LLM foi desativado para preservar texto exato.",
+                }
+                break
+
+            # ── WHISPER SYNC (CPU, word timestamps, sem LLM) ─────────────
+            if candidate == "whisper_sync":
                 if not os.path.exists(out_audio_wav):
                     try:
-                        await asyncio.to_thread(_extract_audio_to_wav, in_path=in_path, out_path=out_audio_wav)
+                        await asyncio.to_thread(
+                            _preprocess_audio_for_porn_br_transcription,
+                            in_path=in_path,
+                            out_path=out_audio_wav,
+                            enhance_audio=enhance_audio,
+                            premium=True,
+                        )
                     except Exception as e:
                         detail = _safe_error_detail(e, "ffmpeg_failed")
                         if "missing_audio_stream" in detail:
@@ -7833,26 +10386,40 @@ async def transcribe(req: TranscribeRequest, request: Request):
                         last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
                         continue
                 try:
-                    result = await asyncio.to_thread(_transcribe_local, out_audio_wav, lang)
+                    result = await asyncio.to_thread(
+                        _transcribe_premium,
+                        out_audio_wav,
+                        lang or "pt",
+                        include_vocalizations=include_vocalizations,
+                    )
                 except Exception as e:
-                    last_error = {"error": "local_whisper_failed", "detail": str(e)}
-                    print(f"[transcribe] local failed: {e}", flush=True)
+                    last_error = {"error": "whisper_sync_failed", "detail": _safe_error_detail(e, "whisper_sync_failed")}
+                    print(f"[transcribe] whisper_sync failed: {e}", flush=True)
                     continue
                 txt = result.get("text", "").strip()
                 if not txt:
-                    last_error = {"error": "empty_transcript", "detail": "Whisper local retornou transcrição vazia."}
+                    last_error = {"error": "empty_transcript", "detail": "Whisper Sync retornou transcrição vazia."}
                     continue
-                raw_segments  = result.get("segments") or []
-                detected_lang = _norm_lang_code(result.get("language") or lang or "auto")
-                provider_used = f"faster_whisper_{_LOCAL_WHISPER_MODEL_SIZE}"
+                raw_segments = _segments_from_word_timestamps(result.get("segments") or [])
+                detected_lang = lang or _norm_lang_code(result.get("language") or "pt")
+                provider_used = f"whisper_sync_{result.get('model') or _LOCAL_WHISPER_PREMIUM_MODEL}"
+                provider_meta = {
+                    "whisper_sync_model": result.get("model") or _premium_whisper_model_name or _LOCAL_WHISPER_PREMIUM_MODEL,
+                    "whisper_sync_mode": result.get("premium_mode"),
+                    "whisper_sync_quality": result.get("quality") or {},
+                    "whisper_sync_attempts": result.get("attempts") or [],
+                    "timing_quality": "whisper_word_timestamps",
+                    "burn_safe": True,
+                    "skip_llm_postprocess": True,
+                    "timing_warning": "Whisper Sync usa timestamps por palavra e não aplica pós-processamento LLM.",
+                }
                 break
 
-            # ── GROQ / OPENAI ──────────────────────────────────────────────
-            else:
-                # Extrai AAC 32kbps (uma vez só, reusa se já extraiu)
+            # ── ASSEMBLYAI ──────────────────────────────────────────────────
+            if candidate == "assemblyai":
                 if not os.path.exists(out_audio_aac):
                     try:
-                        await asyncio.to_thread(_extract_audio_to_aac, in_path=in_path, out_path=out_audio_aac)
+                        await asyncio.to_thread(_extract_audio_to_aac, in_path=in_path, out_path=out_audio_aac, enhance_audio=enhance_audio)
                     except Exception as e:
                         detail = _safe_error_detail(e, "ffmpeg_failed")
                         if "missing_audio_stream" in detail:
@@ -7866,21 +10433,211 @@ async def transcribe(req: TranscribeRequest, request: Request):
                         last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
                         continue
 
-                file_size_mb = os.path.getsize(out_audio_aac) / 1024 / 1024
-                if file_size_mb > 24.5:
-                    last_error = {"error": "audio_too_large", "detail": f"Áudio {file_size_mb:.1f}MB > 25MB — pulando API, tente provider local."}
+                try:
+                    result = await _transcribe_assemblyai(out_audio_aac, lang, include_vocalizations=include_vocalizations)
+                except Exception as e:
+                    detail = _safe_error_detail(e, "assemblyai_failed")
+                    last_error = {"error": "assemblyai_failed", "detail": detail}
+                    print(f"[transcribe] assemblyai failed: {detail}", flush=True)
                     continue
+                txt = result.get("text", "").strip()
+                if not txt:
+                    last_error = {"error": "empty_transcript", "detail": "AssemblyAI retornou transcrição vazia."}
+                    continue
+                raw_segments = result.get("segments") or []
+                detected_lang = lang or _norm_lang_code(result.get("language") or "auto")
+                provider_used = "assemblyai"
+                provider_meta = {
+                    "assemblyai_transcript_id": result.get("transcript_id"),
+                    "assemblyai_language_confidence": result.get("language_confidence"),
+                    "assemblyai_speech_model": result.get("speech_model"),
+                    "assemblyai_word_count_raw": result.get("word_count_raw"),
+                    "assemblyai_word_count_kept": result.get("word_count_kept"),
+                }
+                break
 
-                if candidate == "groq":
-                    saved    = settings_get(key="token:groq")
-                    api_key  = (saved or {}).get("value")
-                    if not api_key:
-                        last_error = {"error": "missing_groq_token", "detail": "Configure token:groq em Settings"}
+            # ── LOCAL ──────────────────────────────────────────────────────
+            if candidate == "local":
+                if not os.path.exists(out_audio_wav):
+                    try:
+                        await asyncio.to_thread(_extract_audio_to_wav, in_path=in_path, out_path=out_audio_wav, enhance_audio=enhance_audio)
+                    except Exception as e:
+                        detail = _safe_error_detail(e, "ffmpeg_failed")
+                        if "missing_audio_stream" in detail:
+                            return {"error": "missing_audio_stream", "detail": "O vídeo não possui faixa de áudio."}
+                        last_error = {"error": "ffmpeg_failed", "detail": detail}
                         continue
-                    whisper_url   = "https://api.groq.com/openai/v1/audio/transcriptions"
-                    whisper_model = "whisper-large-v3-turbo"
-                    provider_used = "groq_whisper"
+                    try:
+                        if os.path.getsize(out_audio_wav) == 0:
+                            return {"error": "missing_audio_stream", "detail": "Áudio não encontrado ou arquivo vazio."}
+                    except OSError:
+                        last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
+                        continue
+                try:
+                    local_attempts = [
+                        ("strict_vad", {"strict": True, "vad_filter": True}),
+                        ("relaxed_vad", {"strict": False, "vad_filter": True}),
+                        ("no_vad_rescue", {"strict": False, "vad_filter": False}),
+                    ]
+                    result = {"text": "", "segments": [], "language": lang or "pt", "local_attempt": ""}
+                    local_errors: List[str] = []
+                    for local_mode, local_opts in local_attempts:
+                        attempt = await asyncio.to_thread(
+                            _transcribe_local,
+                            out_audio_wav,
+                            lang or "pt",
+                            strict=bool(local_opts["strict"]),
+                            include_vocalizations=include_vocalizations,
+                            vad_filter=bool(local_opts["vad_filter"]),
+                        )
+                        attempt["local_attempt"] = local_mode
+                        if (attempt.get("text") or "").strip():
+                            result = attempt
+                            break
+                        local_errors.append(local_mode)
+                except Exception as e:
+                    last_error = {"error": "local_whisper_failed", "detail": str(e)}
+                    print(f"[transcribe] local failed: {e}", flush=True)
+                    continue
+                txt = result.get("text", "").strip()
+                if not txt:
+                    last_error = {
+                        "error": "empty_transcript",
+                        "detail": "Whisper local retornou transcrição vazia após tentativas strict_vad, relaxed_vad e no_vad_rescue.",
+                        "attempts": local_errors,
+                    }
+                    continue
+                raw_segments  = result.get("segments") or []
+                detected_lang = lang or _norm_lang_code(result.get("language") or "auto")
+                provider_used = f"faster_whisper_{_LOCAL_WHISPER_MODEL_SIZE}"
+                provider_meta = {
+                    "local_model": _LOCAL_WHISPER_MODEL_SIZE,
+                    "local_attempt": result.get("local_attempt") or "",
+                    "timing_quality": "segment_timestamps",
+                }
+                break
+
+            # ── PREMIUM (large-v3) ─────────────────────────────────────────
+            if candidate == "premium":
+                if not os.path.exists(out_audio_wav):
+                    try:
+                        await asyncio.to_thread(
+                            _preprocess_audio_for_porn_br_transcription,
+                            in_path=in_path,
+                            out_path=out_audio_wav,
+                            enhance_audio=enhance_audio,
+                            premium=True,
+                        )
+                    except Exception as e:
+                        detail = _safe_error_detail(e, "ffmpeg_failed")
+                        if "missing_audio_stream" in detail:
+                            return {"error": "missing_audio_stream", "detail": "O vídeo não possui faixa de áudio."}
+                        last_error = {"error": "ffmpeg_failed", "detail": detail}
+                        continue
+                    try:
+                        if os.path.getsize(out_audio_wav) == 0:
+                            return {"error": "missing_audio_stream", "detail": "Áudio não encontrado ou arquivo vazio."}
+                    except OSError:
+                        last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
+                        continue
+                try:
+                    result = await asyncio.to_thread(
+                        _transcribe_premium,
+                        out_audio_wav,
+                        lang,
+                        include_vocalizations=include_vocalizations,
+                    )
+                except Exception as e:
+                    last_error = {"error": "premium_whisper_failed", "detail": str(e)}
+                    print(f"[transcribe] premium failed: {e}", flush=True)
+                    continue
+                txt = result.get("text", "").strip()
+                if not txt:
+                    last_error = {"error": "empty_transcript", "detail": "Whisper premium retornou transcrição vazia."}
+                    continue
+                raw_segments  = result.get("segments") or []
+                detected_lang = lang or _norm_lang_code(result.get("language") or "auto")
+                provider_used = f"faster_whisper_{result.get('model') or _LOCAL_WHISPER_PREMIUM_MODEL}"
+                provider_meta = {
+                    "premium_mode": result.get("premium_mode"),
+                    "premium_model": result.get("model") or _premium_whisper_model_name or _LOCAL_WHISPER_PREMIUM_MODEL,
+                    "premium_quality": result.get("quality") or {},
+                    "premium_attempts": result.get("attempts") or [],
+                }
+                break
+
+            # ── OPENROUTER STT / OPENAI ────────────────────────────────────
+            else:
+                if candidate in ("groq", "openrouter"):
+                    if not os.path.exists(out_audio_wav):
+                        try:
+                            await asyncio.to_thread(_extract_audio_to_wav, in_path=in_path, out_path=out_audio_wav, enhance_audio=enhance_audio)
+                        except Exception as e:
+                            detail = _safe_error_detail(e, "ffmpeg_failed")
+                            if "missing_audio_stream" in detail:
+                                return {"error": "missing_audio_stream", "detail": "O vídeo não possui faixa de áudio."}
+                            last_error = {"error": "ffmpeg_failed", "detail": detail}
+                            continue
+                        try:
+                            if os.path.getsize(out_audio_wav) == 0:
+                                return {"error": "missing_audio_stream", "detail": "Áudio não encontrado ou arquivo vazio."}
+                        except OSError:
+                            last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
+                            continue
+                    try:
+                        result = await _transcribe_openrouter_stt(
+                            out_audio_wav,
+                            lang,
+                            duration_seconds=float(probe.get("duration_seconds") or 0.0),
+                        )
+                    except Exception as e:
+                        detail = _safe_error_detail(e, "openrouter_stt_failed")
+                        if "missing_openrouter_token" in detail:
+                            last_error = {"error": "missing_openrouter_token", "detail": "Configure token:openrouter em Settings"}
+                        else:
+                            last_error = {"error": "openrouter_stt_failed", "detail": detail}
+                        print(f"[transcribe] openrouter stt failed: {detail}", flush=True)
+                        continue
+                    txt = result.get("text", "").strip()
+                    if not txt:
+                        last_error = {"error": "empty_transcript", "detail": "OpenRouter STT retornou transcrição vazia."}
+                        continue
+                    raw_segments = result.get("segments") or []
+                    detected_lang = lang or _norm_lang_code(result.get("language") or "auto")
+                    provider_used = "openrouter_stt"
+                    provider_meta = {
+                        "openrouter_stt_model": result.get("model"),
+                        "openrouter_stt_chunks": result.get("chunks"),
+                        "openrouter_stt_chunk_fail_count": result.get("chunk_fail_count"),
+                        "openrouter_stt_chunk_empty_count": result.get("chunk_empty_count"),
+                        "openrouter_stt_attempts": result.get("attempts"),
+                        "timing_quality": result.get("timing_quality"),
+                        "burn_safe": result.get("burn_safe"),
+                        "timing_warning": result.get("timing_warning"),
+                    }
+                    break
+
                 else:  # openai
+                    # Extrai AAC 32kbps para respeitar o limite de 25MB da API OpenAI.
+                    if not os.path.exists(out_audio_aac):
+                        try:
+                            await asyncio.to_thread(_extract_audio_to_aac, in_path=in_path, out_path=out_audio_aac, enhance_audio=enhance_audio)
+                        except Exception as e:
+                            detail = _safe_error_detail(e, "ffmpeg_failed")
+                            if "missing_audio_stream" in detail:
+                                return {"error": "missing_audio_stream", "detail": "O vídeo não possui faixa de áudio."}
+                            last_error = {"error": "ffmpeg_failed", "detail": detail}
+                            continue
+                        try:
+                            if os.path.getsize(out_audio_aac) == 0:
+                                return {"error": "missing_audio_stream", "detail": "Áudio não encontrado ou arquivo vazio."}
+                        except OSError:
+                            last_error = {"error": "ffmpeg_failed", "detail": "Audio output not generated"}
+                            continue
+                    file_size_mb = os.path.getsize(out_audio_aac) / 1024 / 1024
+                    if file_size_mb > 24.5:
+                        last_error = {"error": "audio_too_large", "detail": f"Áudio {file_size_mb:.1f}MB > 25MB — pulando API, tente provider local."}
+                        continue
                     saved    = settings_get(key="token:openai")
                     api_key  = (saved or {}).get("value")
                     if not api_key:
@@ -7894,8 +10651,6 @@ async def transcribe(req: TranscribeRequest, request: Request):
                 api_data = {"model": whisper_model, "response_format": "verbose_json"}
                 if lang:
                     api_data["language"] = lang
-                if prompt_hint:
-                    api_data["prompt"] = prompt_hint[:500]
 
                 try:
                     timeout = httpx.Timeout(600.0, connect=20.0, write=120.0, read=600.0)
@@ -7931,7 +10686,7 @@ async def transcribe(req: TranscribeRequest, request: Request):
                     {"start": s.get("start", 0.0), "end": s.get("end", 0.0), "text": (s.get("text") or "").strip()}
                     for s in (j.get("segments") or [])
                 ]
-                detected_lang = _norm_lang_code(j.get("language") or lang or "auto")
+                detected_lang = lang or _norm_lang_code(j.get("language") or "auto")
                 break
 
         else:
@@ -7940,6 +10695,50 @@ async def transcribe(req: TranscribeRequest, request: Request):
             err = last_error or {"error": "all_providers_failed"}
             err["detail"] = f"[tried: {', '.join(tried)}] " + (err.get("detail") or "todos os providers falharam")
             return err
+
+        cleaned_segments, cleanup_meta = _clean_transcript_segments(raw_segments, lang, detected_lang)
+        if cleanup_meta.get("removed_count"):
+            print(f"[transcribe] cleanup removed={cleanup_meta}", flush=True)
+        if raw_segments and not cleaned_segments:
+            return {
+                "error": "transcript_filtered",
+                "detail": (
+                    "A transcrição gerada parecia alucinada ou em idioma incorreto. "
+                    "Selecione o idioma falado correto e tente novamente; se o trecho não tiver fala clara, o sistema não vai inventar legenda."
+                ),
+                "provider": provider_used,
+                "cleanup": cleanup_meta,
+                "adult_mode": adult_mode,
+                "include_vocalizations": include_vocalizations,
+                "enhance_audio": enhance_audio,
+                "probe": probe,
+            }
+        raw_segments = cleaned_segments or raw_segments
+        txt = " ".join((s.get("text") or "").strip() for s in raw_segments if (s.get("text") or "").strip()) or txt
+
+        if adult_mode and _norm_lang_code(lang or detected_lang) == "pt" and not provider_meta.get("skip_llm_postprocess"):
+            raw_segments, llm_meta = await _post_process_with_llm(
+                raw_segments,
+                expected_lang="pt",
+                include_vocalizations=include_vocalizations,
+                quality_meta=provider_meta.get("premium_quality") or {},
+            )
+            provider_meta["llm_postprocess"] = llm_meta
+            print(
+                "[transcribe] grok_postprocess "
+                f"status={llm_meta.get('status')} "
+                f"model={llm_meta.get('model') or '-'} "
+                f"removed={llm_meta.get('removed_count', 0)} "
+                f"changed={llm_meta.get('changed_count', 0)} "
+                f"reason={llm_meta.get('reason') or '-'}",
+                flush=True,
+            )
+            if llm_meta.get("status") == "ok":
+                cleaned_after_llm, cleanup_after_llm = _clean_transcript_segments(raw_segments, "pt", detected_lang or "pt")
+                cleanup_meta["llm_postprocess"] = cleanup_after_llm
+                if cleaned_after_llm:
+                    raw_segments = cleaned_after_llm
+                txt = " ".join((s.get("text") or "").strip() for s in raw_segments if (s.get("text") or "").strip()) or txt
 
         print(f"[transcribe] success via {provider_used}", flush=True)
 
@@ -7955,7 +10754,7 @@ async def transcribe(req: TranscribeRequest, request: Request):
             except Exception as e:
                 return {"error": "translation_failed", "detail": _safe_error_detail(e, "llm_translate_failed")}
 
-        srt_content = _format_srt(final_segments)
+        srt_content = _format_srt_premium(final_segments) if provider == "premium" else _format_srt(final_segments)
         return {
             "ok": True,
             "transcript": {
@@ -7968,6 +10767,14 @@ async def transcribe(req: TranscribeRequest, request: Request):
                 "text":          final_text or txt,
                 "srt":           srt_content,
                 "segments":      final_segments,
+                "cleanup":       cleanup_meta,
+                "provider_meta":  provider_meta,
+                "timing_quality": provider_meta.get("timing_quality") or "real",
+                "burn_safe":      False if provider_meta.get("burn_safe") is False else True,
+                "timing_warning": provider_meta.get("timing_warning") or "",
+                "adult_mode":    adult_mode,
+                "include_vocalizations": include_vocalizations,
+                "enhance_audio": enhance_audio,
             },
             "probe": probe,
         }
@@ -7999,6 +10806,555 @@ def _parse_srt_to_segments(srt_content: str) -> List[Dict[str, Any]]:
                 "text": text,
             })
     return segments
+
+
+def _srt_timing_diagnostics(srt_content: str, *, media_duration_seconds: float = 0.0) -> Dict[str, Any]:
+    """Detecta SRT com timestamps estimados por bloco, impróprio para burn."""
+    try:
+        segments = _parse_srt_to_segments(srt_content)
+    except Exception:
+        segments = []
+    if not segments:
+        return {
+            "segments_count": 0,
+            "active_duration_seconds": 0.0,
+            "coverage_ratio": 0.0,
+            "large_gap_count": 0,
+            "max_gap_seconds": 0.0,
+            "chunk_boundary_hits": 0,
+            "likely_synthetic_chunk_timing": False,
+            "burn_safe": True,
+        }
+
+    ordered = sorted(segments, key=lambda s: float(s.get("start") or 0.0))
+    active_duration = 0.0
+    large_gaps: List[float] = []
+    chunk_boundary_hits = 0
+    prev_end = float(ordered[0].get("end") or ordered[0].get("start") or 0.0)
+    first_start = float(ordered[0].get("start") or 0.0)
+    span_end = prev_end
+
+    for idx, seg in enumerate(ordered):
+        start = float(seg.get("start") or 0.0)
+        end = max(start, float(seg.get("end") or start))
+        active_duration += max(0.0, end - start)
+        span_end = max(span_end, end)
+        if idx > 0:
+            gap = max(0.0, start - prev_end)
+            if gap >= 90.0:
+                large_gaps.append(gap)
+            if start >= 240.0:
+                nearest_5min = round(start / 300.0) * 300.0
+                if abs(start - nearest_5min) <= 2.0:
+                    chunk_boundary_hits += 1
+        prev_end = max(prev_end, end)
+
+    ref_duration = max(float(media_duration_seconds or 0.0), span_end, 1.0)
+    coverage_ratio = active_duration / ref_duration
+    max_gap = max(large_gaps) if large_gaps else 0.0
+    likely_synthetic = (
+        len(ordered) >= 8
+        and len(large_gaps) >= 2
+        and max_gap >= 120.0
+        and chunk_boundary_hits >= 2
+        and coverage_ratio < 0.55
+    )
+    return {
+        "segments_count": len(ordered),
+        "first_start_seconds": round(first_start, 3),
+        "span_end_seconds": round(span_end, 3),
+        "active_duration_seconds": round(active_duration, 3),
+        "media_duration_seconds": round(ref_duration, 3),
+        "coverage_ratio": round(coverage_ratio, 4),
+        "large_gap_count": len(large_gaps),
+        "max_gap_seconds": round(max_gap, 3),
+        "chunk_boundary_hits": chunk_boundary_hits,
+        "likely_synthetic_chunk_timing": likely_synthetic,
+        "burn_safe": not likely_synthetic,
+    }
+
+
+def _wrap_srt_for_burn(srt_content: str, *, max_chars_per_line: int = 42) -> str:
+    """Quebra linhas longas antes do filtro subtitles/libass."""
+    try:
+        segments = _parse_srt_to_segments(srt_content)
+    except Exception:
+        segments = []
+    if not segments:
+        return srt_content
+    wrapped: List[Dict[str, Any]] = []
+    safe_width = max(26, min(int(max_chars_per_line or 42), 56))
+    for seg in segments:
+        raw = re.sub(r"\s+", " ", str(seg.get("text") or "")).strip()
+        if not raw:
+            continue
+        lines = textwrap.wrap(
+            raw,
+            width=safe_width,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        if len(lines) > 2:
+            # Prefer two readable lines over one giant bottom banner.
+            midpoint = max(1, len(lines) // 2)
+            lines = [" ".join(lines[:midpoint]), " ".join(lines[midpoint:])]
+            lines = [textwrap.shorten(line, width=72, placeholder="…") for line in lines]
+        wrapped.append({
+            "start": seg.get("start", 0.0),
+            "end": seg.get("end", 0.0),
+            "text": "\n".join(lines[:2]) if lines else raw,
+        })
+    return _format_srt(wrapped)
+
+
+def _retime_synthetic_chunk_srt(
+    srt_content: str,
+    *,
+    media_duration_seconds: float = 0.0,
+    chunk_seconds: float = 300.0,
+) -> str:
+    """Reespalha cues comprimidas no começo de chunks grandes.
+
+    Isso é usado para SRT criado a partir de texto puro do OpenRouter. Não cria
+    timing perfeito, mas transforma um SRT visualmente inválido (texto preso no
+    começo de cada bloco) em uma legenda queimável e revisável.
+    """
+    segments = sorted(_parse_srt_to_segments(srt_content), key=lambda s: float(s.get("start") or 0.0))
+    if not segments:
+        return srt_content
+
+    groups: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    prev_end = 0.0
+    for seg in segments:
+        start = float(seg.get("start") or 0.0)
+        if current and (start - prev_end) >= 90.0:
+            groups.append(current)
+            current = []
+        current.append(seg)
+        prev_end = max(prev_end, float(seg.get("end") or start))
+    if current:
+        groups.append(current)
+    if len(groups) <= 1:
+        return srt_content
+
+    media_duration = max(float(media_duration_seconds or 0.0), float(segments[-1].get("end") or 0.0), 1.0)
+    chunk = max(60.0, float(chunk_seconds or 300.0))
+    retimed: List[Dict[str, Any]] = []
+
+    group_starts: List[float] = []
+    for group in groups:
+        first_start = float(group[0].get("start") or 0.0)
+        # OpenRouter chunk starts are very close to multiples of 300s. Snap to
+        # that window to remove the artificial 5-minute holes.
+        snapped = round(first_start / chunk) * chunk if first_start >= chunk * 0.75 else 0.0
+        if abs(first_start - snapped) > 45.0:
+            snapped = max(0.0, (first_start // chunk) * chunk)
+        group_starts.append(max(0.0, snapped))
+
+    for idx, group in enumerate(groups):
+        window_start = group_starts[idx]
+        next_start = group_starts[idx + 1] if idx + 1 < len(group_starts) else media_duration
+        window_end = max(window_start + 8.0, min(media_duration, next_start))
+        if idx + 1 >= len(group_starts):
+            window_end = max(window_end, min(media_duration, window_start + chunk))
+        window = max(1.0, window_end - window_start)
+        count = len(group)
+        cue_duration = max(2.2, min(7.5, (window / max(count, 1)) * 0.45))
+        usable = max(0.0, window - cue_duration)
+        step = usable / max(count - 1, 1)
+        for pos, seg in enumerate(group):
+            start = window_start + (pos * step)
+            end = min(window_end, start + cue_duration)
+            retimed.append({
+                "start": round(start, 3),
+                "end": round(max(end, start + 1.2), 3),
+                "text": str(seg.get("text") or "").strip(),
+            })
+
+    return _format_srt(retimed)
+
+
+def _subtitle_gap_report(srt_content: str, *, media_duration_seconds: float = 0.0) -> Dict[str, Any]:
+    segments = sorted(_parse_srt_to_segments(srt_content), key=lambda s: float(s.get("start") or 0.0))
+    media_duration = max(float(media_duration_seconds or 0.0), float(segments[-1].get("end") or 0.0) if segments else 0.0)
+    gaps: List[Dict[str, Any]] = []
+    prev_end = 0.0
+    for seg in segments:
+        start = float(seg.get("start") or 0.0)
+        if start - prev_end >= 120.0:
+            gaps.append({
+                "start": round(prev_end, 3),
+                "end": round(start, 3),
+                "duration": round(start - prev_end, 3),
+            })
+        prev_end = max(prev_end, float(seg.get("end") or start))
+    if media_duration and media_duration - prev_end >= 120.0:
+        gaps.append({
+            "start": round(prev_end, 3),
+            "end": round(media_duration, 3),
+            "duration": round(media_duration - prev_end, 3),
+        })
+    active = sum(max(0.0, float(s.get("end") or 0.0) - float(s.get("start") or 0.0)) for s in segments)
+    longest_gap = max((g["duration"] for g in gaps), default=0.0)
+    return {
+        "segments_count": len(segments),
+        "media_duration_seconds": round(media_duration, 3),
+        "first_start_seconds": round(float(segments[0].get("start") or 0.0), 3) if segments else 0.0,
+        "last_end_seconds": round(float(segments[-1].get("end") or 0.0), 3) if segments else 0.0,
+        "active_subtitle_seconds": round(active, 3),
+        "gap_count_over_120s": len(gaps),
+        "longest_gap_seconds": round(float(longest_gap), 3),
+        "large_gaps": gaps[:20],
+        "has_suspicious_missing_range": bool(longest_gap >= 600.0),
+    }
+
+
+def _slice_srt_to_window(srt_content: str, *, start_seconds: float, duration_seconds: float) -> str:
+    """Mantém só cues que cruzam a janela de preview e desloca para 00:00."""
+    if not srt_content:
+        return ""
+    window_start = max(0.0, float(start_seconds or 0.0))
+    window_end = window_start + max(0.1, float(duration_seconds or 0.0))
+    out: List[Dict[str, Any]] = []
+    for seg in _parse_srt_to_segments(srt_content):
+        start = float(seg.get("start") or 0.0)
+        end = max(start, float(seg.get("end") or start))
+        if end <= window_start or start >= window_end:
+            continue
+        shifted_start = max(0.0, start - window_start)
+        shifted_end = min(window_end - window_start, end - window_start)
+        if shifted_end - shifted_start < 0.05:
+            continue
+        out.append({
+            "start": round(shifted_start, 3),
+            "end": round(shifted_end, 3),
+            "text": str(seg.get("text") or "").strip(),
+        })
+    return _format_srt(out)
+
+
+def _format_gap_clock(seconds: float) -> str:
+    seconds = max(0.0, float(seconds or 0.0))
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _burn_body_srt_and_media(
+    *,
+    body: Dict[str, Any],
+    req_data: Dict[str, Any],
+) -> tuple[str, str]:
+    object_key = str(body.get("video_object_key") or req_data.get("video_object_key") or req_data.get("object_key") or "").strip()
+    srt_content = str(body.get("srt_content") or "").strip()
+    if not srt_content:
+        transcript = req_data.get("transcript") or {}
+        if isinstance(transcript, dict):
+            srt_content = str(transcript.get("srt") or "").strip()
+            if not srt_content:
+                srt_content = _format_srt(transcript.get("segments") or [])
+    return object_key, srt_content
+
+
+def _burn_preview_logo_payload(body: Dict[str, Any], req_data: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]], float, float, float, float]:
+    wizard_state = _safe_json_obj(req_data.get("wizard_state"))
+    logo_b64 = str(body.get("logo_b64") or "").strip()
+    logos: List[Dict[str, Any]] = []
+    raw_logos = body.get("logos")
+    if isinstance(raw_logos, list):
+        for raw in raw_logos[:MAX_LOGO_OVERLAYS]:
+            if isinstance(raw, dict) and raw.get("enabled") is not False and str(raw.get("b64") or raw.get("logo_b64") or raw.get("src") or "").strip():
+                logos.append(dict(raw))
+
+    def _num(value: Any, default: float, lo: float, hi: float) -> float:
+        try:
+            return max(lo, min(float(value), hi))
+        except Exception:
+            return default
+
+    logo_x = _num(body.get("logo_x", wizard_state.get("logo_x", 97.0)), 97.0, 0.0, 100.0)
+    logo_y = _num(body.get("logo_y", wizard_state.get("logo_y", 97.0)), 97.0, 0.0, 100.0)
+    logo_scale_pct = _num(body.get("logo_scale_pct", wizard_state.get("logo_scale_pct", 20.0)), 20.0, 5.0, 100.0)
+    logo_opacity = _num(body.get("logo_opacity", wizard_state.get("logo_opacity", 85.0)), 85.0, 5.0, 100.0)
+
+    profile_id = str(body.get("logo_profile_id") or wizard_state.get("logo_profile_id") or "").strip()
+    profile_name = str(body.get("logo_profile_name") or wizard_state.get("logo_profile_name") or "").strip()
+    layout_linked = _coerce_optional_bool(body.get("logo_profile_layout_linked"))
+    if layout_linked is None:
+        layout_linked = _coerce_optional_bool(wizard_state.get("logo_profile_layout_linked"))
+    if not logos and (profile_id or profile_name):
+        profile = _find_logo_profile(profile_id=profile_id, company_name=profile_name)
+        if profile:
+            logos = _logo_profile_to_payload_logos(profile)
+            overrides = body.get("logo_position_overrides") or []
+            for i, ov in enumerate(overrides[:len(logos)]):
+                if isinstance(ov, dict):
+                    if ov.get("x") is not None:
+                        logos[i]["x"] = _num(ov.get("x"), logos[i].get("x", logo_x), 0.0, 100.0)
+                    if ov.get("y") is not None:
+                        logos[i]["y"] = _num(ov.get("y"), logos[i].get("y", logo_y), 0.0, 100.0)
+                    if ov.get("scale_pct") is not None:
+                        logos[i]["scale_pct"] = _num(ov.get("scale_pct"), logos[i].get("scale_pct", logo_scale_pct), 5.0, 100.0)
+                    if ov.get("opacity") is not None:
+                        logos[i]["opacity"] = _num(ov.get("opacity"), logos[i].get("opacity", logo_opacity), 5.0, 100.0)
+            if layout_linked is False and not overrides and logos:
+                logos[0]["x"] = logo_x
+                logos[0]["y"] = logo_y
+                logos[0]["scale_pct"] = logo_scale_pct
+                logos[0]["opacity"] = logo_opacity
+            if logos:
+                first = logos[0]
+                logo_b64 = str(first.get("b64") or logo_b64)
+                logo_x = _num(first.get("x"), logo_x, 0.0, 100.0)
+                logo_y = _num(first.get("y"), logo_y, 0.0, 100.0)
+                logo_scale_pct = _num(first.get("scale_pct"), logo_scale_pct, 5.0, 100.0)
+                logo_opacity = _num(first.get("opacity"), logo_opacity, 5.0, 100.0)
+            elif not logo_b64:
+                ref = str(profile.get("logo_object_key") or "").strip()
+                if ref:
+                    logo_b64 = _media_ref_to_data_url(ref)
+    return logo_b64, logos, logo_x, logo_y, logo_scale_pct, logo_opacity
+
+
+@app.post("/api/burn-subtitles/diagnose")
+async def burn_subtitles_diagnose(request: Request):
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    run_id = str(body.get("run_id") or "").strip()
+    if not run_id:
+        return JSONResponse({"error": "missing_run_id"}, status_code=400)
+    r = get_run(run_id)
+    if not r:
+        return JSONResponse({"error": "run_not_found"}, status_code=404)
+    try:
+        req_data = json.loads(r["request_json"]) if isinstance(r["request_json"], str) else (r.get("request_json") or {})
+    except Exception as exc:
+        return JSONResponse({"error": "parse_error", "detail": str(exc)}, status_code=500)
+    object_key, srt_content = _burn_body_srt_and_media(body=body, req_data=req_data)
+    if not srt_content:
+        return JSONResponse({"error": "no_transcript", "detail": "Não há SRT para diagnosticar."}, status_code=400)
+    duration = 0.0
+    try:
+        if object_key:
+            if _is_local_media_ref(object_key):
+                duration = _probe_duration(_local_media_abs_path_from_ref(object_key))
+            else:
+                with tempfile.TemporaryDirectory(prefix="subtitle-diag-", dir=_preferred_tmpdir_root("system")) as tmpdir:
+                    in_path = os.path.join(tmpdir, "input_video")
+                    await asyncio.to_thread(_download_media_ref_to_file, media_ref=object_key, out_path=in_path, s3=_s3_client())
+                    duration = _probe_duration(in_path)
+    except Exception:
+        duration = 0.0
+    timing = _srt_timing_diagnostics(srt_content, media_duration_seconds=duration)
+    gaps = _subtitle_gap_report(srt_content, media_duration_seconds=duration)
+    warnings: List[str] = []
+    if gaps.get("has_suspicious_missing_range"):
+        g = max(gaps.get("large_gaps") or [], key=lambda item: item.get("duration", 0), default={})
+        warnings.append(
+            f"Legenda tem um buraco grande de {_format_gap_clock(g.get('duration', 0))} "
+            f"entre {_format_gap_clock(g.get('start', 0))} e {_format_gap_clock(g.get('end', 0))}."
+        )
+    if timing.get("likely_synthetic_chunk_timing"):
+        warnings.append("Legenda parece ter timestamps sintéticos por chunks; será reespalhada antes do burn.")
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "object_key": object_key,
+        "timing": timing,
+        "coverage": gaps,
+        "warnings": warnings,
+    }
+
+
+@app.post("/api/burn-subtitles/preview")
+async def burn_subtitles_preview(request: Request):
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    run_id = str(body.get("run_id") or "").strip()
+    if not run_id:
+        return JSONResponse({"error": "missing_run_id"}, status_code=400)
+    r = get_run(run_id)
+    if not r:
+        return JSONResponse({"error": "run_not_found"}, status_code=404)
+    try:
+        req_data = json.loads(r["request_json"]) if isinstance(r["request_json"], str) else (r.get("request_json") or {})
+    except Exception as exc:
+        return JSONResponse({"error": "parse_error", "detail": str(exc)}, status_code=500)
+
+    object_key, srt_content = _burn_body_srt_and_media(body=body, req_data=req_data)
+    if not object_key:
+        return JSONResponse({"error": "no_video", "detail": "Vídeo fonte não encontrado no run."}, status_code=400)
+    skip_subtitles = bool(body.get("skip_subtitles", False))
+    if not skip_subtitles and not srt_content:
+        return JSONResponse({"error": "no_transcript", "detail": "Não há SRT para prévia."}, status_code=400)
+
+    try:
+        start_seconds = max(0.0, float(body.get("timestamp") if body.get("timestamp") is not None else body.get("start_seconds") or 0.0))
+    except Exception:
+        start_seconds = 0.0
+    try:
+        preview_duration = max(10.0, min(float(body.get("duration_seconds") or 60.0), 180.0))
+    except Exception:
+        preview_duration = 60.0
+
+    logo_b64, logos, logo_x, logo_y, logo_scale_pct, logo_opacity = _burn_preview_logo_payload(body, req_data)
+    font_size = max(6, min(int(body.get("font_size") or 22), 72))
+    font_color = str(body.get("font_color") or "white").strip().lower()
+    sub_delay_secs = float(body.get("sub_delay_secs") or 0.0)
+    s3 = _s3_client()
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="burn-preview-", dir=_preferred_tmpdir_root("burn")) as tmpdir:
+            if _is_local_media_ref(object_key):
+                in_path = _local_media_abs_path_from_ref(object_key)
+            else:
+                in_path = os.path.join(tmpdir, "input_video")
+                await asyncio.to_thread(_download_media_ref_to_file, media_ref=object_key, out_path=in_path, s3=s3)
+            srt_path = os.path.join(tmpdir, "preview.srt")
+            out_path = os.path.join(tmpdir, "preview.mp4")
+            duration = await asyncio.to_thread(_probe_duration, in_path)
+            if duration > 0:
+                start_seconds = min(start_seconds, max(0.0, duration - 2.0))
+                preview_duration = min(preview_duration, max(1.0, duration - start_seconds))
+
+            timing_before = _srt_timing_diagnostics(srt_content, media_duration_seconds=duration) if srt_content else {}
+            if srt_content and timing_before.get("likely_synthetic_chunk_timing"):
+                srt_content = _retime_synthetic_chunk_srt(srt_content, media_duration_seconds=duration)
+            if srt_content and sub_delay_secs:
+                srt_content = _shift_srt(srt_content, sub_delay_secs)
+            if srt_content:
+                srt_content = _slice_srt_to_window(
+                    srt_content,
+                    start_seconds=start_seconds,
+                    duration_seconds=preview_duration,
+                )
+                srt_content = _wrap_srt_for_burn(srt_content)
+            with open(srt_path, "w", encoding="utf-8") as f:
+                f.write(srt_content or "")
+
+            logo_specs = _write_logo_overlay_specs(
+                raw_logos=logos if logos else None,
+                legacy_logo_b64=logo_b64,
+                tmpdir=tmpdir,
+                legacy_x=logo_x,
+                legacy_y=logo_y,
+                legacy_scale_pct=logo_scale_pct,
+                legacy_opacity=logo_opacity,
+            )
+            video_sar = _probe_video_sar(in_path)
+            color_map = {
+                "white": "&H00FFFFFF",
+                "yellow": "&H0000FFFF",
+                "cyan": "&H00FFFF00",
+                "orange": "&H000080FF",
+                "black": "&H00000000",
+            }
+            sub_style = (
+                f"FontName=Arial,FontSize={font_size},"
+                f"PrimaryColour={color_map.get(font_color, '&H00FFFFFF')},"
+                "OutlineColour=&H00000000,Bold=1,Outline=2,Shadow=1"
+            )
+            scale_filter = "scale=-2:min(ih\\,720),fps=30"
+
+            if logo_specs:
+                parts: List[str] = [f"[0:v]{scale_filter}[vbase]"]
+                current_label = "[vbase]"
+                if not skip_subtitles and srt_content:
+                    parts.append(f"{current_label}subtitles={srt_path}:charenc=utf-8:force_style='{sub_style}'[vsub]")
+                    current_label = "[vsub]"
+                for idx, spec in enumerate(logo_specs):
+                    input_idx = idx + 1
+                    logo_scaled_label = f"p_lgs{idx}"
+                    base_label = f"p_lb{idx}"
+                    logo_label = f"p_lg{idx}"
+                    out_label = f"p_vlogo{idx}"
+                    scale_ratio = max(0.05, min(float(spec.get("scale_pct", 20.0)) / 100.0, 1.0))
+                    _append_logo_aspect_locked_scale(
+                        parts,
+                        input_idx=input_idx,
+                        base_ref=current_label,
+                        logo_scaled_label=logo_scaled_label,
+                        base_label=base_label,
+                        scale_ratio=scale_ratio,
+                        tag=f"preview_logo_{idx}",
+                        video_sar=video_sar,
+                    )
+                    alpha_ratio = max(0.05, min(float(spec.get("opacity", 85.0)) / 100.0, 1.0))
+                    parts.append(f"[{logo_scaled_label}]format=rgba,setsar=1,colorchannelmixer=aa={alpha_ratio:.3f}[{logo_label}]")
+                    x = max(0.0, min(float(spec.get("x", 97.0)), 100.0))
+                    y = max(0.0, min(float(spec.get("y", 97.0)), 100.0))
+                    parts.append(f"[{base_label}][{logo_label}]overlay=(W-w)*{x:.4f}/100:(H-h)*{y:.4f}/100:eof_action=repeat:shortest=1[{out_label}]")
+                    current_label = f"[{out_label}]"
+                parts.append(f"{current_label}format=yuv420p[out]")
+                logo_args: List[str] = []
+                for spec in logo_specs:
+                    if bool(spec.get("is_gif")):
+                        logo_args.extend(["-stream_loop", "-1", "-ignore_loop", "0", "-i", str(spec.get("path"))])
+                    else:
+                        logo_args.extend(["-loop", "1", "-i", str(spec.get("path"))])
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{start_seconds:.3f}", "-i", in_path,
+                    *logo_args,
+                    "-t", f"{preview_duration:.3f}",
+                    "-filter_complex", ";".join(parts),
+                    "-map", "[out]", "-map", "0:a?",
+                    "-c:v", "libx264", "-crf", "30", "-preset", "ultrafast",
+                    "-c:a", "aac", "-b:a", "96k",
+                    "-movflags", "+faststart",
+                    out_path,
+                ]
+            else:
+                vf = scale_filter
+                if not skip_subtitles and srt_content:
+                    vf += f",subtitles={srt_path}:charenc=utf-8:force_style='{sub_style}'"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{start_seconds:.3f}", "-i", in_path,
+                    "-t", f"{preview_duration:.3f}",
+                    "-vf", vf,
+                    "-map", "0:v:0", "-map", "0:a?",
+                    "-c:v", "libx264", "-crf", "30", "-preset", "ultrafast",
+                    "-c:a", "aac", "-b:a", "96k",
+                    "-movflags", "+faststart",
+                    out_path,
+                ]
+            proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=360)
+            if proc.returncode != 0 or not os.path.exists(out_path):
+                return JSONResponse({"error": "preview_ffmpeg_failed", "detail": (proc.stderr or proc.stdout or "")[-1200:]}, status_code=500)
+            stored = await asyncio.to_thread(
+                _store_local_path,
+                src_path=out_path,
+                prefix=f"previews/burn/{run_id[:8]}",
+                filename=f"preview_{run_id[:8]}_{int(start_seconds)}s.mp4",
+                content_type="video/mp4",
+            )
+            final_srt = srt_content or ""
+            return {
+                "ok": True,
+                "object_key": stored.get("object_key"),
+                "video_url": stored.get("public_url"),
+                "start_seconds": round(start_seconds, 3),
+                "duration_seconds": round(preview_duration, 3),
+                "diagnostics": {
+                    "before": timing_before,
+                    "coverage": _subtitle_gap_report(final_srt, media_duration_seconds=preview_duration),
+                },
+            }
+    except Exception as exc:
+        return JSONResponse({"error": "preview_failed", "detail": _safe_error_detail(exc, "preview_failed")}, status_code=500)
 
 
 @app.post("/api/translate-srt")
@@ -8967,8 +12323,8 @@ def tokens_set(req: TokenSetRequest, request: Request):
     if auth_err:
         return auth_err
     provider = (req.provider or "").strip().lower()
-    if provider not in {"openai", "deepseek", "openrouter", "grok", "groq", "gemini", "fal"}:
-        return {"error": "unsupported_provider", "detail": "allowed providers: openai, deepseek, openrouter, grok, groq, gemini, fal"}
+    if provider not in {"openai", "deepseek", "openrouter", "grok", "groq", "gemini", "fal", "deepgram"}:
+        return {"error": "unsupported_provider", "detail": "allowed providers: openai, deepseek, openrouter, grok, groq, gemini, fal, deepgram"}
     api_key = (req.api_key or "").strip()
     if not api_key:
         return {"error": "missing_api_key"}
