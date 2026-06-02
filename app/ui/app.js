@@ -512,6 +512,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.18.19', date: '2026-06-02',
+    items: [
+      { type: 'feat', text: 'Visual: aplicado o shell MetaPorn OS desenhado no pacote do Claude Designer, com launcher em blocos, janela principal em vidro escuro e barra inferior de atalhos, preservando rotas e funções existentes.' },
+    ],
+  },
+  {
     version: 'v1.18.18', date: '2026-05-25',
     items: [
       { type: 'fix', text: 'Logo: burn corrigido para calcular a altura pela proporção real da imagem no FFmpeg 7, evitando marca achatada em vídeos legendados.' },

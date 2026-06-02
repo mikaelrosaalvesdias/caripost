@@ -2,6 +2,12 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.18.19 - 2026-06-02
+
+- Aplica a reestruturacao visual MetaPorn OS recebida no pacote `Metaporn.zip`.
+- Transforma o shell atual em uma experiencia visual de desktop: launcher em blocos, janela principal em vidro escuro e barra inferior de atalhos.
+- Preserva rotas, IDs, handlers e fluxos tecnicos existentes.
+
 ## v1.18.18 - 2026-05-25
 
 - Corrige o burn de logo para manter a proporcao visual do preview e evitar logo achatada no video final.
