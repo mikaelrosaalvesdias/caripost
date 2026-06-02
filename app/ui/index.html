@@ -4522,95 +4522,66 @@
     body::after { display: none !important; }
 
     #loginScreen {
-      background:
-        radial-gradient(780px 620px at 18% 8%, rgba(255, 23, 68, .26), transparent 62%),
-        radial-gradient(720px 560px at 86% 92%, rgba(32, 213, 255, .16), transparent 60%),
-        radial-gradient(620px 520px at 64% 24%, rgba(124, 58, 237, .18), transparent 58%),
-        linear-gradient(160deg, var(--os-wall1), var(--os-wall2) 68%);
+      background: radial-gradient(900px 700px at 50% 38%, #13131f, #06060c 72%);
     }
 
     #loginScreen::before {
-      opacity: .52;
+      opacity: .22;
       mix-blend-mode: normal;
-      background-image:
-        radial-gradient(rgba(255, 255, 255, .034) 1px, transparent 1.4px),
-        linear-gradient(90deg, transparent 0 22%, rgba(255, 255, 255, .08) 22.1% 22.3%, transparent 22.4%),
-        linear-gradient(0deg, transparent 0 42%, rgba(255, 255, 255, .07) 42.1% 42.3%, transparent 42.4%);
-      background-size: 32px 32px, 520px 520px, 520px 520px;
-      mask-image: radial-gradient(120% 130% at 50% 30%, #000, transparent 78%);
+      background:
+        radial-gradient(640px 420px at 50% 38%, rgba(255, 23, 68, .12), transparent 70%),
+        radial-gradient(rgba(255, 255, 255, .026) 1px, transparent 1.4px);
+      background-size: auto, 32px 32px;
+      mask-image: radial-gradient(120% 120% at 50% 42%, #000, transparent 82%);
     }
 
-    #loginScreen::after {
-      content: "META P";
-      position: absolute;
-      right: 4vw;
-      bottom: 8vh;
-      color: rgba(255, 255, 255, .035);
-      font-family: 'Space Grotesk', 'Inter', sans-serif;
-      font-size: min(14vw, 210px);
-      font-weight: 700;
-      letter-spacing: -.05em;
-      line-height: .78;
-      pointer-events: none;
-      user-select: none;
-    }
+    #loginScreen::after { display: none; }
 
     .login-circuit,
     .login-rings { display: none; }
 
     .login-shell {
-      width: min(100%, 1180px);
+      width: 100%;
       min-height: 100vh;
       padding: 32px;
     }
 
-    .login-shell::before {
-      content: "MetaPorn OS";
-      position: absolute;
-      left: 34px;
-      top: 28px;
-      color: rgba(237, 236, 255, .58);
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      letter-spacing: .18em;
-      text-transform: uppercase;
-    }
+    .login-shell::before { display: none; }
 
     .login-box {
-      width: min(100%, 390px);
-      gap: 17px;
-      padding: 30px 34px 28px;
-      border-radius: 18px;
-      border-color: var(--os-line-2);
-      background: linear-gradient(180deg, rgba(26, 26, 53, .88), rgba(12, 12, 24, .94));
-      box-shadow: var(--os-shadow);
+      width: min(100%, 360px);
+      align-items: center;
+      gap: 16px;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      text-align: center;
     }
 
-    .login-box::before {
-      inset: 0;
-      background:
-        radial-gradient(260px 180px at 18% 6%, rgba(255, 23, 68, .22), transparent 64%),
-        radial-gradient(260px 200px at 92% 92%, rgba(124, 58, 237, .18), transparent 66%);
-    }
+    .login-box::before { display: none; }
 
     .login-brand-wrap {
-      justify-content: flex-start;
-      gap: 14px;
-      padding-bottom: 8px;
-      text-align: left;
+      width: 100%;
+      justify-content: center;
+      flex-direction: column;
+      gap: 24px;
+      padding-bottom: 12px;
+      text-align: center;
     }
 
     .login-mark {
-      width: 58px;
-      height: 58px;
+      width: 74px;
+      height: 74px;
       display: grid;
       place-items: center;
-      flex: 0 0 58px;
-      border-radius: 17px;
-      background: linear-gradient(145deg, var(--os-red), var(--os-red-2));
-      box-shadow: 0 16px 42px rgba(255, 23, 68, .34);
+      flex: 0 0 74px;
+      border-radius: 22px;
+      background: linear-gradient(140deg, var(--os-red), var(--os-red-2));
+      box-shadow: 0 16px 50px rgba(255, 45, 85, .40);
       color: #fff;
-      font-size: 34px;
+      font-size: 46px;
       letter-spacing: 0;
       line-height: 1;
       text-shadow: none;
@@ -4620,15 +4591,55 @@
     }
 
     .login-brand {
-      font-size: 2rem;
-      letter-spacing: -.03em;
+      font-size: 58px;
+      letter-spacing: -.01em;
+      line-height: .95;
     }
 
-    .login-subtitle {
-      margin-top: 4px;
+    .login-brand em {
+      color: var(--os-red);
+      font-style: normal;
+      text-shadow: 0 0 40px rgba(255, 45, 85, .50);
+    }
+
+    .login-brand::after {
+      content: " OS";
+      margin-left: 8px;
       color: var(--os-muted);
-      font-size: .82rem;
+      font-size: 20px;
+      font-weight: 400;
+      vertical-align: middle;
+    }
+
+    .login-brand::first-letter { color: #fff; }
+
+    .login-subtitle {
+      width: 280px;
+      margin: 22px auto 0;
+      border-radius: 5px;
+      color: transparent;
+      font-size: 0;
       text-align: left;
+    }
+
+    .login-subtitle::before {
+      content: "";
+      display: block;
+      width: 76%;
+      height: 5px;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--os-red), #ff7a9c);
+      box-shadow: 72px 0 0 rgba(255, 255, 255, .08);
+    }
+
+    .login-subtitle::after {
+      content: "Admin platform";
+      display: block;
+      margin-top: 13px;
+      color: var(--os-muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
     }
 
     .login-field label {
@@ -4642,8 +4653,9 @@
       height: 44px;
       border-color: var(--os-line-2);
       border-radius: 11px;
-      background: rgba(7, 7, 13, .48);
+      background: rgba(7, 7, 13, .60);
       color: var(--os-text);
+      text-align: center;
     }
 
     .login-field input:focus {
@@ -4652,6 +4664,12 @@
     }
 
     .login-link { color: var(--os-cyan); }
+
+    .login-links,
+    .login-footer {
+      justify-content: center;
+      width: 100%;
+    }
 
     .login-btn {
       border-radius: 11px;
@@ -4704,8 +4722,20 @@
       user-select: none;
     }
 
+    .app-shell::before,
+    .app-shell::after,
+    .app-sidebar,
+    .app-main,
+    .os-start-menu,
+    .os-taskbar {
+      position: fixed;
+    }
+
+    .app-shell::before,
+    .app-shell::after { z-index: 0; }
+
     .app-sidebar {
-      position: absolute;
+      position: fixed;
       inset: 28px 30px 78px;
       z-index: 2;
       width: auto;
@@ -4728,6 +4758,8 @@
     .nav {
       height: 100%;
       display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
       align-items: flex-start;
       justify-content: space-between;
       gap: 28px;
@@ -4741,24 +4773,34 @@
       display: grid;
       grid-template-columns: repeat(2, 114px);
       align-items: start;
-      gap: 8px 10px;
+      gap: 6px;
       pointer-events: auto;
     }
 
     .nav-section-label {
       grid-column: 1 / -1;
       padding: 0 4px 8px;
-      color: rgba(237, 236, 255, .72);
-      font-family: 'JetBrains Mono', monospace;
+      color: #c4c4de;
+      font-family: 'Space Grotesk', 'Inter', sans-serif;
       font-size: 10px;
       font-weight: 700;
-      letter-spacing: .18em;
+      letter-spacing: .13em;
       line-height: 1.35;
       text-transform: uppercase;
       text-shadow: 0 1px 4px rgba(0,0,0,.9);
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    .nav-section-label::after { display: none; }
+    .nav-section-label::after {
+      content: "";
+      display: block;
+      flex: 1;
+      height: 1px;
+      margin-left: 8px;
+      background: linear-gradient(90deg, rgba(255,255,255,.18), transparent);
+    }
 
     .nav a {
       width: 114px;
@@ -4816,6 +4858,7 @@
     }
 
     .nav a.active .nav-icon,
+    .nav a[data-desktop-accent="red"] .nav-icon,
     .nav a[data-route="autoeditor"] .nav-icon,
     .nav a[data-route="criacao"].active .nav-icon {
       border-color: transparent;
@@ -4827,6 +4870,55 @@
     .nav a[data-route="autoeditor"] .nav-icon {
       background: linear-gradient(150deg, var(--os-violet), #5b21b6);
       box-shadow: 0 10px 28px rgba(124, 58, 237, .34);
+    }
+
+    .nav a[data-desktop-accent="red"][data-route="autoeditor"] .nav-icon {
+      background: linear-gradient(150deg, var(--os-red), var(--os-red-2));
+      box-shadow: 0 10px 28px rgba(255, 23, 68, .36);
+    }
+
+    .nav a[data-desktop-accent="cyan"] .nav-icon {
+      border-color: transparent;
+      background: linear-gradient(150deg, var(--os-cyan), #1380a3);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(32, 213, 255, .26);
+    }
+
+    body.os-desktop-home .nav a.active {
+      border-color: transparent;
+      background: transparent;
+    }
+
+    body.os-desktop-home .nav a.active .nav-icon {
+      border-color: var(--os-line-2);
+      background: linear-gradient(150deg, #1a1a35, #13132a);
+      color: var(--os-text);
+      box-shadow: 0 8px 24px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.04);
+    }
+
+    body.os-desktop-home .nav a[data-desktop-accent="red"].active .nav-icon {
+      border-color: transparent;
+      background: linear-gradient(150deg, var(--os-red), var(--os-red-2));
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(255, 23, 68, .36);
+    }
+
+    body.os-desktop-home .nav a[data-route="autoeditor"].active .nav-icon {
+      border-color: transparent;
+      background: linear-gradient(150deg, var(--os-violet), #5b21b6);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(124, 58, 237, .34);
+    }
+
+    body.os-desktop-home .nav a[data-desktop-accent="cyan"].active .nav-icon {
+      border-color: transparent;
+      background: linear-gradient(150deg, var(--os-cyan), #1380a3);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(32, 213, 255, .26);
+    }
+
+    body.os-desktop-home .help-float {
+      display: none;
     }
 
     .nav-copy {
@@ -5178,7 +5270,7 @@
         <div class="login-brand-wrap">
           <div class="login-mark" aria-hidden="true">M</div>
           <div>
-            <div class="login-brand">MetaPorn</div>
+            <div class="login-brand">Meta<em>Porn</em></div>
             <div class="login-subtitle">Plataforma de Agência</div>
           </div>
         </div>
@@ -5293,6 +5385,13 @@
       </div>
 
       <nav class="nav" id="mainNav">
+        <div class="nav-section" data-section="fluxo">
+          <div class="nav-section-label">Fluxo Rápido</div>
+          <a href="#autoeditor" data-route="autoeditor" data-os-icon="bolt" data-desktop-accent="red"><span class="nav-icon">↯</span><span class="nav-copy"><span class="nav-title">Modo Automático</span><span class="nav-caption">Fonte até publicação</span></span></a>
+          <a href="#autoeditor" data-route="autoeditor" data-os-icon="autoeditor"><span class="nav-icon">◉</span><span class="nav-copy"><span class="nav-title">AutoEditor</span><span class="nav-caption">Cortes com Grok Vision</span></span></a>
+          <a href="#criacao" data-route="criacao" data-os-icon="flow" data-desktop-accent="cyan"><span class="nav-icon">⌘</span><span class="nav-copy"><span class="nav-title">Assistente</span><span class="nav-caption">Wizard de criação</span></span></a>
+        </div>
+
         <div class="nav-section" data-section="inteligencia">
           <div class="nav-section-label">Inteligência e Mídia</div>
           <a href="#analyze" data-route="analyze"><span class="nav-icon">◎</span><span class="nav-copy"><span class="nav-title">Analyze</span><span class="nav-caption">Transcrição, análise e prompt</span></span></a>
@@ -5300,8 +5399,15 @@
           <a href="#runs" data-route="runs"><span class="nav-icon">▣</span><span class="nav-copy"><span class="nav-title">Runs</span><span class="nav-caption">Histórico técnico e resultados</span></span></a>
           <a href="#media" data-route="media"><span class="nav-icon">◫</span><span class="nav-copy"><span class="nav-title">Arquivos</span><span class="nav-caption">Originais, burns e teasers</span></span></a>
           <a href="#referencia" data-route="referencia"><span class="nav-icon">✦</span><span class="nav-copy"><span class="nav-title">Referência</span><span class="nav-caption">Pesquisa e benchmarking</span></span></a>
-          <a href="#autoeditor" data-route="autoeditor"><span class="nav-icon">◉</span><span class="nav-copy"><span class="nav-title">AutoEditor</span><span class="nav-caption">Cortes automáticos com IA</span></span></a>
           <a href="#videoenhancer" data-route="videoenhancer"><span class="nav-icon">✦</span><span class="nav-copy"><span class="nav-title">Video Enhancer</span><span class="nav-caption">Upscale de qualidade com IA</span></span></a>
+        </div>
+
+        <div class="nav-section" data-section="edicao">
+          <div class="nav-section-label">Edição & Conteúdo</div>
+          <a href="#criacao" data-route="criacao" data-os-icon="captions"><span class="nav-icon">▣</span><span class="nav-copy"><span class="nav-title">Legenda</span><span class="nav-caption">SRT e burn</span></span></a>
+          <a href="#criacao" data-route="criacao" data-os-icon="logo"><span class="nav-icon">□</span><span class="nav-copy"><span class="nav-title">Logo</span><span class="nav-caption">Marca no vídeo</span></span></a>
+          <a href="#criacao" data-route="criacao" data-os-icon="scissors"><span class="nav-icon">✂</span><span class="nav-copy"><span class="nav-title">Teaser</span><span class="nav-caption">Cenas curtas</span></span></a>
+          <a href="#criacao" data-route="criacao" data-os-icon="thumbnail"><span class="nav-icon">▧</span><span class="nav-copy"><span class="nav-title">Thumbnail</span><span class="nav-caption">Imagem final</span></span></a>
         </div>
 
         <div class="nav-section" data-section="operacao">
@@ -5329,7 +5435,7 @@
         </a>
         <div class="sidebar-version">
           <span>Build atual</span>
-          <strong>v1.18.20</strong>
+          <strong>v1.18.21</strong>
         </div>
       </div>
     </aside>
@@ -6754,12 +6860,12 @@
     </div>
     <div class="os-tray" aria-hidden="true">
       <span class="os-tray-pill">OS</span>
-      <span class="os-tray-pill">v1.18.20</span>
+      <span class="os-tray-pill">v1.18.21</span>
     </div>
   </nav>
 
   <div id="toast" class="toast hidden"></div>
-  <div class="version-badge">v1.18.20</div>
+  <div class="version-badge">v1.18.21</div>
 
   <!-- MODAL: CARREGAMENTO DA PÁGINA -->
   <div id="pageLoadModal" style="
@@ -6828,7 +6934,7 @@
     </div>
   </div>
 
-  <script src="/ui/app.js?v=118200"></script>
+  <script src="/ui/app.js?v=118210"></script>
 </body>
 
 </html>

@@ -384,7 +384,13 @@ function routeTo(name) {
 
 function initRouting() {
   function onHash() {
-    const h = (location.hash || '#analyze').replace('#', '');
+    const rawHash = (location.hash || '').replace('#', '').trim();
+    if (!rawHash) {
+      routeTo('analyze');
+      osShowDesktopHome();
+      return;
+    }
+    const h = rawHash;
     routeTo(h);
   }
   window.addEventListener('hashchange', onHash);
@@ -511,6 +517,12 @@ const TEASER_MAX_SCENE_DURATION_SEC = 720;
 const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
+  {
+    version: 'v1.18.21', date: '2026-06-02',
+    items: [
+      { type: 'fix', text: 'Visual: corrigida a tela inicial para seguir o desktop do pacote Claude Designer, com boot/login MetaPorn OS, grupos de apps completos e janela oculta por padrão quando não há rota direta.' },
+    ],
+  },
   {
     version: 'v1.18.20', date: '2026-06-02',
     items: [
@@ -2013,13 +2025,19 @@ const CHANGELOG = [
 ];
 
 const MP_OS_ICON_PATHS = {
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-13h-7z"/>',
   analyze: '<circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4-4"/><path d="M11 8v6M8 11h6"/>',
   compare: '<path d="M12 3v18"/><path d="M7 7 3 12l4 5M17 7l4 5-4 5"/>',
   runs: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M7 13h6M7 16.5h9"/><circle cx="6" cy="6.5" r=".6" fill="currentColor"/>',
   media: '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 6l2.4-2.6h6L14 6"/><circle cx="12" cy="12.5" r="3"/>',
   refs: '<circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4-4M11 8l1 2 2 .3-1.5 1.5.4 2-1.9-1-1.9 1 .4-2L8 10.3l2-.3z"/>',
+  flow: '<path d="M6 5a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM18 5a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM12 15a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/><path d="M8 7h6M7.5 8.5 11 15M16.5 8.5 13 15"/>',
   autoeditor: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 9h18M8 5v4M16 5v4"/><path d="m10.5 12.5 4 2-4 2z" fill="currentColor"/>',
   enhance: '<path d="M5 12h3l2-7 3 14 2-7h4"/><path d="M19 4l.7 1.8L21.5 6.5l-1.8.7L19 9l-.7-1.8L16.5 6.5l1.8-.7z" fill="currentColor"/>',
+  captions: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 10h4M13 10h3M7 14h6M15 14h2"/>',
+  logo: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 15l3-3 2 2 2-3 3 4"/><circle cx="9" cy="9" r="1.2"/>',
+  scissors: '<path d="M4 7a2.5 2.5 0 1 0 4 2M4 17a2.5 2.5 0 1 0 4-2M20 4 8 14M20 20 8 10"/>',
+  thumbnail: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 15l3-3 2 2 3-4 3 5"/>',
   post: '<path d="M5 3h10l4 4v14H5z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
   telegram: '<path d="M21 4 3 11l5 2 2 6 3-4 4 3z"/><path d="m8 13 8-6-5 7"/>',
   broadcast: '<circle cx="12" cy="12" r="2.4"/><path d="M7.5 7.5a6 6 0 0 0 0 9M16.5 7.5a6 6 0 0 1 0 9M5 5a9 9 0 0 0 0 14M19 5a9 9 0 0 1 0 14"/>',
@@ -2057,7 +2075,7 @@ function mpOsSvgIcon(name) {
 
 function paintMetaPornOsIcons() {
   document.querySelectorAll('a[data-route]').forEach(a => {
-    const iconName = MP_OS_ROUTE_ICONS[a.dataset.route];
+    const iconName = a.dataset.osIcon || MP_OS_ROUTE_ICONS[a.dataset.route];
     if (!iconName) return;
     const navIcon = a.querySelector('.nav-icon');
     if (navIcon && navIcon.dataset.osPainted !== '1') {
@@ -2111,6 +2129,14 @@ function osRestoreWindow() {
   document.body.classList.remove('os-window-hidden');
 }
 
+function osShowDesktopHome() {
+  document.body.classList.add('os-window-hidden', 'os-desktop-home');
+  osCloseStart();
+  document.querySelectorAll('a[data-route], .os-start-app[data-start-route]').forEach(a => {
+    a.classList.remove('active');
+  });
+}
+
 function osMinimizeWindow() {
   document.body.classList.add('os-window-hidden');
   osCloseStart();
@@ -2122,6 +2148,7 @@ function osCloseWindow() {
 }
 
 function osSyncShellRoute(name) {
+  document.body.classList.remove('os-desktop-home');
   osRestoreWindow();
   osCloseStart();
   document.querySelectorAll('.os-start-app[data-start-route]').forEach(a => {
