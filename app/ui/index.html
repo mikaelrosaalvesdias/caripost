@@ -4489,6 +4489,681 @@
       .os-start span:not(.os-start-mark) { display: none; }
       .os-tray { display: none; }
     }
+
+    /* ── CLAUDE DESIGNER CORRECTION: FULL METAPORN OS SHELL ── */
+    :root {
+      --os-bg: #0a0a14;
+      --os-wall1: #171125;
+      --os-wall2: #080810;
+      --os-panel: rgba(19, 19, 42, .82);
+      --os-panel-2: rgba(26, 26, 53, .58);
+      --os-title: rgba(30, 30, 58, .72);
+      --os-text: #edecff;
+      --os-muted: #8b8ba8;
+      --os-faint: #54546c;
+      --os-line: rgba(255, 255, 255, .075);
+      --os-line-2: rgba(255, 255, 255, .14);
+      --os-red: #ff1744;
+      --os-red-2: #cc1038;
+      --os-violet: #7c3aed;
+      --os-cyan: #20d5ff;
+      --os-good: #00e676;
+      --os-shadow: 0 30px 80px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .04);
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      overflow: hidden;
+      background: var(--os-bg);
+    }
+
+    body::before,
+    body::after { display: none !important; }
+
+    #loginScreen {
+      background:
+        radial-gradient(780px 620px at 18% 8%, rgba(255, 23, 68, .26), transparent 62%),
+        radial-gradient(720px 560px at 86% 92%, rgba(32, 213, 255, .16), transparent 60%),
+        radial-gradient(620px 520px at 64% 24%, rgba(124, 58, 237, .18), transparent 58%),
+        linear-gradient(160deg, var(--os-wall1), var(--os-wall2) 68%);
+    }
+
+    #loginScreen::before {
+      opacity: .52;
+      mix-blend-mode: normal;
+      background-image:
+        radial-gradient(rgba(255, 255, 255, .034) 1px, transparent 1.4px),
+        linear-gradient(90deg, transparent 0 22%, rgba(255, 255, 255, .08) 22.1% 22.3%, transparent 22.4%),
+        linear-gradient(0deg, transparent 0 42%, rgba(255, 255, 255, .07) 42.1% 42.3%, transparent 42.4%);
+      background-size: 32px 32px, 520px 520px, 520px 520px;
+      mask-image: radial-gradient(120% 130% at 50% 30%, #000, transparent 78%);
+    }
+
+    #loginScreen::after {
+      content: "META P";
+      position: absolute;
+      right: 4vw;
+      bottom: 8vh;
+      color: rgba(255, 255, 255, .035);
+      font-family: 'Space Grotesk', 'Inter', sans-serif;
+      font-size: min(14vw, 210px);
+      font-weight: 700;
+      letter-spacing: -.05em;
+      line-height: .78;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .login-circuit,
+    .login-rings { display: none; }
+
+    .login-shell {
+      width: min(100%, 1180px);
+      min-height: 100vh;
+      padding: 32px;
+    }
+
+    .login-shell::before {
+      content: "MetaPorn OS";
+      position: absolute;
+      left: 34px;
+      top: 28px;
+      color: rgba(237, 236, 255, .58);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .login-box {
+      width: min(100%, 390px);
+      gap: 17px;
+      padding: 30px 34px 28px;
+      border-radius: 18px;
+      border-color: var(--os-line-2);
+      background: linear-gradient(180deg, rgba(26, 26, 53, .88), rgba(12, 12, 24, .94));
+      box-shadow: var(--os-shadow);
+    }
+
+    .login-box::before {
+      inset: 0;
+      background:
+        radial-gradient(260px 180px at 18% 6%, rgba(255, 23, 68, .22), transparent 64%),
+        radial-gradient(260px 200px at 92% 92%, rgba(124, 58, 237, .18), transparent 66%);
+    }
+
+    .login-brand-wrap {
+      justify-content: flex-start;
+      gap: 14px;
+      padding-bottom: 8px;
+      text-align: left;
+    }
+
+    .login-mark {
+      width: 58px;
+      height: 58px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 58px;
+      border-radius: 17px;
+      background: linear-gradient(145deg, var(--os-red), var(--os-red-2));
+      box-shadow: 0 16px 42px rgba(255, 23, 68, .34);
+      color: #fff;
+      font-size: 34px;
+      letter-spacing: 0;
+      line-height: 1;
+      text-shadow: none;
+      -webkit-background-clip: border-box;
+      background-clip: border-box;
+      transform: none;
+    }
+
+    .login-brand {
+      font-size: 2rem;
+      letter-spacing: -.03em;
+    }
+
+    .login-subtitle {
+      margin-top: 4px;
+      color: var(--os-muted);
+      font-size: .82rem;
+      text-align: left;
+    }
+
+    .login-field label {
+      color: rgba(237, 236, 255, .72);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .68rem;
+      letter-spacing: .14em;
+    }
+
+    .login-field input {
+      height: 44px;
+      border-color: var(--os-line-2);
+      border-radius: 11px;
+      background: rgba(7, 7, 13, .48);
+      color: var(--os-text);
+    }
+
+    .login-field input:focus {
+      border-color: rgba(255, 23, 68, .58);
+      box-shadow: 0 0 0 4px rgba(255, 23, 68, .12);
+    }
+
+    .login-link { color: var(--os-cyan); }
+
+    .login-btn {
+      border-radius: 11px;
+      background: linear-gradient(135deg, var(--os-red), var(--os-red-2));
+      color: #fff;
+      box-shadow: 0 10px 30px rgba(255, 23, 68, .32), inset 0 1px 0 rgba(255, 255, 255, .2);
+    }
+
+    .login-btn:hover {
+      box-shadow: 0 14px 38px rgba(255, 23, 68, .42);
+    }
+
+    .app-shell {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      display: block;
+      min-height: 0;
+      padding: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(800px 660px at 3% -10%, rgba(255, 23, 68, .20), transparent 64%),
+        radial-gradient(760px 620px at 92% 102%, rgba(32, 213, 255, .12), transparent 64%),
+        radial-gradient(700px 560px at 58% 34%, rgba(124, 58, 237, .14), transparent 62%),
+        linear-gradient(160deg, var(--os-wall1), var(--os-wall2) 70%);
+    }
+
+    .app-shell::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: radial-gradient(rgba(255,255,255,.032) 1px, transparent 1.4px);
+      background-size: 32px 32px;
+      mask-image: radial-gradient(130% 130% at 50% 28%, #000, transparent 80%);
+    }
+
+    .app-shell::after {
+      content: "META P";
+      position: absolute;
+      right: 4vw;
+      bottom: 10vh;
+      color: rgba(255, 255, 255, .03);
+      font-family: 'Space Grotesk', 'Inter', sans-serif;
+      font-size: min(13vw, 210px);
+      font-weight: 700;
+      letter-spacing: -.05em;
+      line-height: .78;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .app-sidebar {
+      position: absolute;
+      inset: 28px 30px 78px;
+      z-index: 2;
+      width: auto;
+      height: auto;
+      padding: 0;
+      overflow: hidden;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      pointer-events: none;
+      transform: none !important;
+    }
+
+    .sidebar-header,
+    .sidebar-footer,
+    .sidebar-backdrop { display: none !important; }
+
+    .nav {
+      height: 100%;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 28px;
+      padding: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .nav-section {
+      width: auto;
+      display: grid;
+      grid-template-columns: repeat(2, 114px);
+      align-items: start;
+      gap: 8px 10px;
+      pointer-events: auto;
+    }
+
+    .nav-section-label {
+      grid-column: 1 / -1;
+      padding: 0 4px 8px;
+      color: rgba(237, 236, 255, .72);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      line-height: 1.35;
+      text-transform: uppercase;
+      text-shadow: 0 1px 4px rgba(0,0,0,.9);
+    }
+
+    .nav-section-label::after { display: none; }
+
+    .nav a {
+      width: 114px;
+      min-height: 116px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      flex-direction: column;
+      gap: 9px;
+      padding: 12px 6px 10px;
+      border: 1px solid transparent;
+      border-radius: 18px;
+      background: transparent;
+      color: #e9e9f7;
+      text-align: center;
+      text-decoration: none;
+      transition: background .15s ease, border-color .15s ease, transform .15s ease;
+    }
+
+    .nav a:hover {
+      transform: translateY(-2px);
+      border-color: var(--os-line-2);
+      background: rgba(255, 255, 255, .06);
+      color: #fff;
+    }
+
+    .nav a.active {
+      transform: none;
+      border-color: rgba(255, 23, 68, .34);
+      background: rgba(255, 23, 68, .10);
+      box-shadow: none;
+      color: #fff;
+    }
+
+    .nav-icon {
+      width: 70px;
+      height: 70px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 70px;
+      margin: 0;
+      border-radius: 21px;
+      border: 1px solid var(--os-line-2);
+      background: linear-gradient(150deg, #1a1a35, #13132a);
+      color: var(--os-text);
+      box-shadow: 0 8px 24px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.04);
+      font-size: 0;
+      line-height: 1;
+    }
+
+    .nav-icon svg {
+      width: 35px;
+      height: 35px;
+      stroke-width: 1.8;
+    }
+
+    .nav a.active .nav-icon,
+    .nav a[data-route="autoeditor"] .nav-icon,
+    .nav a[data-route="criacao"].active .nav-icon {
+      border-color: transparent;
+      background: linear-gradient(150deg, var(--os-red), var(--os-red-2));
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(255, 23, 68, .36);
+    }
+
+    .nav a[data-route="autoeditor"] .nav-icon {
+      background: linear-gradient(150deg, var(--os-violet), #5b21b6);
+      box-shadow: 0 10px 28px rgba(124, 58, 237, .34);
+    }
+
+    .nav-copy {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .nav-title {
+      color: inherit;
+      font-size: 12.5px;
+      font-weight: 650;
+      line-height: 1.18;
+      text-shadow: 0 1px 4px rgba(0,0,0,.86);
+    }
+
+    .nav-caption { display: none; }
+
+    .app-main {
+      position: absolute;
+      left: 50%;
+      top: calc(50% - 10px);
+      z-index: 20;
+      width: min(1120px, calc(100vw - 56px));
+      height: min(720px, calc(100vh - 156px));
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--os-line-2);
+      border-radius: 16px;
+      background: var(--os-panel);
+      box-shadow: var(--os-shadow);
+      backdrop-filter: blur(30px) saturate(1.38);
+      -webkit-backdrop-filter: blur(30px) saturate(1.38);
+      transform: translate(-50%, -50%);
+      transition: opacity .18s ease, visibility .18s ease, transform .18s ease;
+    }
+
+    body.os-window-hidden .app-main {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translate(-50%, -47%) scale(.96);
+    }
+
+    .topbar {
+      min-height: 46px;
+      padding: 0 10px 0 16px;
+      background: var(--os-title);
+      border-bottom: 1px solid var(--os-line);
+      box-shadow: none;
+    }
+
+    .topbar-left::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      flex: 0 0 auto;
+      margin-right: 44px;
+      border-radius: 50%;
+      background: #ff5f70;
+      box-shadow: 18px 0 0 #ffbf47, 36px 0 0 var(--os-good);
+    }
+
+    .topbar-eyebrow {
+      color: rgba(196, 196, 220, .62);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: .15em;
+    }
+
+    .topbar-title {
+      color: var(--os-text);
+      font-size: 14.5px;
+      letter-spacing: 0;
+    }
+
+    .os-window-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      margin-left: auto;
+      margin-right: 8px;
+    }
+
+    .os-window-actions button {
+      width: 34px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--os-muted);
+      font-size: 16px;
+      line-height: 1;
+      transition: background .13s ease, color .13s ease;
+    }
+
+    .os-window-actions button:hover {
+      background: rgba(255, 255, 255, .08);
+      color: #fff;
+    }
+
+    .os-window-actions button:last-child:hover {
+      background: var(--os-red);
+      color: #fff;
+    }
+
+    .right {
+      margin-left: 0;
+      flex: 0 0 auto;
+    }
+
+    .container {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      max-width: none;
+      margin: 0;
+      padding: 22px 22px 30px;
+    }
+
+    .page > h1 {
+      color: rgba(196, 196, 220, .78);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .card {
+      border-color: var(--os-line);
+      border-radius: 14px;
+      background: var(--os-panel-2);
+      box-shadow: 0 18px 48px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.035);
+    }
+
+    .os-start-menu {
+      position: fixed;
+      left: 14px;
+      bottom: 70px;
+      z-index: 700;
+      width: 560px;
+      max-width: calc(100vw - 28px);
+      max-height: calc(100vh - 92px);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 20px;
+      overflow: auto;
+      border: 1px solid var(--os-line-2);
+      border-radius: 20px;
+      background: var(--os-panel);
+      box-shadow: 0 24px 64px rgba(0,0,0,.50);
+      backdrop-filter: blur(34px) saturate(1.5);
+      -webkit-backdrop-filter: blur(34px) saturate(1.5);
+      transform-origin: left bottom;
+      transition: opacity .16s ease, visibility .16s ease, transform .16s ease;
+    }
+
+    .os-start-menu[aria-hidden="true"] {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(12px) scale(.98);
+    }
+
+    .os-start-search {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 11px 15px;
+      border: 1px solid var(--os-line-2);
+      border-radius: 12px;
+      background: rgba(7, 7, 13, .58);
+      color: var(--os-muted);
+    }
+
+    .os-start-search input {
+      flex: 1;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--os-text);
+      box-shadow: none;
+    }
+
+    .os-start-label {
+      margin: 2px 2px -4px;
+      color: var(--os-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    .os-start-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .os-start-app {
+      min-height: 92px;
+      display: flex;
+      align-items: center;
+      flex-direction: column;
+      gap: 9px;
+      padding: 13px 6px;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      color: var(--os-text);
+      text-align: center;
+      text-decoration: none;
+    }
+
+    .os-start-app:hover {
+      border-color: var(--os-line-2);
+      background: rgba(255, 255, 255, .055);
+    }
+
+    .os-start-app.active {
+      border-color: rgba(255, 23, 68, .34);
+      background: rgba(255, 23, 68, .10);
+    }
+
+    .os-start-app i {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--os-line-2);
+      border-radius: 14px;
+      background: linear-gradient(150deg, #1a1a35, #13132a);
+    }
+
+    .os-start-app i svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .os-start-app span {
+      font-size: 11.5px;
+      line-height: 1.2;
+    }
+
+    .os-taskbar {
+      height: 62px;
+      z-index: 650;
+      border-top-color: var(--os-line-2);
+      background: rgba(10, 10, 20, .80);
+      box-shadow: 0 -18px 44px rgba(0,0,0,.34);
+    }
+
+    .os-start {
+      background: linear-gradient(135deg, var(--os-red), var(--os-red-2));
+      box-shadow: 0 6px 18px rgba(255, 23, 68, .32);
+    }
+
+    .os-taskbar .pin-ic svg {
+      width: 23px;
+      height: 23px;
+      stroke-width: 1.8;
+    }
+
+    .os-taskbar .nav a {
+      min-height: 46px;
+      background: transparent;
+    }
+
+    .os-taskbar .nav a.active {
+      background: rgba(255,255,255,.06);
+      border-color: var(--os-line);
+    }
+
+    @media (max-width: 1180px) {
+      .app-sidebar {
+        overflow-y: auto;
+      }
+
+      .nav {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        align-content: flex-start;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .app-sidebar {
+        inset: 18px 14px 78px;
+        background: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+
+      .nav-section {
+        grid-template-columns: repeat(2, 106px);
+      }
+
+      .nav a {
+        width: 106px;
+      }
+
+      .app-main {
+        top: calc(50% - 14px);
+        width: calc(100vw - 20px);
+        height: calc(100vh - 124px);
+        border-radius: 14px;
+      }
+
+      .topbar-left::before { display: none; }
+      .sidebar-toggle { display: none; }
+      .os-search { display: none; }
+    }
+
+    @media (max-width: 640px) {
+      .login-shell { padding: 20px 14px; }
+      .login-shell::before { left: 18px; top: 16px; }
+      .login-box { padding: 28px 22px 24px; }
+      .app-sidebar { inset: 18px 10px 76px; overflow-y: auto; }
+      .nav { gap: 18px; }
+      .nav-section { grid-template-columns: repeat(3, minmax(92px, 1fr)); width: 100%; }
+      .nav a { width: auto; min-height: 108px; }
+      .nav-icon { width: 58px; height: 58px; flex-basis: 58px; border-radius: 18px; }
+      .nav-icon svg { width: 29px; height: 29px; }
+      .app-main { height: calc(100vh - 116px); width: calc(100vw - 12px); }
+      .container { padding: 16px 14px 24px; }
+      .os-start-menu { left: 8px; right: 8px; width: auto; }
+      .os-start-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .os-window-actions { margin-right: 0; }
+    }
   </style>
 </head>
 
@@ -4501,7 +5176,7 @@
     <div class="login-shell">
       <div class="login-box">
         <div class="login-brand-wrap">
-          <div class="login-mark" aria-hidden="true">∞</div>
+          <div class="login-mark" aria-hidden="true">M</div>
           <div>
             <div class="login-brand">MetaPorn</div>
             <div class="login-subtitle">Plataforma de Agência</div>
@@ -4654,7 +5329,7 @@
         </a>
         <div class="sidebar-version">
           <span>Build atual</span>
-          <strong>v1.18.19</strong>
+          <strong>v1.18.20</strong>
         </div>
       </div>
     </aside>
@@ -4669,6 +5344,11 @@
             <div class="topbar-eyebrow" id="currentPageEyebrow">Painel MetaPorn</div>
             <div class="topbar-title" id="currentPageTitle">Analyze</div>
           </div>
+        </div>
+        <div class="os-window-actions" aria-label="Controles da janela">
+          <button type="button" onclick="osMinimizeWindow()" aria-label="Minimizar janela">−</button>
+          <button type="button" onclick="osRestoreWindow()" aria-label="Restaurar janela">□</button>
+          <button type="button" onclick="osCloseWindow()" aria-label="Fechar janela">×</button>
         </div>
         <div class="right">
           <div class="health" id="healthBadge">API: …</div>
@@ -6032,12 +6712,33 @@
     </div>
   </div>
 
+  <div class="os-start-menu" id="osStartMenu" aria-hidden="true">
+    <label class="os-start-search">
+      <span>⌕</span>
+      <input id="osStartSearch" type="text" placeholder="Buscar apps, ações e mídias..." oninput="osFilterStartMenu()" autocomplete="off" />
+    </label>
+    <div class="os-start-label">Fluxo rápido</div>
+    <div class="os-start-grid">
+      <a class="os-start-app" href="#autoeditor" data-start-route="autoeditor"><i data-start-icon="autoeditor"></i><span>AutoEditor</span></a>
+      <a class="os-start-app" href="#analyze" data-start-route="analyze"><i data-start-icon="analyze"></i><span>Analyze</span></a>
+      <a class="os-start-app" href="#criacao" data-start-route="criacao"><i data-start-icon="post"></i><span>Criação</span></a>
+      <a class="os-start-app" href="#media" data-start-route="media"><i data-start-icon="media"></i><span>Arquivos</span></a>
+    </div>
+    <div class="os-start-label">Operação</div>
+    <div class="os-start-grid">
+      <a class="os-start-app" href="#telegram" data-start-route="telegram"><i data-start-icon="telegram"></i><span>Telegram</span></a>
+      <a class="os-start-app" href="#publisher" data-start-route="publisher"><i data-start-icon="broadcast"></i><span>Publicar</span></a>
+      <a class="os-start-app" href="#calendar" data-start-route="calendar"><i data-start-icon="calendar"></i><span>Agenda</span></a>
+      <a class="os-start-app" href="#settings" data-start-route="settings"><i data-start-icon="settings"></i><span>Settings</span></a>
+    </div>
+  </div>
+
   <nav class="os-taskbar" aria-label="Atalhos MetaPorn OS">
-    <button class="os-start" type="button" onclick="document.getElementById('navSearch')?.focus()">
+    <button class="os-start" type="button" onclick="osToggleStart()">
       <span class="os-start-mark">M</span>
       <span>Iniciar</span>
     </button>
-    <button class="os-search" type="button" onclick="document.getElementById('navSearch')?.focus()">
+    <button class="os-search" type="button" onclick="osToggleStart(true)">
       <span>⌕</span>
       <span>Buscar app ou ação</span>
     </button>
@@ -6053,12 +6754,12 @@
     </div>
     <div class="os-tray" aria-hidden="true">
       <span class="os-tray-pill">OS</span>
-      <span class="os-tray-pill">v1.18.19</span>
+      <span class="os-tray-pill">v1.18.20</span>
     </div>
   </nav>
 
   <div id="toast" class="toast hidden"></div>
-  <div class="version-badge">v1.18.19</div>
+  <div class="version-badge">v1.18.20</div>
 
   <!-- MODAL: CARREGAMENTO DA PÁGINA -->
   <div id="pageLoadModal" style="
@@ -6127,7 +6828,7 @@
     </div>
   </div>
 
-  <script src="/ui/app.js?v=118190"></script>
+  <script src="/ui/app.js?v=118200"></script>
 </body>
 
 </html>

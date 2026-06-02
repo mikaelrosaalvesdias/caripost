@@ -2,6 +2,11 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.18.20 - 2026-06-02
+
+- Corrige a entrega visual do Claude Designer com login em MetaPorn OS, desktop com apps agrupados, start menu, taskbar e janela principal.
+- Preserva rotas, IDs, handlers, loaders, endpoints e fluxos tecnicos existentes.
+
 ## v1.18.19 - 2026-06-02
 
 - Aplica a reestruturacao visual MetaPorn OS recebida no pacote `Metaporn.zip`.

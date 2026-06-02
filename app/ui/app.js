@@ -512,6 +512,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.18.20', date: '2026-06-02',
+    items: [
+      { type: 'fix', text: 'Visual: corrigida a entrega do redesign do Claude Designer com login em MetaPorn OS, desktop de apps agrupados, start menu real, taskbar e janela principal sem alterar rotas, endpoints ou loaders existentes.' },
+    ],
+  },
+  {
     version: 'v1.18.19', date: '2026-06-02',
     items: [
       { type: 'feat', text: 'Visual: aplicado o shell MetaPorn OS desenhado no pacote do Claude Designer, com launcher em blocos, janela principal em vidro escuro e barra inferior de atalhos, preservando rotas e funções existentes.' },
@@ -2005,6 +2011,131 @@ const CHANGELOG = [
     ],
   },
 ];
+
+const MP_OS_ICON_PATHS = {
+  analyze: '<circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4-4"/><path d="M11 8v6M8 11h6"/>',
+  compare: '<path d="M12 3v18"/><path d="M7 7 3 12l4 5M17 7l4 5-4 5"/>',
+  runs: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M7 13h6M7 16.5h9"/><circle cx="6" cy="6.5" r=".6" fill="currentColor"/>',
+  media: '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 6l2.4-2.6h6L14 6"/><circle cx="12" cy="12.5" r="3"/>',
+  refs: '<circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4-4M11 8l1 2 2 .3-1.5 1.5.4 2-1.9-1-1.9 1 .4-2L8 10.3l2-.3z"/>',
+  autoeditor: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 9h18M8 5v4M16 5v4"/><path d="m10.5 12.5 4 2-4 2z" fill="currentColor"/>',
+  enhance: '<path d="M5 12h3l2-7 3 14 2-7h4"/><path d="M19 4l.7 1.8L21.5 6.5l-1.8.7L19 9l-.7-1.8L16.5 6.5l1.8-.7z" fill="currentColor"/>',
+  post: '<path d="M5 3h10l4 4v14H5z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
+  telegram: '<path d="M21 4 3 11l5 2 2 6 3-4 4 3z"/><path d="m8 13 8-6-5 7"/>',
+  broadcast: '<circle cx="12" cy="12" r="2.4"/><path d="M7.5 7.5a6 6 0 0 0 0 9M16.5 7.5a6 6 0 0 1 0 9M5 5a9 9 0 0 0 0 14M19 5a9 9 0 0 1 0 14"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/><rect x="7" y="13" width="3.5" height="3.5" rx="1"/>',
+  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3 3 0 0 1 0 5.6M16.5 19a5.5 5.5 0 0 0-2-4.3"/>',
+  trending: '<path d="M3 16l5-5 3 3 7-7"/><path d="M15 7h5v5"/>',
+  dollar: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v10M14.5 9.3a2.6 2.6 0 0 0-2.5-1.3c-1.5 0-2.5.8-2.5 2s1 1.7 2.5 2 2.5.7 2.5 2-1 2-2.5 2a2.6 2.6 0 0 1-2.5-1.3"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.4M12 18.6V21M4.5 7l2 1.2M17.5 15.8l2 1.2M19.5 7l-2 1.2M6.5 15.8l-2 1.2"/>',
+};
+
+const MP_OS_ROUTE_ICONS = {
+  analyze: 'analyze',
+  compare: 'compare',
+  runs: 'runs',
+  media: 'media',
+  referencia: 'refs',
+  autoeditor: 'autoeditor',
+  videoenhancer: 'enhance',
+  criacao: 'post',
+  telegram: 'telegram',
+  publisher: 'broadcast',
+  calendar: 'calendar',
+  creators: 'users',
+  trends: 'trending',
+  financial: 'dollar',
+  dmca: 'shield',
+  settings: 'settings',
+};
+
+function mpOsSvgIcon(name) {
+  const path = MP_OS_ICON_PATHS[name] || '';
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+}
+
+function paintMetaPornOsIcons() {
+  document.querySelectorAll('a[data-route]').forEach(a => {
+    const iconName = MP_OS_ROUTE_ICONS[a.dataset.route];
+    if (!iconName) return;
+    const navIcon = a.querySelector('.nav-icon');
+    if (navIcon && navIcon.dataset.osPainted !== '1') {
+      navIcon.innerHTML = mpOsSvgIcon(iconName);
+      navIcon.dataset.osPainted = '1';
+    }
+    const pinIcon = a.querySelector('.pin-ic');
+    if (pinIcon && pinIcon.dataset.osPainted !== '1') {
+      pinIcon.innerHTML = mpOsSvgIcon(iconName);
+      pinIcon.dataset.osPainted = '1';
+    }
+  });
+
+  document.querySelectorAll('[data-start-icon]').forEach(el => {
+    if (el.dataset.osPainted === '1') return;
+    el.innerHTML = mpOsSvgIcon(el.dataset.startIcon);
+    el.dataset.osPainted = '1';
+  });
+}
+
+function osToggleStart(force) {
+  const menu = document.getElementById('osStartMenu');
+  if (!menu) return;
+  const shouldOpen = typeof force === 'boolean' ? force : menu.getAttribute('aria-hidden') === 'true';
+  menu.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+  document.body.classList.toggle('os-start-open', shouldOpen);
+  if (shouldOpen) {
+    paintMetaPornOsIcons();
+    setTimeout(() => document.getElementById('osStartSearch')?.focus(), 40);
+  }
+}
+
+function osCloseStart() {
+  const menu = document.getElementById('osStartMenu');
+  if (!menu) return;
+  menu.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('os-start-open');
+}
+
+function osFilterStartMenu() {
+  const query = (document.getElementById('osStartSearch')?.value || '').trim().toLowerCase();
+  document.querySelectorAll('.os-start-app[data-start-route]').forEach(a => {
+    const hiddenByAuth = a.dataset.authHidden === '1';
+    const text = (a.textContent || '').toLowerCase();
+    const hiddenBySearch = query && !text.includes(query);
+    a.style.display = hiddenByAuth || hiddenBySearch ? 'none' : '';
+  });
+}
+
+function osRestoreWindow() {
+  document.body.classList.remove('os-window-hidden');
+}
+
+function osMinimizeWindow() {
+  document.body.classList.add('os-window-hidden');
+  osCloseStart();
+}
+
+function osCloseWindow() {
+  document.body.classList.add('os-window-hidden');
+  osCloseStart();
+}
+
+function osSyncShellRoute(name) {
+  osRestoreWindow();
+  osCloseStart();
+  document.querySelectorAll('.os-start-app[data-start-route]').forEach(a => {
+    a.classList.toggle('active', a.dataset.startRoute === name);
+  });
+}
+
+function osApplyStartMenuVisibility(user) {
+  const perms = user ? (user.permissions || []) : [];
+  document.querySelectorAll('.os-start-app[data-start-route]').forEach(a => {
+    a.dataset.authHidden = (!user || !perms.includes(a.dataset.startRoute)) ? '1' : '0';
+  });
+  osFilterStartMenu();
+}
 
 function renderChangelog() {
   const wrap = qs('changelogList');
@@ -12231,6 +12362,7 @@ async function main() {
 
   // Step 3: interface
   _pageLoader.step(3);
+  paintMetaPornOsIcons();
   initRouting();
   initTabs();
   initButtons();
@@ -14054,6 +14186,7 @@ function authApplyNavVisibility(user) {
     const tab = a.dataset.route;
     a.dataset.authHidden = (!user || !perms.includes(tab)) ? '1' : '0';
   });
+  osApplyStartMenuVisibility(user);
   applySidebarNavFilters();
 }
 
@@ -14123,8 +14256,21 @@ document.getElementById('loginUsername')?.addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('loginPassword')?.focus();
 });
 
+document.addEventListener('click', e => {
+  const link = e.target.closest('a[data-route], a[data-start-route]');
+  if (!link) return;
+  const name = link.dataset.route || link.dataset.startRoute;
+  if (!name) return;
+  paintMetaPornOsIcons();
+  osCloseStart();
+  if ((location.hash || '#analyze') === `#${name}`) routeTo(name);
+});
+
 window.addEventListener('keydown', e => {
-  if (e.key === 'Escape') toggleSidebar(false);
+  if (e.key === 'Escape') {
+    toggleSidebar(false);
+    osCloseStart();
+  }
 });
 
 window.addEventListener('resize', () => {
@@ -14141,6 +14287,7 @@ routeTo = function(name) {
     return;
   }
   _origRouteTo2(name);
+  osSyncShellRoute(name);
   // Carrega usuários ao entrar em Settings: admin logado OU modo aberto
   if (name === 'settings' && (!authGetUser() || authIsAdmin())) usersLoad();
 };
