@@ -5285,14 +5285,17 @@ def _require_api_key(req: Request) -> Optional[dict]:
     return None
 
 
-# Serve a tiny admin UI (static) under /ui
+# Serve legacy admin UI under /ui (kept for reference)
 app.mount("/ui", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "ui"), html=True), name="ui")
+
+# Serve MetaPorn OS design under /os
+app.mount("/os", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "os"), html=True), name="os")
 
 
 @app.get("/")
 def root_redirect():
-    # Convenience: landing page = UI
-    response = FileResponse(os.path.join(os.path.dirname(__file__), "ui", "index.html"))
+    # Root → MetaPorn OS design
+    response = FileResponse(os.path.join(os.path.dirname(__file__), "os", "index.html"))
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
