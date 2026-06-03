@@ -1,104 +1,244 @@
 /* MetaPorn OS — Modo Automático (fullscreen) + Assistente (wizard) */
 
 const PIPE = [
-  { k: 'upload', ic: 'upload', label: 'Upload' },
-  { k: 'vision', ic: 'analyze', label: 'Vision IA' },
-  { k: 'scenes', ic: 'autoeditor', label: 'Detecção' },
-  { k: 'select', ic: 'sparkles', label: 'Seleção Grok' },
-  { k: 'cut', ic: 'scissors', label: 'Corte' },
-  { k: 'legenda', ic: 'captions', label: 'Legenda' },
-  { k: 'logo', ic: 'logo', label: 'Logo' },
-  { k: 'render', ic: 'enhance', label: 'Render' },
-  { k: 'publish', ic: 'broadcast', label: 'Publicar' },
+  { k: 'upload',  ic: 'upload',     label: 'Upload' },
+  { k: 'vision',  ic: 'analyze',    label: 'Vision IA' },
+  { k: 'scenes',  ic: 'autoeditor', label: 'Detecção' },
+  { k: 'select',  ic: 'sparkles',   label: 'Seleção Grok' },
+  { k: 'cut',     ic: 'scissors',   label: 'Corte' },
+  { k: 'legenda', ic: 'captions',   label: 'Legenda' },
+  { k: 'logo',    ic: 'logo',       label: 'Logo' },
+  { k: 'render',  ic: 'enhance',    label: 'Render' },
+  { k: 'publish', ic: 'broadcast',  label: 'Publicar' },
 ];
 
+function _detailToStage(detail) {
+  const d = (detail || '').toLowerCase();
+  if (d.includes('baixando') || d.includes('download')) return 0;
+  if (d.includes('vision') || d.includes('analiz') || d.includes('frame')) return 1;
+  if (d.includes('detect') || d.includes('cenas') || d.includes('candid')) return 2;
+  if (d.includes('selecion') || d.includes('grok') || d.includes('escolh')) return 3;
+  if (d.includes('cort') || d.includes('transi') || d.includes('cut')) return 4;
+  if (d.includes('legenda') || d.includes('srt')) return 5;
+  if (d.includes('logo') || d.includes('marca')) return 6;
+  if (d.includes('render') || d.includes('export') || d.includes('finaliz')) return 7;
+  if (d.includes('public')) return 8;
+  return -1;
+}
+
 function AutoMode({ onExit, onClose }) {
-  const [active, setActive] = React.useState(4);   // index running
-  const [step, setStep] = React.useState(58);      // current-step %
-  const [paused, setPaused] = React.useState(false);
+  const [phase, setPhase] = React.useState('setup'); // setup | running | done | error
+  const [sourceFiles, setSourceFiles] = React.useState([]);
+  const [selectedKeys, setSelectedKeys] = React.useState([]);
+  const [jobId, setJobId] = React.useState(null);
+  const [active, setActive] = React.useState(0);
+  const [pct, setPct] = React.useState(0);
+  const [detail, setDetail] = React.useState('Aguardando inicio...');
+  const [logs, setLogs] = React.useState([]);
+  const [resultKey, setResultKey] = React.useState('');
+  const pollRef = React.useRef(null);
 
   React.useEffect(() => {
-    if (paused) return;
-    const id = setInterval(() => {
-      setStep(s => {
-        let ns = s + 2;
-        if (ns >= 100) {
-          ns = 0;
-          setActive(a => Math.min(a + 1, PIPE.length - 1));
+    if (window.mpApi) {
+      window.mpApi.listMedia().then(r =>
+        setSourceFiles(r.filter(f => f.s === 'original' || f.s === '4K original').slice(0, 60))
+      ).catch(() => {});
+      window.mpApi.listAeJobs(1).then(jobs => {
+        const running = (jobs || []).find(j => j.status === 'running' || j.status === 'pending');
+        if (running) { setJobId(running.job_id); setPhase('running'); _startPoll(running.job_id); }
+      }).catch(() => {});
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  function _startPoll(id) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => {
+      if (!window.mpApi) return;
+      window.mpApi.aeStatus(id).then(r => {
+        const p = r.progress_pct || 0;
+        const d = r.detail || '';
+        const si = _detailToStage(d);
+        if (si >= 0) setActive(si);
+        setPct(p);
+        setDetail(d || 'Processando...');
+        setLogs(prev => {
+          if (prev.length && prev[prev.length - 1].t === d) return prev;
+          return [...prev.slice(-4).map(x => ({ ...x, s: 'done' })), { s: 'now', t: d }];
+        });
+        if (r.status === 'done') {
+          clearInterval(pollRef.current);
+          setActive(PIPE.length - 1); setPct(100); setPhase('done');
+          setResultKey(r.result_video_object_key || '');
+        } else if (r.status === 'error') {
+          clearInterval(pollRef.current); setPhase('error');
+          setDetail(r.detail || 'Erro no processamento');
         }
-        return ns;
+      }).catch(() => {});
+    }, 4000);
+  }
+
+  async function startJob() {
+    if (!selectedKeys.length) { alert('Selecione ao menos um video fonte.'); return; }
+    if (!window.mpApi) return;
+    try {
+      setPhase('running'); setActive(0); setPct(5); setDetail('Iniciando...');
+      setLogs([{ s: 'now', t: 'Job iniciado' }]);
+      const r = await window.mpApi.startAutoEditor({
+        video_object_key: selectedKeys[0],
+        video_object_keys: selectedKeys,
+        max_scenes: 60, transition_mode: 'smart',
+        audio_normalize: true, audio_denoise: true,
       });
-    }, 380);
-    return () => clearInterval(id);
-  }, [paused]);
+      setJobId(r.job_id); _startPoll(r.job_id);
+    } catch (e) {
+      setPhase('error'); setDetail('Erro ao iniciar: ' + e.message);
+    }
+  }
 
-  const overall = Math.min(Math.round((active / PIPE.length) * 100 + step / PIPE.length), 99);
+  const overall = phase === 'done' ? 100
+    : Math.min(Math.round((active / PIPE.length) * 100 + pct / PIPE.length), 99);
+  const etaMin = Math.max(1, Math.round((100 - overall) / 8));
 
-  return <div className="auto-screen">
-    <div className="auto-top">
-      <div className="kic"><Icon name="bolt" /></div>
-      <div>
-        <h2>Modo Automático</h2>
-        <div className="sub">3 fontes · 39 min · AutoEditor + Grok Vision · iniciado 14:32</div>
+  // === SETUP ===
+  if (phase === 'setup') return (
+    <div className="auto-screen">
+      <div className="auto-top">
+        <div className="kic"><Icon name="bolt" /></div>
+        <div>
+          <h2>Modo Automatico</h2>
+          <div className="sub">Selecione os videos fonte para iniciar o pipeline completo</div>
+        </div>
+        <button className="btn exit" onClick={onExit} style={{ marginLeft: 'auto' }}><Icon name="restore" />Minimizar</button>
+        <button className="wbtn close" onClick={onClose} style={{ width: 40, height: 40, borderRadius: 10 }}><Icon name="x" /></button>
       </div>
-      <div className="big">
-        <b>{overall + '%'}</b>
-        <span>{'≈\u00A0' + Math.max(1, Math.round((100 - overall) / 14)) + '\u00A0min\u00A0restantes'}</span>
+      <div style={{ padding: '20px 36px', flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="sec cy">Selecionar videos fonte</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 10, maxHeight: 340, overflowY: 'auto' }}>
+          {sourceFiles.length ? sourceFiles.map(f => {
+            const sel = selectedKeys.includes(f.object_key);
+            return (
+              <div key={f.object_key} className="panel"
+                style={{ padding: 10, cursor: 'pointer', borderColor: sel ? 'var(--pri-line)' : undefined, background: sel ? 'var(--pri-soft)' : undefined }}
+                onClick={() => setSelectedKeys(p => sel ? p.filter(k => k !== f.object_key) : [...p, f.object_key])}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 18, height: 18, borderRadius: 4, border: '1.5px solid ' + (sel ? 'var(--pri)' : 'var(--line2)'), background: sel ? 'var(--pri)' : 'transparent', display: 'grid', placeItems: 'center', fontSize: 11, color: '#fff', flexShrink: 0 }}>{sel ? '✓' : ''}</span>
+                  <b style={{ fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.n}</b>
+                </div>
+                <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 4 }}>{f.tech} · {f.size}</div>
+              </div>
+            );
+          }) : <div className="hint">Carregando arquivos do servidor...</div>}
+        </div>
+        {selectedKeys.length > 0 && <div className="hint" style={{ color: 'var(--cyan)' }}>{selectedKeys.length} arquivo(s) selecionado(s)</div>}
       </div>
-      <button className="btn exit" onClick={onExit}><Icon name="restore" />Minimizar</button>
-      <button className="wbtn close" onClick={onClose} style={{ width: 40, height: 40, borderRadius: 10 }}><Icon name="x" /></button>
+      <div className="auto-foot">
+        <button className="btn pri" onClick={startJob} disabled={!selectedKeys.length} style={{ fontSize: 15, padding: '12px 28px' }}><Icon name="bolt" />Iniciar Modo Automatico</button>
+        <button className="btn ghost" onClick={onClose}>Cancelar</button>
+      </div>
     </div>
+  );
 
-    <div className="pipe">
-      {PIPE.map((n, i) => {
-        const state = i < active ? 'done' : i === active ? 'run' : 'queue';
-        return <React.Fragment key={n.k}>
-          <div className={'pnode ' + state}>
-            <div className="ball">{state === 'done' ? <Icon name="check" /> : <Icon name={n.ic} />}</div>
-            <b>{n.label}</b>
-            <small>{state === 'done' ? 'ok' : state === 'run' ? 'rodando' : 'na fila'}</small>
+  // === RUNNING / DONE / ERROR ===
+  const curPipe = PIPE[Math.min(active, PIPE.length - 1)];
+  return (
+    <div className="auto-screen">
+      <div className="auto-top">
+        <div className="kic"><Icon name="bolt" /></div>
+        <div>
+          <h2>Modo Automatico</h2>
+          <div className="sub">{selectedKeys.length || 1} fonte(s) · AutoEditor + Grok Vision{jobId ? ' · ' + jobId.slice(0, 8) : ''}</div>
+        </div>
+        <div className="big">
+          <b>{overall + '%'}</b>
+          <span>{phase === 'done' ? 'concluido!' : phase === 'error' ? 'erro' : '~' + etaMin + ' min restantes'}</span>
+        </div>
+        <button className="btn exit" onClick={onExit}><Icon name="restore" />Minimizar</button>
+        <button className="wbtn close" onClick={onClose} style={{ width: 40, height: 40, borderRadius: 10 }}><Icon name="x" /></button>
+      </div>
+
+      <div className="pipe">
+        {PIPE.map((n, i) => {
+          const st = phase === 'done' ? 'done' : i < active ? 'done' : i === active ? 'run' : 'queue';
+          return (
+            <React.Fragment key={n.k}>
+              <div className={'pnode ' + st}>
+                <div className="ball">{st === 'done' ? <Icon name="check" /> : <Icon name={n.ic} />}</div>
+                <b>{n.label}</b>
+                <small>{st === 'done' ? 'ok' : st === 'run' ? 'rodando' : 'na fila'}</small>
+              </div>
+              {i < PIPE.length - 1 && <div className={'pconn ' + (i < active || phase === 'done' ? 'done' : i === active ? 'run' : '')} />}
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      <div className="auto-mid">
+        <div className="auto-card">
+          <h4>
+            <Icon name={curPipe.ic} style={{ width: 18, height: 18, color: 'var(--cyan)' }} />
+            Etapa atual — {phase === 'done' ? 'Concluido' : phase === 'error' ? 'Erro' : curPipe.label}
+            {phase === 'running' && <span className="spin" />}
+          </h4>
+          <LogLines items={logs.length ? logs : [{ s: 'now', t: detail }]} />
+          <ProgressBar pct={pct} tone={phase === 'error' ? 'pri' : 'cy'} label={detail} eta={phase === 'done' ? 'concluido' : ''} />
+          <div style={{ marginTop: 'auto' }}>
+            <ProgressBar pct={overall} label="Progresso total do fluxo" eta={active + ' de ' + PIPE.length + ' etapas concluidas'} />
           </div>
-          {i < PIPE.length - 1 && <div className={'pconn ' + (i < active ? 'done' : i === active ? 'run' : '')} />}
-        </React.Fragment>;
-      })}
-    </div>
-
-    <div className="auto-mid">
-      <div className="auto-card">
-        <h4><Icon name={PIPE[active].ic} style={{ width: 18, height: 18, color: 'var(--cyan)' }} />Etapa atual — {PIPE[active].label}<span className="spin" /></h4>
-        <LogLines items={[
-          { s: 'done', t: '3 fontes preparadas · HDR→SDR aplicado', time: '14:33' },
-          { s: 'done', t: 'Grok Vision analisou 142 frames', time: '14:51' },
-          { s: 'done', t: '38 candidatos de cena detectados', time: '14:53' },
-          { s: 'done', t: 'Grok selecionou 14 cenas', time: '14:54' },
-          { s: 'now', t: `${PIPE[active].label}… ${Math.round(step)}%` },
-        ]} />
-        <ProgressBar pct={Math.round(step)} tone="cy" label="Progresso desta etapa" eta={`≈ ${Math.max(5, Math.round((100 - step) * 0.6))} s restantes nesta etapa`} />
-        <div style={{ marginTop: 'auto' }}>
-          <ProgressBar pct={overall} label="Progresso total do fluxo" eta={`${active} de ${PIPE.length} etapas concluídas`} />
+        </div>
+        <div className="auto-card">
+          <h4><Icon name="eye" style={{ width: 18, height: 18 }} />Resultado</h4>
+          <div className="auto-prev">
+            {phase === 'done' && resultKey
+              ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div className="pill good" style={{ alignSelf: 'flex-start' }}><Icon name="check" />AutoEditor concluido</div>
+                  <div className="kv" style={{ fontSize: 12 }}>
+                    <div className="row"><span className="k">Arquivo</span><span className="v mono" style={{ wordBreak: 'break-all', fontSize: 11 }}>{resultKey.split('/').pop()}</span></div>
+                  </div>
+                  <div className="rowx">
+                    <button className="btn pri" onClick={() => {
+                      if (window.mpApi) window.mpApi.fetch('/api/video-download-url?object_key=' + encodeURIComponent(resultKey))
+                        .then(r => { if (r.url) window.open(r.url, '_blank'); }).catch(() => {});
+                    }}><Icon name="download" />Download</button>
+                    <button className="btn" onClick={() => { if (window.__mpOpen) window.__mpOpen('criacao'); onExit(); }}><Icon name="post" />Criar Post</button>
+                  </div>
+                </div>
+              )
+              : <VStage dur="--:--" time={'-- / --'} pos={pct} logo={false} subtitle={detail} />
+            }
+          </div>
         </div>
       </div>
-      <div className="auto-card">
-        <h4><Icon name="eye" style={{ width: 18, height: 18 }} />Prévia ao vivo</h4>
-        <div className="auto-prev"><VStage dur="06:12" time={`0${Math.floor(step/20)}:${String(Math.round(step*0.5)).padStart(2,'0')} / 06:12`} pos={step} logo subtitle="conteúdo especial de junho" /></div>
+
+      <div className="auto-foot">
+        {phase === 'running' && (
+          <button className="btn" onClick={() => { if (window.__mpOpen) window.__mpOpen('autoeditor'); onExit(); }}>
+            <Icon name="pen" />Ver no AutoEditor
+          </button>
+        )}
+        {phase === 'done' && (
+          <button className="btn pri" onClick={() => { if (window.__mpOpen) window.__mpOpen('media'); onExit(); }}>
+            <Icon name="media" />Ver em Arquivos
+          </button>
+        )}
+        {phase === 'error' && (
+          <button className="btn" onClick={() => { setPhase('setup'); setSelectedKeys([]); setLogs([]); }}>
+            <Icon name="refresh" />Tentar novamente
+          </button>
+        )}
+        <span className="pill cy" style={{ marginLeft: 'auto' }}><Icon name="bell" />Avisar no Telegram quando concluir</span>
       </div>
     </div>
-
-    <div className="auto-foot">
-      <button className="btn" onClick={() => setPaused(p => !p)}><Icon name={paused ? 'play' : 'pause'} />{paused ? 'Retomar' : 'Pausar'}</button>
-      <button className="btn"><Icon name="pen" />Intervir nesta etapa</button>
-      <button className="btn ghost" onClick={() => { setStep(0); setActive(a => Math.min(a + 1, PIPE.length - 1)); }}>Pular etapa<Icon name="chevR" /></button>
-      <span className="pill cy" style={{ marginLeft: 'auto' }}><Icon name="bell" />Avisar no Telegram quando concluir</span>
-    </div>
-  </div>;
+  );
 }
 
 const WIZ = [
-  { t: 'Origem', d: 'Escolha o vídeo bruto', ic: 'upload' },
-  { t: 'Transcrição', d: 'Gere e revise as legendas', ic: 'captions' },
-  { t: 'Marca', d: 'Aplique logo e estilo', ic: 'logo' },
-  { t: 'Conteúdo', d: 'Título, descrição e capa', ic: 'sparkles' },
-  { t: 'Publicar', d: 'Agende ou poste', ic: 'send' },
+  { t: 'Origem',      d: 'Escolha o video bruto',         ic: 'upload' },
+  { t: 'Transcricao', d: 'Gere e revise as legendas',     ic: 'captions' },
+  { t: 'Marca',       d: 'Aplique logo e estilo',         ic: 'logo' },
+  { t: 'Conteudo',    d: 'Titulo, descricao e capa',      ic: 'sparkles' },
+  { t: 'Publicar',    d: 'Agende ou poste',               ic: 'send' },
 ];
 
 function WizardApp() {
@@ -108,7 +248,7 @@ function WizardApp() {
       <div className="tb-ic" style={{ width: 40, height: 40, borderRadius: 12 }}><Icon name="flow" style={{ width: 20, height: 20 }} /></div>
       <div className="lead">
         <div className="app-title">Assistente de Fluxo</div>
-        <div className="app-desc">Conduz você do upload à publicação, um passo de cada vez.</div>
+        <div className="app-desc">Conduz voce do upload a publicacao, um passo de cada vez.</div>
       </div>
       <Pill kind="cy" dot>passo {i + 1} de {WIZ.length}</Pill>
     </div>
@@ -127,17 +267,17 @@ function WizardApp() {
         <div className="tb-ic" style={{ width: 36, height: 36, borderRadius: 11 }}><Icon name={WIZ[i].ic} style={{ width: 18, height: 18 }} /></div>
         <div><b style={{ fontFamily: 'var(--fh)', fontSize: 17 }}>{WIZ[i].t}</b><div style={{ fontSize: 13, color: 'var(--muted)' }}>{WIZ[i].d}</div></div>
       </div>
-      {i === 0 && <div className="dropzone"><div className="dz-ic"><Icon name="upload" /></div><b>Arraste o vídeo</b><small>MP4 / MOV até 8 GB</small></div>}
-      {i === 1 && <div className="split"><Media cap="prévia" subtitle="conteúdo especial de junho" /><div className="stack"><ProgressBar pct={100} tone="gd" label="Transcrição" eta="✓ 142 segmentos" /><Field label="Revisar"><textarea className="inp" defaultValue="Fala galera, bem-vindos ao canal…" /></Field></div></div>}
-      {i === 2 && <div className="split"><Media cap="prévia" logo play={false} /><div className="stack"><Field label="Logo"><div className="litem"><span className="li-ic"><Icon name="star" /></span><div className="li-main"><b>marca_estudio.png</b></div></div></Field><Field label="Posição"><div className="checks"><Check>Sup. esq.</Check><Check on>Inf. dir.</Check></div></Field></div></div>}
-      {i === 3 && <div className="stack"><Field label="Título"><input className="inp" defaultValue="Bastidores do estúdio — edição especial de junho" /></Field><Field label="Capa"><div className="thumbs">{['00:12', '01:04', '02:20'].map((t, k) => <Thumb key={t} label={t} sel={k === 1} />)}</div></Field></div>}
+      {i === 0 && <div className="dropzone"><div className="dz-ic"><Icon name="upload" /></div><b>Arraste o video</b><small>MP4 / MOV ate 8 GB</small></div>}
+      {i === 1 && <div className="split"><Media cap="previa" subtitle="conteudo especial" /><div className="stack"><ProgressBar pct={100} tone="gd" label="Transcricao" eta="concluida" /><Field label="Revisar"><textarea className="inp" defaultValue="Fala galera, bem-vindos ao canal..." /></Field></div></div>}
+      {i === 2 && <div className="split"><Media cap="previa" logo play={false} /><div className="stack"><Field label="Logo"><div className="litem"><span className="li-ic"><Icon name="star" /></span><div className="li-main"><b>marca_estudio.png</b></div></div></Field><Field label="Posicao"><div className="checks"><Check>Sup. esq.</Check><Check on>Inf. dir.</Check></div></Field></div></div>}
+      {i === 3 && <div className="stack"><Field label="Titulo"><input className="inp" defaultValue="Bastidores do estudio" /></Field><Field label="Capa"><div className="thumbs">{['00:12', '01:04', '02:20'].map((t, k) => <Thumb key={t} label={t} sel={k === 1} />)}</div></Field></div>}
       {i === 4 && <div className="grid2"><div className="panel" style={{ padding: 0, overflow: 'hidden' }}><Media cap="post pronto" logo play /></div><div className="stack"><Field label="Plataformas"><div className="checks"><Check on>Portal</Check><Check on>Telegram</Check></div></Field><Field label="Quando"><div className="checks"><Check on>Agora</Check><Check>Agendar</Check></div></Field><button className="btn pri block"><Icon name="send" />Publicar</button></div></div>}
     </div>
 
     <div className="rowx" style={{ justifyContent: 'space-between' }}>
       <button className="btn ghost" disabled={i === 0} onClick={() => setI(Math.max(0, i - 1))}><Icon name="arrowL" />Voltar</button>
       <div className="rowx"><button className="btn ghost">Pular</button>
-        <button className="btn pri" onClick={() => setI(Math.min(WIZ.length - 1, i + 1))}>{i === WIZ.length - 1 ? 'Concluir' : 'Próximo'}<Icon name="arrowR" /></button></div>
+        <button className="btn pri" onClick={() => setI(Math.min(WIZ.length - 1, i + 1))}>{i === WIZ.length - 1 ? 'Concluir' : 'Proximo'}<Icon name="arrowR" /></button></div>
     </div>
   </div>;
 }

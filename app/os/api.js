@@ -104,11 +104,12 @@
   function _mediaStatus(it) {
     const key = (it.object_key || '').toLowerCase();
     const fn = (it.filename || '').toLowerCase();
-    if (key.includes('/burns/') || fn.includes('_burn') || fn.includes('_queimado')) return 'burn';
-    if (key.includes('/teasers/') || fn.includes('_teaser')) return 'teaser';
-    if (fn.includes('autoeditor') || fn.includes('compil')) return 'autoeditor';
+    if (key.startsWith('local:burns/') || key.includes('/burns/') || fn.startsWith('legendado_')) return 'burn';
+    if (key.startsWith('local:teasers/') || key.includes('/teasers/') || fn.startsWith('teaser_')) return 'teaser';
+    if (key.startsWith('local:autoeditor/') || key.includes('/autoeditor/') || fn.startsWith('autoeditor_') || fn.startsWith('recut_')) return 'autoeditor';
     if (it.category === 'burns') return 'burn';
     if (it.category === 'teasers') return 'teaser';
+    if (it.category === 'autoeditor') return 'autoeditor';
     return 'original';
   }
   function _mediaTone(s) {
@@ -121,11 +122,11 @@
     getToken,
     logout() { clearToken(); window.location.reload(); },
 
-    /* Media files — fetches uploads + burns + teasers in parallel */
+    /* Media files — fetches all prefixes in parallel */
     async listMedia() {
-      const prefixes = ['uploads', 'burns', 'teasers'];
+      const prefixes = ['uploads', 'burns', 'teasers', 'autoeditor'];
       const results = await Promise.allSettled(
-        prefixes.map(p => mpFetch(`/uploads/list?prefix=${p}&max_keys=150`))
+        prefixes.map(p => mpFetch(`/uploads/list?prefix=${p}&max_keys=500`))
       );
       const items = [];
       results.forEach(r => {

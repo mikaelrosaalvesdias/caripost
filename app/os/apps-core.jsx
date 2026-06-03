@@ -27,13 +27,18 @@ function AnalyzeApp() {
   ];
   async function handleFiles(files) {
     if (!files || !files.length) return;
-    const file = files[0];
-    setUploadedName(file.name);
     if (!window.mpApi) return;
+    const arr = Array.from(files);
+    setUploadedName(arr.map(f => f.name).join(', '));
     try {
       setUploadPct(1);
-      const key = await window.mpApi.uploadFile(file, p => setUploadPct(p));
-      setUploadedKey(key);
+      let done = 0;
+      const keys = await Promise.all(arr.map(f =>
+        window.mpApi.uploadFile(f, p => {
+          setUploadPct(Math.round((done * 100 + p) / arr.length));
+        }).then(k => { done++; return k; })
+      ));
+      setUploadedKey(keys[0]);
       setUploadPct(100);
     } catch (e) {
       setUploadPct(0);
@@ -53,7 +58,7 @@ function AnalyzeApp() {
             onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }}
             onDragLeave={e => e.currentTarget.classList.remove('drag')}
             onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('drag'); handleFiles(e.dataTransfer.files); }}>
-            <input ref={fileInputRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
+            <input ref={fileInputRef} type="file" accept="video/*" multiple style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
             <div className="dz-ic"><Icon name="upload" /></div>
             <b>{uploadedName || 'Arraste vídeos aqui ou clique para selecionar'}</b>
             <small>MP4 / MOV / MKV · upload direto para storage</small>
