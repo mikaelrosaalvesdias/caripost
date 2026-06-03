@@ -1,13 +1,7 @@
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { portalFetch } from "../api/client";
 import SectionCard from "../components/SectionCard";
@@ -44,85 +38,52 @@ export default function DashboardPage() {
       }
     }
     load();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   return (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Views totais"
-          value={formatCompact(overview?.total_views)}
-          helper="Somatório da última coleta"
-          tone="highlight"
-        />
-        <StatCard
-          label="Vídeos publicados"
-          value={formatCompact(overview?.total_videos)}
-          helper="Catálogo total monitorado"
-        />
-        <StatCard
-          label="Ganhos estimados no mês"
-          value={formatCurrency(overview?.estimated_earnings_this_month)}
-          helper="Líquido estimado do criador"
-          tone="success"
-        />
-        <StatCard
-          label="Plataformas monitoradas"
-          value={formatCompact(overview?.platform_stats?.length || 0)}
-          helper="Canais com estatística ativa"
-        />
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Stats row */}
+      <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+        <StatCard label="Views totais" value={formatCompact(overview?.total_views)} helper="Somatório da última coleta" tone="highlight" />
+        <StatCard label="Vídeos publicados" value={formatCompact(overview?.total_videos)} helper="Catálogo total" />
+        <StatCard label="Ganhos este mês" value={formatCurrency(overview?.estimated_earnings_this_month)} helper="Líquido estimado" tone="success" />
+        <StatCard label="Plataformas" value={formatCompact(overview?.platform_stats?.length || 0)} helper="Com estatística ativa" />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.5fr_1fr]">
-        <SectionCard
-          title="Curva de views"
-          subtitle="Últimos 30 dias consolidados para o criador."
-        >
-          {loading ? (
-            <LoadingBox />
-          ) : error ? (
-            <ErrorBox message={error} />
-          ) : (
-            <div className="h-80">
+      {/* Chart + Schedule */}
+      <div style={{ display: "grid", gap: 20, gridTemplateColumns: "1fr" }}>
+        <SectionCard title="Curva de views" subtitle="Últimos 30 dias consolidados.">
+          {loading ? <LoadingBox /> : error ? <ErrorBox message={error} /> : (
+            <div style={{ height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chart}>
-                  <CartesianGrid stroke="rgba(148,163,184,0.14)" vertical={false} />
-                  <XAxis dataKey="bucket" stroke="#94a3b8" tickLine={false} axisLine={false} />
-                  <YAxis stroke="#94a3b8" tickLine={false} axisLine={false} />
+                  <CartesianGrid stroke="rgba(148,163,184,0.1)" vertical={false} />
+                  <XAxis dataKey="bucket" stroke="#64748b" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+                  <YAxis stroke="#64748b" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
                   <Tooltip
-                    contentStyle={{
-                      background: "rgba(2,6,23,0.95)",
-                      border: "1px solid rgba(148,163,184,0.18)",
-                      borderRadius: "16px",
-                    }}
+                    contentStyle={{ background: "rgba(6,6,18,.96)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 14, fontSize: 12 }}
                   />
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    stroke="#67e8f9"
-                    strokeWidth={3}
-                    dot={false}
-                  />
+                  <Line type="monotone" dataKey="value" stroke="var(--portal-primary)" strokeWidth={2.5} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           )}
         </SectionCard>
 
-        <SectionCard title="Próximas publicações" subtitle="Agenda recente do pipeline da agência.">
-          <div className="space-y-3">
+        <SectionCard title="Próximas publicações" subtitle="Agenda do pipeline da agência.">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {(schedule || []).slice(0, 6).map((entry) => (
-              <article key={entry.entry_id} className="rounded-2xl border border-white/8 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-medium text-white">{entry.title || "Publicação agendada"}</div>
-                  <StatusPill value={entry.status} />
+              <article key={entry.entry_id} className="portal-video-card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: "#fff", fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {entry.title || "Publicação agendada"}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--portal-muted)", marginTop: 3 }}>
+                    {formatDateTime(entry.publish_at)} · {String(entry.publish_platforms || []).replaceAll(",", ", ")}
+                  </div>
                 </div>
-                <div className="mt-2 text-sm text-slate-400">
-                  {formatDateTime(entry.publish_at)} • {String(entry.publish_platforms || []).replaceAll(",", ", ")}
-                </div>
+                <StatusPill value={entry.status} />
               </article>
             ))}
             {!schedule?.length ? <EmptyInline text="Nenhuma publicação agendada no momento." /> : null}
@@ -134,30 +95,22 @@ export default function DashboardPage() {
 }
 
 function LoadingBox() {
-  return <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-10 text-center text-slate-400">Carregando dados do dashboard...</div>;
+  return <div className="portal-empty">Carregando dados do dashboard...</div>;
 }
-
 function ErrorBox({ message }) {
-  return <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-10 text-center text-rose-100">{message}</div>;
+  return <div style={{ padding: "16px 20px", borderRadius: 14, background: "rgba(248,113,113,.1)", border: "1px solid rgba(248,113,113,.2)", color: "#fca5a5", fontSize: 13 }}>{message}</div>;
 }
-
 function EmptyInline({ text }) {
-  return <div className="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-400">{text}</div>;
+  return <div className="portal-empty" style={{ padding: "24px 16px", fontSize: 12 }}>{text}</div>;
 }
 
 function formatCompact(value) {
   return new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value || 0));
 }
-
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(value || 0));
 }
-
 function formatDateTime(value) {
   if (!value) return "Sem data";
-  try {
-    return format(new Date(value), "dd/MM/yyyy HH:mm");
-  } catch {
-    return String(value);
-  }
+  try { return format(new Date(value), "dd/MM/yyyy HH:mm"); } catch { return String(value); }
 }

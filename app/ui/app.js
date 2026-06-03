@@ -364,6 +364,15 @@ function routeTo(name) {
   if (page) page.classList.add('active');
   updateTopbarContext(name);
   if (window.innerWidth <= 900) toggleSidebar(false);
+  // show/hide media action footer based on active page
+  const footer = qs('mediaActionFooter');
+  if (footer) {
+    if (name === 'media') {
+      _updateMediaActionFooter(_mediaSelectedSet());
+    } else {
+      footer.classList.remove('visible');
+    }
+  }
   // lazy loaders
   if (name === 'settings') { reloadTokens(); renderChangelog(); }
   if (name === 'runs') reloadRuns();
@@ -517,6 +526,12 @@ const TEASER_MAX_SCENE_DURATION_SEC = 720;
 const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
+  {
+    version: 'v1.19.0', date: '2026-06-02',
+    items: [
+      { type: 'feat', text: 'Redesign visual completo baseado no pacote Claude Designer: botões Run (cyan) vs Create (verde) em todos os módulos, pipeline visual de etapas no AutoEditor, footer de ações ao selecionar vídeo em Arquivos, portal do criador reformulado com novo sistema de design dark luxury.' },
+    ],
+  },
   {
     version: 'v1.18.21', date: '2026-06-02',
     items: [
@@ -2520,11 +2535,73 @@ function _getMediaManagerFilteredItems() {
 function _updateMediaSelectionStats(totalVisible = null) {
   const el = qs('mediaManagerSelectionStats');
   if (!el) return;
-  const count = _mediaSelectedSet().size;
+  const set = _mediaSelectedSet();
+  const count = set.size;
   const suffix = Number.isFinite(totalVisible) ? ` de ${totalVisible}` : '';
   el.textContent = `${count} selecionado(s)${suffix}`;
   const bulk = qs('mediaManagerBulkbar');
   if (bulk) bulk.classList.toggle('has-selection', count > 0);
+  _updateMediaActionFooter(set);
+}
+
+function _updateMediaActionFooter(set) {
+  const footer = qs('mediaActionFooter');
+  if (!footer) return;
+  const count = set ? set.size : 0;
+  const isMediaPage = document.body.classList.contains('os-desktop-home') === false
+    && !!document.getElementById('page-media')?.classList.contains('active');
+  const show = count > 0 && isMediaPage;
+  footer.classList.toggle('visible', show);
+  const countEl = qs('mediaFooterCount');
+  const fileEl = qs('mediaFooterFilename');
+  if (countEl) countEl.textContent = count === 1 ? '1 arquivo' : `${count} arquivos`;
+  if (fileEl) {
+    if (count === 1 && set) {
+      const key = Array.from(set)[0] || '';
+      fileEl.textContent = key.split('/').pop() || key;
+    } else {
+      fileEl.textContent = count > 1 ? 'selecionados' : '';
+    }
+  }
+}
+
+function mediaFooterAction(action) {
+  const set = _mediaSelectedSet();
+  if (!set.size) return;
+  const keys = Array.from(set);
+  const firstKey = keys[0];
+  if (action === 'analyze') {
+    location.hash = 'analyze';
+    setTimeout(() => {
+      const inp = document.getElementById('anObjectKey');
+      if (inp) { inp.value = firstKey; inp.dispatchEvent(new Event('input')); }
+    }, 300);
+  } else if (action === 'autoeditor') {
+    location.hash = 'autoeditor';
+    setTimeout(() => {
+      const setSourceFn = window.aeSetSourceFromKey;
+      if (typeof setSourceFn === 'function') {
+        keys.forEach(k => setSourceFn(k));
+      } else {
+        const hint = document.getElementById('aeVideoInfo');
+        if (hint) hint.textContent = `${keys.length} arquivo(s) selecionado(s): ${keys.map(k => k.split('/').pop()).join(', ')}`;
+      }
+    }, 300);
+  } else if (action === 'legenda') {
+    location.hash = 'criacao';
+    setTimeout(() => {
+      if (window.criacaoSelectRunByKey) window.criacaoSelectRunByKey(firstKey);
+      else { const tab = document.querySelector('[data-criacao-tab="legenda"]'); if (tab) tab.click(); }
+    }, 300);
+  } else if (action === 'logo') {
+    location.hash = 'criacao';
+  } else if (action === 'teaser') {
+    location.hash = 'criacao';
+  } else if (action === 'thumbnail') {
+    location.hash = 'criacao';
+  } else if (action === 'publisher') {
+    location.hash = 'publisher';
+  }
 }
 
 function toggleManagedMediaSelection(objectKey, checked) {
@@ -7366,8 +7443,8 @@ function _renderStepLegenda(runId) {
         </div>
 
         <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;">
-          <button class="btn primary" onclick="triggerBurnSubs()" ${criacaoState.hasTranscript || criacaoState.burnSkipSubtitles ? '' : 'disabled'}>
-            ${criacaoState.burnSkipSubtitles ? '🖼 Queimar só logo (sem legenda)' : '🔤 Gerar versão legendada com logo'}
+          <button class="btn run" style="padding:10px 18px;font-size:13.5px;" onclick="triggerBurnSubs()" ${criacaoState.hasTranscript || criacaoState.burnSkipSubtitles ? '' : 'disabled'}>
+            ${criacaoState.burnSkipSubtitles ? '▣ Queimar só logo (sem legenda)' : '▣ Gerar versão legendada com logo'}
           </button>
           <button class="btn${criacaoState.burnSkipSubtitles ? ' primary' : ''}" onclick="criacaoState.burnSkipSubtitles=!criacaoState.burnSkipSubtitles;_persistWizardState();renderCriacaoDetail(criacaoState.runId,criacaoState.frames);" style="${criacaoState.burnSkipSubtitles ? 'background:var(--warn,#c47a00);' : ''}">
             ${criacaoState.burnSkipSubtitles ? '✓ Sem legenda' : 'Sem legenda'}
@@ -13718,7 +13795,7 @@ function _tgRender() {
       </div>
 
       <div class="row" style="gap:10px;">
-        <button class="btn primary" onclick="tgSubmitPost()">📨 Publicar / Agendar</button>
+        <button class="btn create" style="padding:10px 20px;font-size:13.5px;" onclick="tgSubmitPost()">✈ Publicar / Agendar</button>
         <button class="btn" onclick="tgClearComposer()">Limpar</button>
       </div>
       <div id="tgComposerStatus" style="margin-top:8px;"></div>
@@ -15352,6 +15429,67 @@ async function aeStartJob() {
 
 function autoEditorStart() { return aeStartJob(); }
 
+// Pipeline stages mapping for visual display
+const AE_PIPELINE_STAGES = [
+  { key: 'download',   label: 'Download',      icon: '⬇' },
+  { key: 'analyze',    label: 'Vision IA',      icon: '👁' },
+  { key: 'detect',     label: 'Detecção',       icon: '◉' },
+  { key: 'select',     label: 'Seleção Grok',   icon: '◈' },
+  { key: 'cut',        label: 'Corte',          icon: '✂' },
+  { key: 'subtitle',   label: 'Legenda',        icon: '▣' },
+  { key: 'logo',       label: 'Logo',           icon: '□' },
+  { key: 'render',     label: 'Render',         icon: '▶' },
+  { key: 'publish',    label: 'Publicar',       icon: '⬢' },
+];
+
+function _aeRenderPipeline(job) {
+  const wrap = qs('aePipelineWrap');
+  const row = qs('aePipelineRow');
+  const detail = qs('aeStepDetail');
+  if (!wrap || !row) return;
+
+  if (!job || (job.status !== 'running' && job.status !== 'pending' && job.status !== 'done')) {
+    wrap.classList.remove('visible');
+    return;
+  }
+
+  wrap.classList.add('visible');
+
+  // Infer current stage from detail text
+  const detailTxt = String(job.detail || '').toLowerCase();
+  let currentStageIdx = -1;
+  if (job.status === 'done') currentStageIdx = AE_PIPELINE_STAGES.length;
+  else if (detailTxt.includes('baixando') || detailTxt.includes('download')) currentStageIdx = 0;
+  else if (detailTxt.includes('vision') || detailTxt.includes('analyze') || detailTxt.includes('analiz')) currentStageIdx = 1;
+  else if (detailTxt.includes('detect') || detailTxt.includes('cenas') || detailTxt.includes('frame')) currentStageIdx = 2;
+  else if (detailTxt.includes('selecion') || detailTxt.includes('grok') || detailTxt.includes('escolh')) currentStageIdx = 3;
+  else if (detailTxt.includes('cort') || detailTxt.includes('cut') || detailTxt.includes('transi')) currentStageIdx = 4;
+  else if (detailTxt.includes('legenda') || detailTxt.includes('subtitle') || detailTxt.includes('srt')) currentStageIdx = 5;
+  else if (detailTxt.includes('logo') || detailTxt.includes('marca')) currentStageIdx = 6;
+  else if (detailTxt.includes('render') || detailTxt.includes('export') || detailTxt.includes('finaliz')) currentStageIdx = 7;
+  else if (detailTxt.includes('public')) currentStageIdx = 8;
+  else if (job.status === 'running') currentStageIdx = 0;
+
+  let html = '';
+  AE_PIPELINE_STAGES.forEach((stage, i) => {
+    const isDone = i < currentStageIdx;
+    const isRun = i === currentStageIdx;
+    const cls = isDone ? 'done' : isRun ? 'run' : '';
+    const connDone = i < currentStageIdx;
+    const connRun = i === currentStageIdx;
+    html += `<div class="ae-pnode ${cls}"><div class="ae-pball">${stage.icon}</div><b>${stage.label}</b><small>${isDone ? 'ok' : isRun ? 'rodando' : 'na fila'}</small></div>`;
+    if (i < AE_PIPELINE_STAGES.length - 1) {
+      html += `<div class="ae-pconn ${connDone ? 'done' : connRun ? 'run' : ''}"></div>`;
+    }
+  });
+  row.innerHTML = html;
+
+  if (detail) {
+    if (job.detail) { detail.textContent = job.detail; detail.classList.add('visible'); }
+    else { detail.classList.remove('visible'); }
+  }
+}
+
 async function _aePollStatus(jobId) {
   if (!jobId) return;
   aeStopPolling();
@@ -15361,6 +15499,7 @@ async function _aePollStatus(jobId) {
       _aeCurrentJobId = jobId;
       _aeJobsCache.set(jobId, r);
       if (r.detail) qs('aeProgressLabel').textContent = r.detail;
+      _aeRenderPipeline(r);
       _aeShowResult(r);
 
       if (r.status === 'done') {
@@ -15525,7 +15664,7 @@ function aeCopyObjectKey() {
 
 async function aeSelectJob(jobId) {
   const cached = _aeJobsCache.get(jobId);
-  if (cached) _aeShowResult(cached);
+  if (cached) { _aeShowResult(cached); _aeRenderPipeline(cached); }
   if (!jobId) return;
   if (cached?.status === 'pending' || cached?.status === 'running') {
     _aePollStatus(jobId);
@@ -15535,6 +15674,7 @@ async function aeSelectJob(jobId) {
     const fresh = await apiFetch(`/api/auto-editor/status/${jobId}`);
     _aeJobsCache.set(jobId, fresh);
     _aeShowResult(fresh);
+    _aeRenderPipeline(fresh);
     if (fresh.status === 'pending' || fresh.status === 'running') _aePollStatus(jobId);
   } catch (e) {
     toast(e.message, 'bad');
