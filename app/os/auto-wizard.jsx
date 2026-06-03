@@ -27,9 +27,14 @@ function _detailToStage(detail) {
 }
 
 function AutoMode({ onExit, onClose }) {
-  const [phase, setPhase] = React.useState('setup'); // setup | running | done | error
-  const [sourceFiles, setSourceFiles] = React.useState([]);
+  const [phase, setPhase] = React.useState('setup');
+  const [allFiles, setAllFiles] = React.useState([]);
+  const [catFilter, setCatFilter] = React.useState('original');
   const [selectedKeys, setSelectedKeys] = React.useState([]);
+  const [thumbs, setThumbs] = React.useState({});       // object_key → thumb url
+  const [uploading, setUploading] = React.useState(false);
+  const [uploadPct, setUploadPct] = React.useState(0);
+  const uploadRef = React.useRef(null);
   const [jobId, setJobId] = React.useState(null);
   const [active, setActive] = React.useState(0);
   const [pct, setPct] = React.useState(0);
@@ -40,9 +45,7 @@ function AutoMode({ onExit, onClose }) {
 
   React.useEffect(() => {
     if (window.mpApi) {
-      window.mpApi.listMedia().then(r =>
-        setSourceFiles(r.filter(f => f.s === 'original' || f.s === '4K original').slice(0, 60))
-      ).catch(() => {});
+      window.mpApi.listMedia().then(r => { setAllFiles(r); _loadThumbs(r); }).catch(() => {});
       window.mpApi.listAeJobs(1).then(jobs => {
         const running = (jobs || []).find(j => j.status === 'running' || j.status === 'pending');
         if (running) { setJobId(running.job_id); setPhase('running'); _startPoll(running.job_id); }
@@ -50,6 +53,38 @@ function AutoMode({ onExit, onClose }) {
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
+
+  function _loadThumbs(files) {
+    files.slice(0, 40).forEach(f => {
+      const key = f.object_key;
+      if (!key) return;
+      window.mpApi.fetch('/api/media-manager/thumbnail-url?object_key=' + encodeURIComponent(key))
+        .then(r => { if (r.url) setThumbs(prev => ({ ...prev, [key]: r.url })); })
+        .catch(() => {});
+    });
+  }
+
+  async function handleUpload(files) {
+    if (!files || !files.length || !window.mpApi) return;
+    setUploading(true); setUploadPct(1);
+    const arr = Array.from(files);
+    try {
+      let done = 0;
+      const keys = await Promise.all(arr.map(f =>
+        window.mpApi.uploadFile(f, p => setUploadPct(Math.round((done * 100 + p) / arr.length)))
+          .then(k => { done++; return k; })
+      ));
+      setUploadPct(100);
+      // Reload files and select newly uploaded
+      window.mpApi.listMedia().then(r => { setAllFiles(r); _loadThumbs(r); }).catch(() => {});
+      setSelectedKeys(prev => [...new Set([...prev, ...keys])]);
+      setCatFilter('original');
+    } catch (e) {
+      alert('Upload falhou: ' + e.message);
+    } finally {
+      setUploading(false); setUploadPct(0);
+    }
+  }
 
   function _startPoll(id) {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -100,6 +135,16 @@ function AutoMode({ onExit, onClose }) {
     : Math.min(Math.round((active / PIPE.length) * 100 + pct / PIPE.length), 99);
   const etaMin = Math.max(1, Math.round((100 - overall) / 8));
 
+  const CAT_FILTERS = [
+    ['original', 'Originais'],
+    ['burn', 'Queimados'],
+    ['teaser', 'Teasers'],
+    ['autoeditor', 'AutoEditor'],
+  ];
+  const visibleFiles = catFilter === 'all'
+    ? allFiles
+    : allFiles.filter(f => f.s === catFilter || (catFilter === 'original' && f.s === '4K original'));
+
   // === SETUP ===
   if (phase === 'setup') return (
     <div className="auto-screen">
@@ -112,28 +157,71 @@ function AutoMode({ onExit, onClose }) {
         <button className="btn exit" onClick={onExit} style={{ marginLeft: 'auto' }}><Icon name="restore" />Minimizar</button>
         <button className="wbtn close" onClick={onClose} style={{ width: 40, height: 40, borderRadius: 10 }}><Icon name="x" /></button>
       </div>
-      <div style={{ padding: '20px 36px', flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div className="sec cy">Selecionar videos fonte</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 10, maxHeight: 340, overflowY: 'auto' }}>
-          {sourceFiles.length ? sourceFiles.map(f => {
+
+      <div style={{ padding: '14px 28px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {CAT_FILTERS.map(([k, l]) => (
+          <button key={k} className={'btn sm' + (catFilter === k ? ' pri' : '')} onClick={() => setCatFilter(k)}>{l}</button>
+        ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          {uploading && <span className="hint" style={{ color: 'var(--cyan)' }}>Enviando… {uploadPct}%</span>}
+          <input ref={uploadRef} type="file" accept="video/*" multiple style={{ display: 'none' }} onChange={e => handleUpload(e.target.files)} />
+          <button className="btn sm cy" onClick={() => uploadRef.current && uploadRef.current.click()} disabled={uploading}>
+            <Icon name="upload" />Upload da maquina
+          </button>
+        </div>
+        {selectedKeys.length > 0 && (
+          <span className="pill cy" style={{ fontSize: 11 }}>{selectedKeys.length} selecionado(s)</span>
+        )}
+      </div>
+
+      <div style={{ padding: '12px 28px', flex: 1, overflow: 'auto' }}>
+        {!allFiles.length && <div className="hint" style={{ textAlign: 'center', padding: 40 }}>Carregando arquivos do servidor...</div>}
+        {allFiles.length > 0 && !visibleFiles.length && (
+          <div className="hint" style={{ textAlign: 'center', padding: 40 }}>Nenhum arquivo nesta categoria.</div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
+          {visibleFiles.map(f => {
             const sel = selectedKeys.includes(f.object_key);
+            const thumb = thumbs[f.object_key];
             return (
-              <div key={f.object_key} className="panel"
-                style={{ padding: 10, cursor: 'pointer', borderColor: sel ? 'var(--pri-line)' : undefined, background: sel ? 'var(--pri-soft)' : undefined }}
+              <div key={f.object_key}
+                style={{
+                  borderRadius: 14, overflow: 'hidden', cursor: 'pointer',
+                  border: '2px solid ' + (sel ? 'var(--pri)' : 'rgba(255,255,255,.08)'),
+                  background: sel ? 'var(--pri-soft)' : 'rgba(255,255,255,.03)',
+                  boxShadow: sel ? '0 0 0 1px var(--pri-line)' : 'none',
+                  transition: 'border-color .15s, box-shadow .15s',
+                  position: 'relative',
+                }}
                 onClick={() => setSelectedKeys(p => sel ? p.filter(k => k !== f.object_key) : [...p, f.object_key])}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 18, height: 18, borderRadius: 4, border: '1.5px solid ' + (sel ? 'var(--pri)' : 'var(--line2)'), background: sel ? 'var(--pri)' : 'transparent', display: 'grid', placeItems: 'center', fontSize: 11, color: '#fff', flexShrink: 0 }}>{sel ? '✓' : ''}</span>
-                  <b style={{ fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.n}</b>
+                {/* Thumbnail */}
+                <div style={{ aspectRatio: '16/9', position: 'relative', background: 'linear-gradient(135deg,#16161f,#0c0c14)', overflow: 'hidden' }}>
+                  {thumb
+                    ? <img src={thumb} alt={f.n} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                    : <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.2)', fontSize: 28 }}>▶</div>
+                  }
+                  {/* Check badge */}
+                  {sel && (
+                    <div style={{ position: 'absolute', top: 7, right: 7, width: 22, height: 22, borderRadius: 6, background: 'var(--pri)', display: 'grid', placeItems: 'center', fontSize: 13, color: '#fff', boxShadow: '0 2px 8px rgba(255,23,68,.4)' }}>✓</div>
+                  )}
+                  {/* Duration if available */}
+                  {f.dur && <span style={{ position: 'absolute', bottom: 6, right: 7, background: 'rgba(0,0,0,.75)', color: '#fff', fontSize: 10, fontFamily: 'var(--fm)', padding: '2px 7px', borderRadius: 5 }}>{f.dur}</span>}
                 </div>
-                <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 4 }}>{f.tech} · {f.size}</div>
+                {/* Label */}
+                <div style={{ padding: '8px 10px 10px' }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: sel ? 'var(--text)' : 'var(--text2)' }}>{f.n}</div>
+                  <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>{f.tech || f.size || ''}</div>
+                </div>
               </div>
             );
-          }) : <div className="hint">Carregando arquivos do servidor...</div>}
+          })}
         </div>
-        {selectedKeys.length > 0 && <div className="hint" style={{ color: 'var(--cyan)' }}>{selectedKeys.length} arquivo(s) selecionado(s)</div>}
       </div>
+
       <div className="auto-foot">
-        <button className="btn pri" onClick={startJob} disabled={!selectedKeys.length} style={{ fontSize: 15, padding: '12px 28px' }}><Icon name="bolt" />Iniciar Modo Automatico</button>
+        <button className="btn pri" onClick={startJob} disabled={!selectedKeys.length} style={{ fontSize: 14, padding: '11px 26px' }}>
+          <Icon name="bolt" />Iniciar ({selectedKeys.length || 0} {selectedKeys.length === 1 ? 'video' : 'videos'})
+        </button>
         <button className="btn ghost" onClick={onClose}>Cancelar</button>
       </div>
     </div>
