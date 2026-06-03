@@ -5294,12 +5294,9 @@ app.mount("/os", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "
 
 @app.get("/")
 def root_redirect():
-    # Root → MetaPorn OS design
-    response = FileResponse(os.path.join(os.path.dirname(__file__), "os", "index.html"))
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
+    # Root → redirect to /os/ so relative asset paths resolve correctly
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/os/", status_code=302)
 
 
 @app.get("/robots.txt")
