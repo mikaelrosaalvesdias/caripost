@@ -21,29 +21,54 @@ function AutoEditorApp() {
     { i: 3, src: 'v0', t: '02:20 → 02:51', d: '31s', rel: 0.88 },
     { i: 4, src: 'v2', t: '03:11 → 03:40', d: '29s', rel: 0.79 },
   ]);
-  const [recentJobs, setRecentJobs] = React.useState([]);
+  const [jobId, setJobId] = React.useState(null);
+  const [jobPct, setJobPct] = React.useState(31);
+  const [jobLabel, setJobLabel] = React.useState('Vision Analysis (Grok)');
+  const [jobEta, setJobEta] = React.useState('etapa 2/14 · ≈ 1 h 40 min restantes');
+  const [sourceFiles, setSourceFiles] = React.useState([]);
+  const [selectedKeys, setSelectedKeys] = React.useState([]);
+  const [showFilePicker, setShowFilePicker] = React.useState(false);
+  function _fmtTime(sec) {
+    if (sec == null) return '—';
+    const m = Math.floor(sec / 60), s2 = Math.round(sec % 60);
+    return `${String(m).padStart(2,'0')}:${String(s2).padStart(2,'0')}`;
+  }
+  function _pollJob(id) {
+    if (!window.mpApi) return;
+    const t = setInterval(() => {
+      window.mpApi.aeStatus(id).then(r => {
+        const pct = r.progress_pct || (r.status === 'done' ? 100 : jobPct);
+        setJobPct(pct);
+        setJobLabel(r.detail || 'Processando…');
+        if (r.status === 'done' || r.status === 'error') {
+          clearInterval(t);
+          setRunning(r.status !== 'done');
+          if (r.selected_scenes && r.selected_scenes.length) {
+            setScenes(r.selected_scenes.slice(0, 10).map((s, idx) => ({
+              i: idx + 1, src: s.source_label || 'v0',
+              t: _fmtTime(s.start || s.source_start) + ' → ' + _fmtTime(s.end || s.source_end),
+              d: ((s.duration || 0).toFixed(1)) + 's',
+              rel: parseFloat((s.score || s.vision_relevance || 0).toFixed(2)),
+            })));
+          }
+        }
+      }).catch(() => {});
+    }, 4000);
+  }
   React.useEffect(() => {
     if (!window.mpApi) return;
-    window.mpApi.listAeJobs(10).then(jobs => {
-      setRecentJobs(jobs);
-      // If last job has scenes, show them
-      const last = jobs.find(j => j.status === 'done' && j.selected_scenes?.length);
-      if (last) {
-        setScenes((last.selected_scenes || []).slice(0, 8).map((s, idx) => ({
-          i: idx + 1,
-          src: s.source_label || 'v0',
-          t: _fmtTime(s.start) + ' → ' + _fmtTime(s.end),
-          d: ((s.duration || 0).toFixed(1)) + 's',
-          rel: parseFloat((s.score || s.vision_relevance || 0).toFixed(2)),
+    window.mpApi.listMedia().then(r => setSourceFiles(r.filter(f => f.s === 'original' || f.s === '4K original').slice(0, 20))).catch(() => {});
+    window.mpApi.listAeJobs(5).then(jobs => {
+      const last = (jobs || []).find(j => j.status === 'done' && j.selected_scenes?.length);
+      if (last && last.selected_scenes.length) {
+        setScenes(last.selected_scenes.slice(0, 8).map((s, idx) => ({
+          i: idx + 1, src: s.source_label || 'v0',
+          t: _fmtTime(s.start || s.source_start) + ' → ' + _fmtTime(s.end || s.source_end),
+          d: ((s.duration || 0).toFixed(1)) + 's', rel: parseFloat((s.score || 0).toFixed(2)),
         })));
       }
     }).catch(() => {});
   }, []);
-  function _fmtTime(sec) {
-    if (sec == null) return '—';
-    const m = Math.floor(sec / 60), s = Math.round(sec % 60);
-    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  }
   return <div className="app">
     <AppHead icon="autoeditor" title="AutoEditor" desc="Multi-fonte → Grok Vision detecta as melhores cenas, corta, aplica transições e monta o vídeo final."
       right={<Pill kind="violet" icon="sparkles">Grok Vision</Pill>} />
@@ -52,14 +77,26 @@ function AutoEditorApp() {
       <div className="stack">
         <div className="sec">Configuração</div>
         <Acc title="Vídeo Fonte" open>
-          <div className="rowx"><button className="btn sm"><Icon name="media" />Selecionar do servidor</button><span style={{ color: 'var(--muted)', fontSize: 12 }}>ou</span><button className="btn sm"><Icon name="upload" />Fazer upload</button></div>
-          <div className="stack" style={{ marginTop: 10, gap: 6 }}>
-            {['clipe_estudio_2406.mp4', 'sessao_premium_05.mp4', 'colab_estudioX.mp4'].map((v, i) => <div key={v} className="litem" style={{ padding: '9px 12px' }}>
-              <span className="chip" style={{ fontFamily: 'var(--fm)', fontSize: 11 }}>v{i}</span>
-              <div className="li-main"><b style={{ fontSize: 12.5 }}>{v}</b></div>
-              <span style={{ fontSize: 11, color: 'var(--muted)' }}>{['1080p', '4K', '4K'][i]}</span>
-            </div>)}
+          <div className="rowx">
+            <button className="btn sm" onClick={() => setShowFilePicker(s => !s)}><Icon name="media" />Selecionar do servidor</button>
           </div>
+          {showFilePicker && <div className="stack" style={{ marginTop: 8, maxHeight: 200, overflowY: 'auto', gap: 4 }}>
+            {sourceFiles.length ? sourceFiles.map(f => {
+              const sel = selectedKeys.includes(f.object_key);
+              return <div key={f.object_key} className="litem" style={{ padding: '8px 12px', borderColor: sel ? 'var(--pri-line)' : undefined, cursor: 'pointer' }}
+                onClick={() => setSelectedKeys(prev => sel ? prev.filter(k => k !== f.object_key) : [...prev, f.object_key])}>
+                <span className="chip" style={{ fontFamily: 'var(--fm)', fontSize: 11, background: sel ? 'var(--pri-soft)' : undefined }}>{sel ? '✓' : '+'}</span>
+                <div className="li-main"><b style={{ fontSize: 12 }}>{f.n}</b><small>{f.tech}</small></div>
+              </div>;
+            }) : <div className="hint">Carregando arquivos…</div>}
+          </div>}
+          {selectedKeys.length > 0 && <div className="stack" style={{ marginTop: 8, gap: 4 }}>
+            {selectedKeys.map((k, i) => <div key={k} className="litem" style={{ padding: '7px 10px' }}>
+              <span className="chip" style={{ fontFamily: 'var(--fm)', fontSize: 11 }}>v{i}</span>
+              <div className="li-main"><b style={{ fontSize: 12 }}>{k.split('/').pop()}</b></div>
+              <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={() => setSelectedKeys(p => p.filter(x => x !== k))}>✕</button>
+            </div>)}
+          </div>}
           <div className="hint" style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>fontes: <b style={{ color: 'var(--text2)' }}>3 vídeos</b> · 39 min total</div>
         </Acc>
         <Acc title="Quantidade de Cenas" open>
@@ -106,14 +143,27 @@ function AutoEditorApp() {
         </Acc>
         <div className="rowx" data-tour="ae-start">
           <button className="btn pri" onClick={() => {
+            if (!selectedKeys.length) { alert('Selecione ao menos um vídeo fonte.'); return; }
             setRunning(true);
-            if (window.mpApi) window.mpApi.listAeJobs(10).then(jobs => { setRecentJobs(jobs); }).catch(() => {});
+            setJobPct(5); setJobLabel('Iniciando…');
+            if (window.mpApi) window.mpApi.startAutoEditor({
+              video_object_key: selectedKeys[0],
+              video_object_keys: selectedKeys,
+              max_scenes: 60,
+              transition_mode: trans,
+              audio_normalize: audioNorm,
+              audio_denoise: audioDen,
+            }).then(r => { setJobId(r.job_id); _pollJob(r.job_id); })
+              .catch(e => { setRunning(false); alert('Erro ao iniciar: ' + e.message); });
           }}><Icon name="autoeditor" />Iniciar AutoEditor</button>
           <button className="btn ghost" onClick={() => {
-            if (window.mpApi) window.mpApi.listAeJobs(10).then(jobs => { setRecentJobs(jobs); }).catch(() => {});
+            if (window.mpApi) window.mpApi.listAeJobs(5).then(jobs => {
+              const last = (jobs || []).find(j => j.status === 'done' && j.selected_scenes?.length);
+              if (last) setScenes(last.selected_scenes.slice(0,8).map((s,idx) => ({ i: idx+1, src: s.source_label||'v0', t: _fmtTime(s.start||s.source_start)+' → '+_fmtTime(s.end||s.source_end), d: ((s.duration||0).toFixed(1))+'s', rel: parseFloat((s.score||0).toFixed(2)) })));
+            }).catch(() => {});
           }}><Icon name="refresh" />Atualizar jobs</button>
         </div>
-        {running && <div className="panel"><ProgressBar pct={31} tone="violet" label="Vision Analysis (Grok)" eta="etapa 2/14 · ≈ 1 h 40 min restantes (11 vídeos 4K)" /></div>}
+        {running && <div className="panel"><ProgressBar pct={jobPct} tone="violet" label={jobLabel} eta={jobEta} /></div>}
       </div>
 
       {/* RESULTADO — BIG video */}

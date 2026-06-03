@@ -16,10 +16,30 @@ function AnalyzeApp() {
   const [tab, setTab] = React.useState('prompt');
   const [stt, setStt] = React.useState('premium');
   const [transcribing, setTranscribing] = React.useState(false);
+  const [uploadPct, setUploadPct] = React.useState(0);
+  const [uploadedKey, setUploadedKey] = React.useState('');
+  const [uploadedName, setUploadedName] = React.useState('');
+  const [runResult, setRunResult] = React.useState(null);
+  const fileInputRef = React.useRef(null);
   const providers = [
     ['auto', '⚡ Auto estrito'], ['assemblyai', 'AssemblyAI'], ['groq', 'OpenRouter STT'],
     ['openai', 'OpenAI'], ['local', '🖥 Local'], ['premium', '⭐ Premium'],
   ];
+  async function handleFiles(files) {
+    if (!files || !files.length) return;
+    const file = files[0];
+    setUploadedName(file.name);
+    if (!window.mpApi) return;
+    try {
+      setUploadPct(1);
+      const key = await window.mpApi.uploadFile(file, p => setUploadPct(p));
+      setUploadedKey(key);
+      setUploadPct(100);
+    } catch (e) {
+      setUploadPct(0);
+      alert('Upload falhou: ' + e.message);
+    }
+  }
   return <div className="app">
     <AppHead icon="analyze" title="Analyze" desc="Transcrição PT-BR, análise por IA e geração de prompt — tudo em um."
       right={<Pill kind="good" dot>storage online</Pill>} />
@@ -28,14 +48,20 @@ function AnalyzeApp() {
       <div className="stack">
         <div className="panel stack">
           <div className="sec"><Icon name="upload" />Upload de vídeo (direto para storage)</div>
-          <div className="dropzone" data-tour="an-drop" style={{ padding: '26px 20px' }}>
+          <div className="dropzone" data-tour="an-drop" style={{ padding: '26px 20px', cursor: 'pointer' }}
+            onClick={() => fileInputRef.current && fileInputRef.current.click()}
+            onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }}
+            onDragLeave={e => e.currentTarget.classList.remove('drag')}
+            onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('drag'); handleFiles(e.dataTransfer.files); }}>
+            <input ref={fileInputRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
             <div className="dz-ic"><Icon name="upload" /></div>
-            <b>Arraste vídeos aqui</b>
-            <small>seleção múltipla · sobem em fila paralela · MP4 / MOV / MKV</small>
+            <b>{uploadedName || 'Arraste vídeos aqui ou clique para selecionar'}</b>
+            <small>MP4 / MOV / MKV · upload direto para storage</small>
           </div>
+          {uploadPct > 0 && uploadPct < 100 && <ProgressBar pct={uploadPct} tone="cy" label="Enviando para storage…" />}
           <div className="kv" style={{ fontSize: 12 }}>
-            <div className="row"><span className="k">object_key</span><span className="v mono">clipe_2406.mp4</span></div>
-            <div className="row"><span className="k">status</span><span className="v" style={{ color: 'var(--good)' }}>enviado · pronto</span></div>
+            <div className="row"><span className="k">object_key</span><span className="v mono">{uploadedKey || 'nenhum selecionado'}</span></div>
+            <div className="row"><span className="k">status</span><span className="v" style={{ color: uploadedKey ? 'var(--good)' : 'var(--muted)' }}>{uploadedKey ? 'enviado · pronto' : 'aguardando upload'}</span></div>
           </div>
         </div>
 
@@ -75,16 +101,29 @@ function AnalyzeApp() {
         </details>
 
         <div className="rowx" data-tour="an-go">
-          <button className="btn pri" onClick={() => { setTranscribing(true); setTimeout(() => setTranscribing(false), 2400); }}><Icon name="sparkles" />Analisar</button>
-          <button className="btn ghost">Limpar</button>
+          <button className="btn pri" onClick={() => {
+            setTranscribing(true);
+            if (window.mpApi && uploadedKey) {
+              window.mpApi.fetch('/analyze', {
+                method: 'POST',
+                body: JSON.stringify({ video_object_key: uploadedKey, original_filename: uploadedName, stt_provider: stt, limit: 20 }),
+              }).then(r => {
+                setRunResult(r);
+                setTranscribing(false);
+              }).catch(() => setTranscribing(false));
+            } else {
+              setTimeout(() => setTranscribing(false), 2400);
+            }
+          }}><Icon name="sparkles" />Analisar</button>
+          <button className="btn ghost" onClick={() => { setUploadedKey(''); setUploadedName(''); setUploadPct(0); setRunResult(null); }}>Limpar</button>
         </div>
-        {transcribing && <div className="panel"><ProgressBar pct={64} tone="cy" label="Transcrevendo + analisando" eta="≈ 40 s restantes · large-v3" /></div>}
+        {transcribing && <div className="panel"><ProgressBar pct={uploadedKey ? 80 : 64} tone="cy" label="Transcrevendo + analisando" eta="≈ 40 s restantes · large-v3" /></div>}
       </div>
 
       {/* RESULTADO */}
       <div className="stack">
         <div className="rowx" style={{ justifyContent: 'space-between' }}>
-          <span className="hint" style={{ fontSize: 12, color: 'var(--muted)' }}>run_id: <b style={{ fontFamily: 'var(--fm)', color: 'var(--text2)' }}>run_8f2a41</b></span>
+          <span className="hint" style={{ fontSize: 12, color: 'var(--muted)' }}>run_id: <b style={{ fontFamily: 'var(--fm)', color: 'var(--text2)' }}>{runResult?.run_id || 'run_8f2a41'}</b></span>
           <div className="rowx"><button className="btn sm"><Icon name="copy" />Copiar prompt</button><button className="btn sm">→ Compare</button></div>
         </div>
         <div className="tabbar">
@@ -209,11 +248,13 @@ const FILE_OPS = [
   { op: 'copy', icon: 'copy', label: 'Copiar key' },
   { op: 'delete', icon: 'trash', label: 'Excluir', danger: true },
 ];
-const MEDIA_ITEMS_MOCK = [
+const MEDIA_ITEMS = [
   { n: 'clipe_estudio_2406.mp4', s: 'original', tone: '', tech: '1080p · 04:18', dur: '04:18', size: '500 MB', date: 'hoje 14:30' },
   { n: 'clipe_2406_BURN.mp4', s: 'burn', tone: 'good', tech: '1080p · legenda+logo', dur: '04:18', size: '512 MB', date: 'hoje 14:42' },
   { n: 'teaser_2406_vertical.mp4', s: 'teaser', tone: 'cy', tech: '9:16 · 0:15', dur: '0:15', size: '38 MB', date: 'hoje 14:45' },
   { n: 'sessao_premium_05.mp4', s: 'processando', tone: 'warn', tech: '4K · 12:40', dur: '12:40', size: '3.2 GB', date: 'hoje 13:10' },
+  { n: 'autoeditor_compil_03.mp4', s: 'autoeditor', tone: 'violet', tech: '1080p · 08:22', dur: '08:22', size: '1.1 GB', date: 'hoje 12:02' },
+  { n: 'colab_estudioX.mp4', s: '4K original', tone: '', tech: '4K · 22:10', dur: '22:10', size: '6.4 GB', date: 'ontem 19:40' },
 ];
 const FILTERS = [['all', 'Todos'], ['original', 'Originais'], ['burn', 'Queimados'], ['teaser', 'Teasers'], ['autoeditor', 'AutoEditor']];
 
@@ -231,7 +272,7 @@ function MediaApp() {
   const [filter, setFilter] = React.useState('all');
   const [sel, setSel] = React.useState(null);      // selected file → detail view
   const [ctx, setCtx] = React.useState(null);      // {x,y,file} → context menu
-  const [allItems, setAllItems] = React.useState(MEDIA_ITEMS_MOCK);
+  const [allItems, setAllItems] = React.useState(MEDIA_ITEMS);
   const [loading, setLoading] = React.useState(false);
   React.useEffect(() => {
     if (!window.mpApi) return;
