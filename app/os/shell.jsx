@@ -63,9 +63,9 @@ function App() {
 
   const skipBoot = React.useCallback(() => { setBooting(false); }, []);
 
-  // Auth check — show login if no valid session
+  // Auth check — show login only if API requires it
   React.useEffect(() => {
-    if (window.__mpCheckSession) window.__mpCheckSession();
+    if (window.__mpCheckAuth) window.__mpCheckAuth();
   }, []);
 
   React.useEffect(() => {

@@ -9692,7 +9692,9 @@ async def list_uploads(request: Request, prefix: str = "uploads", max_keys: int 
                         "storage_kind": "s3",
                     })
         except Exception as e:
-            return {"error": "list_uploads_failed", "detail": str(e)}
+            # S3/MinIO unavailable — continue with local items already collected
+            if not items:
+                return {"error": "list_uploads_failed", "detail": str(e)}
 
     items.sort(key=lambda x: x.get("last_modified") or "", reverse=True)
     result_items = items[:safe_max_keys]

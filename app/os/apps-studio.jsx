@@ -105,8 +105,13 @@ function AutoEditorApp() {
           <div className="rowx" style={{ marginTop: 8 }}><button className="btn sm ghost">Excluir original após sucesso</button></div>
         </Acc>
         <div className="rowx" data-tour="ae-start">
-          <button className="btn pri" onClick={() => setRunning(true)}><Icon name="autoeditor" />Iniciar AutoEditor</button>
-          <button className="btn ghost"><Icon name="refresh" />Atualizar jobs</button>
+          <button className="btn pri" onClick={() => {
+            setRunning(true);
+            if (window.mpApi) window.mpApi.listAeJobs(10).then(jobs => { setRecentJobs(jobs); }).catch(() => {});
+          }}><Icon name="autoeditor" />Iniciar AutoEditor</button>
+          <button className="btn ghost" onClick={() => {
+            if (window.mpApi) window.mpApi.listAeJobs(10).then(jobs => { setRecentJobs(jobs); }).catch(() => {});
+          }}><Icon name="refresh" />Atualizar jobs</button>
         </div>
         {running && <div className="panel"><ProgressBar pct={31} tone="violet" label="Vision Analysis (Grok)" eta="etapa 2/14 · ≈ 1 h 40 min restantes (11 vídeos 4K)" /></div>}
       </div>

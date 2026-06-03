@@ -32,18 +32,35 @@ function CreatorsApp() {
 /* ── TENDÊNCIAS — radar e briefings ── */
 function TrendsApp() {
   const [job, setJob] = React.useState(false);
-  const trends = [
-    { t: 'Amador brasileiro estúdio', g: '+34%', tone: 'good' },
-    { t: 'Compilações premium HD', g: '+28%', tone: 'good' },
-    { t: 'Cosplay temático', g: '+19%', tone: 'good' },
-    { t: 'POV vertical curto', g: '+52%', tone: 'good' },
-  ];
+  const [collecting, setCollecting] = React.useState(false);
+  const [trends, setTrends] = React.useState([
+    { t: 'Carregando tendências…', g: '—', tone: '' },
+  ]);
+  React.useEffect(() => {
+    if (!window.mpApi) return;
+    window.mpApi.listTrends().then(r => {
+      if (r.length) setTrends(r.map(b => ({
+        t: b.summary || b.trend_keyword || 'Tendência',
+        g: b.growth || '+—',
+        tone: 'good',
+        id: b.briefing_id || b.id,
+      })));
+      else setTrends([{ t: 'Nenhuma tendência coletada ainda', g: '—', tone: '' }]);
+    }).catch(() => setTrends([{ t: 'Erro ao carregar', g: '—', tone: '' }]));
+  }, []);
   return <div className="app">
     <AppHead icon="trending" title="Radar de Tendências" desc="Coleta tendências globais (XVideos/Pornhub) e gera briefings por criador com o Grok."
       right={<Pill kind="violet" icon="sparkles">Grok briefing</Pill>} />
     <div className="rowx">
-      <button className="btn pri"><Icon name="refresh" />Coletar Tendências Globais</button>
-      <button className="btn ghost"><Icon name="list" />Atualizar Lista</button>
+      <button className="btn pri" onClick={() => {
+        setCollecting(true);
+        if (window.mpApi) window.mpApi.collectTrends()
+          .then(() => window.mpApi.listTrends().then(r => { if (r.length) setTrends(r.map(b => ({ t: b.summary || b.trend_keyword || 'Tendência', g: b.growth || '+—', tone: 'good', id: b.briefing_id }))); }))
+          .catch(() => {}).finally(() => setCollecting(false));
+      }}><Icon name="refresh" />{collecting ? 'Coletando…' : 'Coletar Tendências Globais'}</button>
+      <button className="btn ghost" onClick={() => {
+        if (window.mpApi) window.mpApi.listTrends().then(r => { if (r.length) setTrends(r.map(b => ({ t: b.summary || b.trend_keyword || 'Tendência', g: b.growth || '+—', tone: 'good', id: b.briefing_id }))); });
+      }}><Icon name="list" />Atualizar Lista</button>
     </div>
     <div className="split">
       <div className="stack">

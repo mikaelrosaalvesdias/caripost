@@ -86,6 +86,22 @@ function PublisherApp() {
 function CalendarApp() {
   const days = [];
   for (let i = -0; i < 35; i++) days.push(i + 1 - 0);
+  const [entries, setEntries] = React.useState([
+    { t: 'Bastidores do estúdio', d: 'Hoje · 18:00', c: 'Criador', plat: 'XVideos', tone: 'warn', s: 'agendado' },
+  ]);
+  React.useEffect(() => {
+    if (!window.mpApi) return;
+    window.mpApi.listCalendar().then(r => {
+      if (r.length) setEntries(r.map(e => ({
+        t: e.title || 'Publicação',
+        d: e.publish_at ? new Date(e.publish_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—',
+        c: e.creator_name || e.creator_id || '—',
+        plat: Array.isArray(e.publish_platforms) ? e.publish_platforms.join(' · ') : (e.publish_platforms || '—'),
+        tone: e.status === 'published' ? 'good' : 'warn',
+        s: e.status || 'agendado',
+      })));
+    }).catch(() => {});
+  }, []);
   const events = { 2: 'cy', 8: 'pri', 12: 'cy', 15: 'pri', 19: 'cy', 24: 'pri', 27: 'cy' };
   return <div className="app">
     <AppHead icon="calendar" title="Calendário Editorial" desc="Programe publicações por criador e plataforma, com auto-agendamento inteligente."
@@ -114,15 +130,12 @@ function CalendarApp() {
       </div>
       <div className="stack">
         <div className="sec mut"><Icon name="clock" />Próximas publicações</div>
-        {[
-          { t: 'Bastidores do estúdio', d: 'Hoje · 18:00', c: 'Ana Estúdio', plat: 'XVideos · Pornhub', tone: 'warn', s: 'agendado' },
-          { t: 'Teaser vertical 0:15', d: '03/06 · 12:00', c: 'Raposinha', plat: 'Telegram', tone: 'warn', s: 'agendado' },
-          { t: 'Edição premium maio', d: '28/05 · 20:00', c: 'Ana Estúdio', plat: 'XVideos', tone: 'good', s: 'publicado' },
-        ].map((e, i) => <div key={i} className="litem">
+        {entries.slice(0,6).map((e, i) => <div key={i} className="litem">
           <span className="li-ic"><Icon name="post" /></span>
           <div className="li-main"><b>{e.t}</b><small>{e.c} · {e.d} · {e.plat}</small></div>
           <Pill kind={e.tone} dot>{e.s}</Pill>
         </div>)}
+        {!entries.length && <div className="hint">Nenhuma publicação agendada.</div>}
         <div className="panel stack">
           <div className="rowx" style={{ justifyContent: 'space-between' }}><span style={{ fontSize: 13 }}>Avisar no Telegram ao publicar</span><Switch on /></div>
           <div className="rowx" style={{ justifyContent: 'space-between' }}><span style={{ fontSize: 13 }}>Notificação no app</span><Switch on /></div>

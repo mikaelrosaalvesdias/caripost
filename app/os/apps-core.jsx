@@ -236,7 +236,7 @@ function MediaApp() {
   React.useEffect(() => {
     if (!window.mpApi) return;
     setLoading(true);
-    window.mpApi.listMedia('all').then(r => { if (r.length) setAllItems(r); }).catch(() => {}).finally(() => setLoading(false));
+    window.mpApi.listMedia().then(r => { if (r.length) setAllItems(r); }).catch(() => {}).finally(() => setLoading(false));
   }, []);
   const items = allItems.filter(m => filter === 'all' || m.s.includes(filter) || (filter === 'original' && m.s.includes('original')));
   const openApp = (app) => { setCtx(null); if (window.__mpOpen) window.__mpOpen(app); };
