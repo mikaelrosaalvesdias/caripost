@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.6', date: '2026-06-10',
+    items: [
+      { type: 'fix', text: 'Arquivos: primeiras capas da grade agora sao carregadas imediatamente no render, mesmo quando a lista fica abaixo da dobra dentro da janela do MetaPorn OS.' },
+    ],
+  },
+  {
     version: 'v1.19.5', date: '2026-06-10',
     items: [
       { type: 'fix', text: 'MetaPorn OS: login do desktop agora respeita /auth/check; quando a autenticação está ativa, o login acontece no OS e a sessão é compartilhada com os módulos antigos embutidos.' },
@@ -3153,8 +3159,9 @@ function _hydrateMediaTilePreviews() {
   }
   const covers = Array.from(listEl.querySelectorAll('.media-tile-cover[data-media-preview-key]'));
   if (!covers.length) return;
+  covers.slice(0, 12).forEach(_enqueueMediaTilePreview);
   if (!('IntersectionObserver' in window)) {
-    covers.slice(0, 12).forEach(_enqueueMediaTilePreview);
+    covers.slice(12, 24).forEach(_enqueueMediaTilePreview);
     return;
   }
   const observer = new IntersectionObserver((entries) => {
@@ -3165,7 +3172,7 @@ function _hydrateMediaTilePreviews() {
     });
   }, { rootMargin: '120px 0px', threshold: 0.01 });
   mediaManagerState.previewObserver = observer;
-  covers.forEach(el => observer.observe(el));
+  covers.slice(12).forEach(el => observer.observe(el));
 }
 
 function _enqueueMediaTilePreview(el) {
