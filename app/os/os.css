@@ -96,29 +96,29 @@ input,textarea,select{font-family:inherit}
 .wall-logo em{color:rgba(255,23,68,.06);font-style:normal}
 
 /* desktop — grouped grid of LARGE icons, well distributed */
-.desk{position:absolute;top:30px;left:30px;right:30px;bottom:78px;display:flex;flex-wrap:wrap;
-  gap:28px;align-content:flex-start;justify-content:space-between;overflow:hidden;pointer-events:none}
+.desk{position:absolute;top:28px;left:34px;right:34px;bottom:78px;display:flex;flex-wrap:wrap;
+  gap:42px;align-content:flex-start;justify-content:center;overflow:hidden;pointer-events:none}
 .desk-col{display:flex;flex-direction:column;gap:14px;pointer-events:auto}
 .desk-col-label{font-family:var(--fh);font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
   color:#c4c4de;text-shadow:0 1px 4px rgba(0,0,0,.8);padding:0 4px 2px;display:flex;align-items:center;gap:8px}
 .desk-col-label::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.18),transparent)}
-.desk-col-grid{display:grid;grid-template-columns:repeat(2,114px);gap:6px;align-items:start}
-.dicon{width:114px;display:flex;flex-direction:column;align-items:center;gap:9px;padding:13px 6px 11px;
+.desk-col-grid{display:grid;grid-template-columns:repeat(2,132px);gap:8px;align-items:start}
+.dicon{width:132px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 7px 12px;
   border-radius:18px;cursor:pointer;transition:.15s var(--ease);border:1px solid transparent}
 .dicon:hover{background:rgba(255,255,255,.06);border-color:var(--line2)}
 .dicon:active{transform:scale(.96)}
-.dicon .ig{width:70px;height:70px;border-radius:21px;display:grid;place-items:center;
+.dicon .ig{width:84px;height:84px;border-radius:24px;display:grid;place-items:center;
   background:linear-gradient(150deg,var(--solid2),var(--solid));border:1px solid var(--line2);
   color:var(--text);box-shadow:var(--sh)}
-.dicon .ig svg{width:35px;height:35px}
-.dicon span{font-size:12.5px;font-weight:500;text-align:center;line-height:1.25;color:#e9e9f7;
+.dicon .ig svg{width:42px;height:42px}
+.dicon span{font-size:13.5px;font-weight:600;text-align:center;line-height:1.25;color:#e9e9f7;
   text-shadow:0 1px 4px rgba(0,0,0,.85);width:100%;min-height:2.5em;
   display:flex;align-items:flex-start;justify-content:center}
 .dicon.feat .ig{background:linear-gradient(150deg,var(--pri),var(--pri2));border-color:transparent;color:#fff;
   box-shadow:0 10px 28px rgba(255,23,68,.36)}
 .dicon.feat.vi .ig{background:linear-gradient(150deg,var(--violet),#5b21b6);box-shadow:0 10px 28px rgba(124,58,237,.36)}
 .dicon.feat span{color:#fff;font-weight:600}
-@media(max-width:1180px){.desk{gap:20px;justify-content:flex-start}.desk-col-grid{grid-template-columns:repeat(2,106px)}.dicon{width:106px}}
+@media(max-width:1180px){.desk{gap:24px;justify-content:flex-start}.desk-col-grid{grid-template-columns:repeat(2,112px)}.dicon{width:112px}.dicon .ig{width:72px;height:72px}.dicon .ig svg{width:36px;height:36px}}
 
 /* ─────────── TASKBAR ─────────── */
 .taskbar{position:absolute;left:0;right:0;bottom:0;height:62px;z-index:600;display:flex;align-items:center;
@@ -213,6 +213,8 @@ input,textarea,select{font-family:inherit}
 .wbtn.close:hover{background:var(--pri);color:#fff}
 .wbtn.help:hover{background:var(--cyan-soft);color:var(--cyan)}
 .win-body{flex:1;overflow:auto;min-height:0}
+.win-body.legacy-wrap{overflow:hidden;background:var(--bg)}
+.legacy-frame{width:100%;height:100%;display:block;border:0;background:var(--bg)}
 .win.focused{box-shadow:var(--sh-win),0 0 0 1px var(--pri-line)}
 
 /* window content scaffold */

@@ -2,6 +2,12 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.19.4 - 2026-06-10
+
+- Restaura o funcionamento real dos módulos no MetaPorn OS: cada janela do desktop novo abre a rota funcional antiga em `/ui/?embed=1`, reaproveitando handlers, uploads, runs, Criacao, burn, teaser, settings e demais fluxos existentes.
+- Mantem o visual do desktop MetaPorn OS e aumenta/centraliza os icones no topo da tela.
+- Espelha a sessao do login do OS para a UI antiga, evitando login duplicado dentro das janelas.
+
 ## v1.18.21 - 2026-06-02
 
 - Corrige a tela inicial para seguir o desktop do pacote Claude Designer: boot/login MetaPorn OS, grupos de apps completos e janela oculta quando nao ha rota direta.

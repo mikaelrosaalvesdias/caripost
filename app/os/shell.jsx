@@ -1,31 +1,32 @@
 /* MetaPorn OS — shell: boot, desktop, window manager, taskbar, start, tour */
 
 const APPS = {
+  auto:       { title: 'Modo Automático', icon: 'bolt',       C: 'LegacyApp',     w: 1080, h: 760, grp: null, route: 'autoeditor' },
   // Inteligência e Mídia
-  analyze:    { title: 'Analyze',         icon: 'analyze',    C: 'AnalyzeApp',    w: 1000, h: 720, grp: 'int' },
-  compare:    { title: 'Compare',         icon: 'compare',    C: 'CompareApp',    w: 940,  h: 640, grp: 'int' },
-  runs:       { title: 'Runs',            icon: 'runs',       C: 'RunsApp',       w: 920,  h: 640, grp: 'int' },
-  media:      { title: 'Arquivos',        icon: 'media',      C: 'MediaApp',      w: 1000, h: 680, grp: 'int' },
-  referencia: { title: 'Referência',      icon: 'refs',       C: 'ReferenciaApp', w: 1000, h: 700, grp: 'int' },
-  autoeditor: { title: 'AutoEditor',      icon: 'autoeditor', C: 'AutoEditorApp', w: 1080, h: 760, grp: 'int' },
-  enhancer:   { title: 'Video Enhancer',  icon: 'enhance',    C: 'EnhancerApp',   w: 1000, h: 680, grp: 'int' },
+  analyze:    { title: 'Analyze',         icon: 'analyze',    C: 'LegacyApp',     w: 1120, h: 760, grp: 'int', route: 'analyze' },
+  compare:    { title: 'Compare',         icon: 'compare',    C: 'LegacyApp',     w: 1080, h: 720, grp: 'int', route: 'compare' },
+  runs:       { title: 'Runs',            icon: 'runs',       C: 'LegacyApp',     w: 1080, h: 720, grp: 'int', route: 'runs' },
+  media:      { title: 'Arquivos',        icon: 'media',      C: 'LegacyApp',     w: 1120, h: 760, grp: 'int', route: 'media' },
+  referencia: { title: 'Referência',      icon: 'refs',       C: 'LegacyApp',     w: 1080, h: 740, grp: 'int', route: 'referencia' },
+  autoeditor: { title: 'AutoEditor',      icon: 'autoeditor', C: 'LegacyApp',     w: 1120, h: 780, grp: 'int', route: 'autoeditor' },
+  enhancer:   { title: 'Video Enhancer',  icon: 'enhance',    C: 'LegacyApp',     w: 1080, h: 740, grp: 'int', route: 'videoenhancer' },
   // Edição & Conteúdo
-  legenda:    { title: 'Legenda',         icon: 'captions',   C: 'LegendaApp',    w: 1000, h: 720, grp: 'edit' },
-  logo:       { title: 'Logo',            icon: 'logo',       C: 'LogoApp',       w: 1000, h: 680, grp: 'edit' },
-  teaser:     { title: 'Teaser',          icon: 'scissors',   C: 'TeaserApp',     w: 1000, h: 720, grp: 'edit' },
-  thumbnail:  { title: 'Thumbnail',       icon: 'thumbnail',  C: 'ThumbnailApp',  w: 1000, h: 700, grp: 'edit' },
+  legenda:    { title: 'Legenda',         icon: 'captions',   C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
+  logo:       { title: 'Logo',            icon: 'logo',       C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
+  teaser:     { title: 'Teaser',          icon: 'scissors',   C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
+  thumbnail:  { title: 'Thumbnail',       icon: 'thumbnail',  C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
   // Operação e Distribuição
-  criacao:    { title: 'Criação',         icon: 'post',       C: 'CriacaoApp',    w: 1040, h: 720, grp: 'op' },
-  telegram:   { title: 'Telegram',        icon: 'telegram',   C: 'TelegramApp',   w: 960,  h: 660, grp: 'op' },
-  publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'PublisherApp',  w: 960,  h: 680, grp: 'op' },
-  calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'CalendarApp',   w: 980,  h: 660, grp: 'op' },
+  criacao:    { title: 'Criação',         icon: 'post',       C: 'LegacyApp',     w: 1120, h: 760, grp: 'op', route: 'criacao' },
+  telegram:   { title: 'Telegram',        icon: 'telegram',   C: 'LegacyApp',     w: 1080, h: 720, grp: 'op', route: 'telegram' },
+  publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'LegacyApp',     w: 1080, h: 720, grp: 'op', route: 'publisher' },
+  calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'LegacyApp',     w: 1080, h: 720, grp: 'op', route: 'calendar' },
   // Gestão de Agência
-  creators:   { title: 'Criadores',       icon: 'users',      C: 'CreatorsApp',   w: 900,  h: 660, grp: 'ges' },
-  trends:     { title: 'Tendências',      icon: 'trending',   C: 'TrendsApp',     w: 960,  h: 660, grp: 'ges' },
-  financial:  { title: 'Financeiro',      icon: 'dollar',     C: 'FinancialApp',  w: 940,  h: 660, grp: 'ges' },
-  dmca:       { title: 'DMCA',            icon: 'shield',     C: 'DmcaApp',       w: 920,  h: 660, grp: 'ges' },
-  settings:   { title: 'Settings',        icon: 'settings',   C: 'SettingsApp',   w: 800,  h: 620, grp: 'ges' },
-  wizard:     { title: 'Assistente',      icon: 'flow',       C: 'WizardApp',     w: 940,  h: 700, grp: null },
+  creators:   { title: 'Criadores',       icon: 'users',      C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'creators' },
+  trends:     { title: 'Tendências',      icon: 'trending',   C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'trends' },
+  financial:  { title: 'Financeiro',      icon: 'dollar',     C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'financial' },
+  dmca:       { title: 'DMCA',            icon: 'shield',     C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'dmca' },
+  settings:   { title: 'Settings',        icon: 'settings',   C: 'LegacyApp',     w: 980,  h: 700, grp: 'ges', route: 'settings' },
+  wizard:     { title: 'Assistente',      icon: 'flow',       C: 'LegacyApp',     w: 1120, h: 760, grp: null, route: 'criacao' },
 };
 const GROUPS = [
   ['int', 'Inteligência e Mídia'],
@@ -88,7 +89,6 @@ function App() {
 
   function open(appId) {
     setStart(false);
-    if (appId === 'auto') { setAuto(true); return; }
     if (appId === 'wizard') { /* opens as window */ }
     const existing = wins.find(w => w.appId === appId);
     if (existing) { focus(existing.id); return; }
@@ -101,7 +101,7 @@ function App() {
     const id = 'w' + Date.now();
     setZTop(z => z + 1);
     setWins(ws => [...ws, { id, appId, x, y, w, h, z: zTop + 1, min: false, max: vw < 760 }]);
-    if (TOURS[appId]) setTimeout(() => startTour(appId), 360);
+    if (!a.route && TOURS[appId]) setTimeout(() => startTour(appId), 360);
   }
   function close(id) {
     setWins(ws => ws.map(w => w.id === id ? { ...w, closing: true } : w));
@@ -198,7 +198,7 @@ function Boot({ pct, msg, onSkip }) {
     <div className="boot-logo">Meta<em>Porn</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
     <div className="boot-bar"><i style={{ width: pct + '%' }} /></div>
     <div className="boot-status">{msg} {pct < 100 && pct + '%'}</div>
-    <div className="boot-ver">v1.19.1 · admin platform</div>
+    <div className="boot-ver">v1.19.4 · admin platform</div>
   </div>;
 }
 
@@ -229,8 +229,15 @@ function Window({ w, onFocus, onClose, onMin, onMax, onHelp, onMove, topZ }) {
         <button className="wbtn close" onClick={onClose}><Icon name="x" /></button>
       </div>
     </div>
-    <div className="win-body">{Comp ? <Comp /> : <div className="app">App não encontrado</div>}</div>
+    <div className={'win-body' + (a.route ? ' legacy-wrap' : '')}>
+      {a.route ? <LegacyFrame app={a} /> : (Comp ? <Comp /> : <div className="app">App não encontrado</div>)}
+    </div>
   </div>;
+}
+
+function LegacyFrame({ app }) {
+  const src = `/ui/?embed=1#${encodeURIComponent(app.route)}`;
+  return <iframe className="legacy-frame" title={app.title} src={src} />;
 }
 
 function StartMenu({ onOpen, onClick }) {

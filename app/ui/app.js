@@ -2,6 +2,9 @@
 
 function qs(id) { return document.getElementById(id) }
 
+const IS_EMBED_MODE = new URLSearchParams(location.search).get('embed') === '1';
+if (IS_EMBED_MODE) document.body.classList.add('ui-embed');
+
 // ── Loader de inicialização da página ─────────────────────────────────────
 const _pageLoader = (() => {
   const STEPS = [
@@ -526,6 +529,13 @@ const TEASER_MAX_SCENE_DURATION_SEC = 720;
 const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
+  {
+    version: 'v1.19.4', date: '2026-06-10',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: janelas do desktop passam a abrir os módulos reais antigos em /ui/?embed=1, restaurando uploads, runs, criação, burn, teaser, settings e demais handlers sem trocar o visual do desktop.' },
+      { type: 'fix', text: 'Visual: ícones do desktop aumentados e distribuição centralizada no topo da tela.' },
+    ],
+  },
   {
     version: 'v1.19.0', date: '2026-06-02',
     items: [

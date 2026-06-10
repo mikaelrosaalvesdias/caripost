@@ -3,12 +3,29 @@
   'use strict';
 
   const STORAGE_KEY = 'mp_session_token';
+  const LEGACY_SESSION_KEY = 'mp_session';
   let _loginShown = false;
   let _isOpen = null; // null=unknown, true=open API, false=auth required
 
-  function getToken() { return localStorage.getItem(STORAGE_KEY) || ''; }
-  function setToken(t) { localStorage.setItem(STORAGE_KEY, t); }
-  function clearToken() { localStorage.removeItem(STORAGE_KEY); }
+  function getLegacySession() {
+    try {
+      const raw = sessionStorage.getItem(LEGACY_SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+  function getToken() {
+    return getLegacySession()?.token || localStorage.getItem(STORAGE_KEY) || '';
+  }
+  function setToken(t, user) {
+    localStorage.setItem(STORAGE_KEY, t);
+    if (user) {
+      sessionStorage.setItem(LEGACY_SESSION_KEY, JSON.stringify({ token: t, user }));
+    }
+  }
+  function clearToken() {
+    localStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(LEGACY_SESSION_KEY);
+  }
 
   async function mpFetch(url, opts = {}) {
     const token = getToken();
@@ -68,7 +85,7 @@
         });
         const data = await res.json();
         if (data.ok && data.token) {
-          setToken(data.token);
+          setToken(data.token, data.user);
           _loginShown = false;
           el.remove();
         } else {
@@ -84,6 +101,18 @@
   /* Check if API needs auth — hit /runs (always accessible if open) */
   async function checkAuth() {
     try {
+      const token = getToken();
+      if (token) {
+        const me = await fetch('/auth/me', { headers: { 'X-Session-Token': token } });
+        if (me.ok) {
+          const data = await me.json();
+          if (data.user) {
+            setToken(token, data.user);
+            _isOpen = false;
+            return;
+          }
+        }
+      }
       const res = await fetch('/runs?limit=1');
       if (res.status === 401) { _isOpen = false; showLogin(); }
       else { _isOpen = true; } // open mode — no login needed

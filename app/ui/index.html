@@ -5473,6 +5473,65 @@
       .os-start-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .os-window-actions { margin-right: 0; }
     }
+
+    body.ui-embed {
+      overflow: hidden;
+      background: var(--os-bg);
+    }
+
+    body.ui-embed #pageLoadModal,
+    body.ui-embed .app-sidebar,
+    body.ui-embed .sidebar-backdrop,
+    body.ui-embed .os-start-menu,
+    body.ui-embed .os-taskbar,
+    body.ui-embed .help-float,
+    body.ui-embed .version-badge {
+      display: none !important;
+    }
+
+    body.ui-embed .app-shell {
+      position: fixed;
+      inset: 0;
+      display: block !important;
+      min-height: 0;
+      padding: 0;
+      background: var(--os-bg);
+    }
+
+    body.ui-embed .app-shell::before,
+    body.ui-embed .app-shell::after {
+      display: none !important;
+    }
+
+    body.ui-embed .app-main {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      border: 0;
+      border-radius: 0;
+      transform: none;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      box-shadow: none;
+      background: rgba(19, 19, 42, .96);
+    }
+
+    body.ui-embed.os-window-hidden .app-main {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: none;
+    }
+
+    body.ui-embed .topbar {
+      min-height: 44px;
+    }
+
+    body.ui-embed .container {
+      padding: 18px;
+    }
   </style>
 </head>
 
@@ -5652,7 +5711,7 @@
         </a>
         <div class="sidebar-version">
           <span>Build atual</span>
-          <strong>v1.19.0</strong>
+          <strong>v1.19.4</strong>
         </div>
       </div>
     </aside>
@@ -7103,12 +7162,12 @@
     </div>
     <div class="os-tray" aria-hidden="true">
       <span class="os-tray-pill">OS</span>
-      <span class="os-tray-pill">v1.19.0</span>
+      <span class="os-tray-pill">v1.19.4</span>
     </div>
   </nav>
 
   <div id="toast" class="toast hidden"></div>
-  <div class="version-badge">v1.19.0</div>
+  <div class="version-badge">v1.19.4</div>
 
   <!-- MODAL: CARREGAMENTO DA PÁGINA -->
   <div id="pageLoadModal" style="
@@ -7177,7 +7236,7 @@
     </div>
   </div>
 
-  <script src="/ui/app.js?v=119000"></script>
+  <script src="/ui/app.js?v=119040"></script>
 </body>
 
 </html>
