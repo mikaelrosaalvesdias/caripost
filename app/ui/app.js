@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.5', date: '2026-06-10',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: login do desktop agora respeita /auth/check; quando a autenticação está ativa, o login acontece no OS e a sessão é compartilhada com os módulos antigos embutidos.' },
+    ],
+  },
+  {
     version: 'v1.19.4', date: '2026-06-10',
     items: [
       { type: 'fix', text: 'MetaPorn OS: janelas do desktop passam a abrir os módulos reais antigos em /ui/?embed=1, restaurando uploads, runs, criação, burn, teaser, settings e demais handlers sem trocar o visual do desktop.' },

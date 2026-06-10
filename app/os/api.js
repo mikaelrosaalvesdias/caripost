@@ -113,6 +113,17 @@
           }
         }
       }
+      const auth = await fetch('/auth/check');
+      if (auth.ok) {
+        const data = await auth.json();
+        if (data.auth_enabled) {
+          _isOpen = false;
+          showLogin();
+          return;
+        }
+        _isOpen = true;
+        return;
+      }
       const res = await fetch('/runs?limit=1');
       if (res.status === 401) { _isOpen = false; showLogin(); }
       else { _isOpen = true; } // open mode — no login needed
