@@ -144,6 +144,23 @@
   function _enc(v) { return encodeURIComponent(v); }
 
   const _thumbCache = {};   // object_key → url (in-memory session cache)
+  const _thumbPending = {}; // object_key → Promise (dedupe in-flight)
+  let _thumbActive = 0;
+  const _thumbQueue = [];
+  const THUMB_MAX_CONCURRENT = 6;
+  function _thumbNext() {
+    while (_thumbActive < THUMB_MAX_CONCURRENT && _thumbQueue.length) {
+      const job = _thumbQueue.shift();
+      _thumbActive++;
+      job().finally(() => { _thumbActive--; _thumbNext(); });
+    }
+  }
+  function _thumbEnqueue(fn) {
+    return new Promise((resolve, reject) => {
+      _thumbQueue.push(() => fn().then(resolve, reject));
+      _thumbNext();
+    });
+  }
   const _metaCache = {};    // object_key → metadata
 
   /* ── Public API ── */
@@ -201,12 +218,16 @@
       return out;
     },
 
-    /* Thumbnail com cache de sessão (servidor cacheia após 1ª geração) */
-    async thumbUrl(key) {
-      if (_thumbCache[key]) return _thumbCache[key];
-      const r = await mpFetch('/api/media-manager/thumbnail-url?object_key=' + _enc(key));
-      if (r.url) { _thumbCache[key] = r.url; return r.url; }
-      throw new Error('no_thumb');
+    /* Thumbnail com cache + fila (máx 6 simultâneas — geração no servidor é cara) */
+    thumbUrl(key) {
+      if (_thumbCache[key]) return Promise.resolve(_thumbCache[key]);
+      if (_thumbPending[key]) return _thumbPending[key];
+      _thumbPending[key] = _thumbEnqueue(async () => {
+        const r = await mpFetch('/api/media-manager/thumbnail-url?object_key=' + _enc(key));
+        if (r.url) { _thumbCache[key] = r.url; return r.url; }
+        throw new Error('no_thumb');
+      }).finally(() => { delete _thumbPending[key]; });
+      return _thumbPending[key];
     },
 
     async streamUrl(key) {
