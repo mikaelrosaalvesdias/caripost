@@ -1,32 +1,31 @@
 /* MetaPorn OS — shell: boot, desktop, window manager, taskbar, start, tour */
 
 const APPS = {
-  auto:       { title: 'Modo Automático', icon: 'bolt',       C: 'LegacyApp',     w: 1080, h: 760, grp: null, route: 'autoeditor' },
   // Inteligência e Mídia
-  analyze:    { title: 'Analyze',         icon: 'analyze',    C: 'LegacyApp',     w: 1120, h: 760, grp: 'int', route: 'analyze' },
-  compare:    { title: 'Compare',         icon: 'compare',    C: 'LegacyApp',     w: 1080, h: 720, grp: 'int', route: 'compare' },
-  runs:       { title: 'Runs',            icon: 'runs',       C: 'LegacyApp',     w: 1080, h: 720, grp: 'int', route: 'runs' },
-  media:      { title: 'Arquivos',        icon: 'media',      C: 'LegacyApp',     w: 1120, h: 760, grp: 'int', route: 'media' },
-  referencia: { title: 'Referência',      icon: 'refs',       C: 'LegacyApp',     w: 1080, h: 740, grp: 'int', route: 'referencia' },
-  autoeditor: { title: 'AutoEditor',      icon: 'autoeditor', C: 'LegacyApp',     w: 1120, h: 780, grp: 'int', route: 'autoeditor' },
-  enhancer:   { title: 'Video Enhancer',  icon: 'enhance',    C: 'LegacyApp',     w: 1080, h: 740, grp: 'int', route: 'videoenhancer' },
+  analyze:    { title: 'Analyze',         icon: 'analyze',    C: 'AnalyzeApp',    w: 1060, h: 740, grp: 'int' },
+  compare:    { title: 'Compare',         icon: 'compare',    C: 'CompareApp',    w: 980,  h: 680, grp: 'int' },
+  runs:       { title: 'Runs',            icon: 'runs',       C: 'RunsApp',       w: 1000, h: 680, grp: 'int' },
+  media:      { title: 'Arquivos',        icon: 'media',      C: 'MediaApp',      w: 1080, h: 720, grp: 'int' },
+  referencia: { title: 'Referência',      icon: 'refs',       C: 'ReferenciaApp', w: 1040, h: 720, grp: 'int' },
+  autoeditor: { title: 'AutoEditor',      icon: 'autoeditor', C: 'AutoEditorApp', w: 1100, h: 770, grp: 'int' },
+  enhancer:   { title: 'Video Enhancer',  icon: 'enhance',    C: 'EnhancerApp',   w: 1020, h: 700, grp: 'int' },
   // Edição & Conteúdo
-  legenda:    { title: 'Legenda',         icon: 'captions',   C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
-  logo:       { title: 'Logo',            icon: 'logo',       C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
-  teaser:     { title: 'Teaser',          icon: 'scissors',   C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
-  thumbnail:  { title: 'Thumbnail',       icon: 'thumbnail',  C: 'LegacyApp',     w: 1120, h: 760, grp: 'edit', route: 'criacao' },
+  legenda:    { title: 'Legenda',         icon: 'captions',   C: 'LegendaApp',    w: 1040, h: 730, grp: 'edit' },
+  logo:       { title: 'Logo',            icon: 'logo',       C: 'LogoApp',       w: 1020, h: 700, grp: 'edit' },
+  teaser:     { title: 'Teaser',          icon: 'scissors',   C: 'TeaserApp',     w: 1020, h: 730, grp: 'edit' },
+  thumbnail:  { title: 'Thumbnail',       icon: 'thumbnail',  C: 'ThumbnailApp',  w: 1020, h: 710, grp: 'edit' },
   // Operação e Distribuição
-  criacao:    { title: 'Criação',         icon: 'post',       C: 'LegacyApp',     w: 1120, h: 760, grp: 'op', route: 'criacao' },
-  telegram:   { title: 'Telegram',        icon: 'telegram',   C: 'LegacyApp',     w: 1080, h: 720, grp: 'op', route: 'telegram' },
-  publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'LegacyApp',     w: 1080, h: 720, grp: 'op', route: 'publisher' },
-  calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'LegacyApp',     w: 1080, h: 720, grp: 'op', route: 'calendar' },
+  criacao:    { title: 'Criação',         icon: 'post',       C: 'CriacaoApp',    w: 1060, h: 730, grp: 'op' },
+  telegram:   { title: 'Telegram',        icon: 'telegram',   C: 'TelegramApp',   w: 980,  h: 680, grp: 'op' },
+  publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'PublisherApp',  w: 980,  h: 690, grp: 'op' },
+  calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'CalendarApp',   w: 1000, h: 680, grp: 'op' },
   // Gestão de Agência
-  creators:   { title: 'Criadores',       icon: 'users',      C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'creators' },
-  trends:     { title: 'Tendências',      icon: 'trending',   C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'trends' },
-  financial:  { title: 'Financeiro',      icon: 'dollar',     C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'financial' },
-  dmca:       { title: 'DMCA',            icon: 'shield',     C: 'LegacyApp',     w: 1080, h: 720, grp: 'ges', route: 'dmca' },
-  settings:   { title: 'Settings',        icon: 'settings',   C: 'LegacyApp',     w: 980,  h: 700, grp: 'ges', route: 'settings' },
-  wizard:     { title: 'Assistente',      icon: 'flow',       C: 'LegacyApp',     w: 1120, h: 760, grp: null, route: 'criacao' },
+  creators:   { title: 'Criadores',       icon: 'users',      C: 'CreatorsApp',   w: 920,  h: 680, grp: 'ges' },
+  trends:     { title: 'Tendências',      icon: 'trending',   C: 'TrendsApp',     w: 980,  h: 680, grp: 'ges' },
+  financial:  { title: 'Financeiro',      icon: 'dollar',     C: 'FinancialApp',  w: 960,  h: 680, grp: 'ges' },
+  dmca:       { title: 'DMCA',            icon: 'shield',     C: 'DmcaApp',       w: 940,  h: 680, grp: 'ges' },
+  settings:   { title: 'Settings',        icon: 'settings',   C: 'SettingsApp',   w: 840,  h: 660, grp: 'ges' },
+  wizard:     { title: 'Assistente',      icon: 'flow',       C: 'WizardApp',     w: 960,  h: 720, grp: null },
 };
 const GROUPS = [
   ['int', 'Inteligência e Mídia'],
@@ -43,7 +42,6 @@ const TOURS = {
   ],
   analyze: [
     { sel: '[data-tour="an-drop"]', title: 'Comece pelo vídeo', body: 'Arraste um ou vários vídeos. Eles sobem em fila paralela direto para o storage.' },
-    { sel: '[data-tour="an-stt"]', title: 'Escolha o motor de transcrição', body: 'Vários provedores de STT — use Premium (large-v3) para máxima qualidade ou Local para privacidade.' },
     { sel: '[data-tour="an-go"]', title: 'Analise', body: 'Gera transcrição, prompt, visão IA e JSON — tudo nas abas do resultado ao lado.' },
   ],
 };
@@ -58,13 +56,12 @@ function App() {
   const [tasks, setTasks] = React.useState(false);
   const [notif, setNotif] = React.useState(false);
   const [auto, setAuto] = React.useState(false);
-  const [tour, setTour] = React.useState(null); // {steps, idx}
+  const [tour, setTour] = React.useState(null);
   const [now, setNow] = React.useState(new Date());
-  const [showToast, setShowToast] = React.useState(true);
 
   const skipBoot = React.useCallback(() => { setBooting(false); }, []);
 
-  // Auth check — show login only if API requires it
+  // Auth check — mostra login só se a API exigir
   React.useEffect(() => {
     if (window.__mpCheckAuth) window.__mpCheckAuth();
   }, []);
@@ -89,10 +86,16 @@ function App() {
 
   function open(appId) {
     setStart(false);
-    if (appId === 'wizard') { /* opens as window */ }
+    if (appId === 'auto') { setAuto(true); return; }
     const existing = wins.find(w => w.appId === appId);
-    if (existing) { focus(existing.id); return; }
+    if (existing) {
+      // Re-monta o app para ele reler o contexto (mpCtx.file)
+      focus(existing.id);
+      setWins(ws => ws.map(w => w.id === existing.id ? { ...w, nonce: (w.nonce || 0) + 1 } : w));
+      return;
+    }
     const a = APPS[appId];
+    if (!a) return;
     const vw = window.innerWidth, vh = window.innerHeight;
     const w = Math.min(a.w, vw - 40), h = Math.min(a.h, vh - 110);
     const offset = wins.length * 28 % 120;
@@ -100,8 +103,8 @@ function App() {
     const y = Math.max(20, (vh - h - 56) / 2 - 30 + offset);
     const id = 'w' + Date.now();
     setZTop(z => z + 1);
-    setWins(ws => [...ws, { id, appId, x, y, w, h, z: zTop + 1, min: false, max: vw < 760 }]);
-    if (!a.route && TOURS[appId]) setTimeout(() => startTour(appId), 360);
+    setWins(ws => [...ws, { id, appId, x, y, w, h, z: zTop + 1, min: false, max: vw < 760, nonce: 0 }]);
+    if (TOURS[appId]) setTimeout(() => startTour(appId), 360);
   }
   function close(id) {
     setWins(ws => ws.map(w => w.id === id ? { ...w, closing: true } : w));
@@ -159,18 +162,11 @@ function App() {
     {tasks && <TaskCenter onClick={e => e.stopPropagation()} />}
     {notif && <NotifCenter onClick={e => e.stopPropagation()} />}
 
-    {/* toasts */}
-    {showToast && <div className="toasts">
-      <div className="toast"><div className="ts-ic"><Icon name="check" /></div>
-        <div style={{ flex: 1, minWidth: 0 }}><b>AutoEditor concluído</b><small>compil_03 · 14 cenas · 06:12 pronto</small></div>
-        <button className="btn sm" onClick={() => { setShowToast(false); open('media'); }}>Abrir</button></div>
-    </div>}
-
     {/* taskbar */}
     <div className="taskbar" onMouseDown={e => e.stopPropagation()}>
       <button className="tb-start" onClick={() => { setStart(s => !s); setTasks(false); setNotif(false); }}>
         <span className="m">M</span>Iniciar</button>
-      <button className="tb-search"><Icon name="search" />Buscar app ou ação<kbd>Ctrl + Espaço</kbd></button>
+      <button className="tb-search" onClick={() => { setStart(true); setTasks(false); setNotif(false); }}><Icon name="search" />Buscar app ou ação<kbd>Ctrl + Espaço</kbd></button>
       <div className="tb-apps">
         {PINNED.map(id => {
           const isRun = running.includes(id);
@@ -181,9 +177,9 @@ function App() {
       </div>
       <div className="tb-tray">
         <button className="tray-btn" onClick={() => { setTasks(s => !s); setNotif(false); setStart(false); }}>
-          <Icon name="tasks" /><span className="tray-badge">2</span></button>
+          <Icon name="tasks" /></button>
         <button className="tray-btn" onClick={() => { setNotif(s => !s); setTasks(false); setStart(false); }}>
-          <Icon name="bell" /><span className="tray-badge">3</span></button>
+          <Icon name="bell" /></button>
         <div className="tb-clock"><b>{t}</b><span>{d}</span></div>
       </div>
     </div>
@@ -198,7 +194,7 @@ function Boot({ pct, msg, onSkip }) {
     <div className="boot-logo">Meta<em>Porn</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
     <div className="boot-bar"><i style={{ width: pct + '%' }} /></div>
     <div className="boot-status">{msg} {pct < 100 && pct + '%'}</div>
-    <div className="boot-ver">v1.19.6 · admin platform</div>
+    <div className="boot-ver">v1.20.0 · admin platform</div>
   </div>;
 }
 
@@ -229,15 +225,8 @@ function Window({ w, onFocus, onClose, onMin, onMax, onHelp, onMove, topZ }) {
         <button className="wbtn close" onClick={onClose}><Icon name="x" /></button>
       </div>
     </div>
-    <div className={'win-body' + (a.route ? ' legacy-wrap' : '')}>
-      {a.route ? <LegacyFrame app={a} /> : (Comp ? <Comp /> : <div className="app">App não encontrado</div>)}
-    </div>
+    <div className="win-body">{Comp ? <Comp key={w.nonce || 0} /> : <div className="app">App não encontrado</div>}</div>
   </div>;
-}
-
-function LegacyFrame({ app }) {
-  const src = `/ui/?embed=1#${encodeURIComponent(app.route)}`;
-  return <iframe className="legacy-frame" title={app.title} src={src} />;
 }
 
 function StartMenu({ onOpen, onClick }) {
@@ -269,35 +258,70 @@ function StartMenu({ onOpen, onClick }) {
   </div>;
 }
 
+/* Central de Tarefas — jobs reais (AutoEditor + Enhancer + Burn) */
 function TaskCenter({ onClick }) {
+  const [items, setItems] = React.useState([]);
+  const [loaded, setLoaded] = React.useState(false);
+  React.useEffect(() => {
+    if (!window.mpApi) return;
+    Promise.allSettled([
+      window.mpApi.listAeJobs(6),
+      window.mpApi.enhancerJobs(),
+    ]).then(([ae, ve]) => {
+      const out = [];
+      (ae.status === 'fulfilled' ? ae.value : []).forEach(j => out.push({
+        ic: 'autoeditor',
+        title: 'AutoEditor · ' + (j.job_id || '').slice(0, 8),
+        status: j.status, pct: j.progress_pct || (j.status === 'done' ? 100 : 0),
+        detail: j.detail || '',
+      }));
+      (ve.status === 'fulfilled' ? ve.value : []).slice(0, 4).forEach(j => out.push({
+        ic: 'enhance',
+        title: 'Enhancer · ' + (j.job_id || '').slice(0, 8),
+        status: j.status, pct: j.progress_pct || (j.status === 'done' ? 100 : 0),
+        detail: j.detail || '',
+      }));
+      setItems(out.slice(0, 8));
+      setLoaded(true);
+    });
+  }, []);
+  const active = items.filter(i => i.status === 'running' || i.status === 'pending').length;
   return <div className="flyout" onMouseDown={onClick}>
-    <div className="flyout-head"><h3>Central de Tarefas</h3><span className="pill cy" style={{ fontSize: 11 }}>2 ativas</span></div>
+    <div className="flyout-head"><h3>Central de Tarefas</h3><span className="pill cy" style={{ fontSize: 11 }}>{active} ativas</span></div>
     <div className="flyout-body">
-      <div className="task"><div className="tk-ic run"><Icon name="autoeditor" /></div>
-        <div className="tk-main"><b>AutoEditor · compil_03 (3 fontes)</b><div className="track cy"><i style={{ width: '58%' }} /></div></div>
-        <div className="tk-rt">58%<br />≈ 4 min</div></div>
-      <div className="task"><div className="tk-ic run"><Icon name="enhance" /></div>
-        <div className="tk-main"><b>Video Enhancer · bastidores_2019</b><div className="track cy"><i style={{ width: '34%' }} /></div></div>
-        <div className="tk-rt">34%<br />≈ 8 min</div></div>
-      <div className="task"><div className="tk-ic done"><Icon name="check" /></div>
-        <div className="tk-main"><b>Analyze · clipe_estudio_2406</b><div className="track gd"><i style={{ width: '100%' }} /></div></div>
-        <div className="tk-rt gd">concluído</div></div>
-      <div className="task"><div className="tk-ic queue"><Icon name="broadcast" /></div>
-        <div className="tk-main"><b>Publicar · agendado 18:00 · 2 plataformas</b></div>
-        <div className="tk-rt">na fila</div></div>
+      {!loaded && <div className="hint" style={{ padding: 12 }}>Carregando jobs…</div>}
+      {loaded && !items.length && <div className="hint" style={{ padding: 12 }}>Nenhum job recente.</div>}
+      {items.map((it, i) => {
+        const cls = it.status === 'done' ? 'done' : (it.status === 'running' || it.status === 'pending') ? 'run' : 'queue';
+        return <div key={i} className="task">
+          <div className={'tk-ic ' + cls}><Icon name={it.status === 'done' ? 'check' : it.ic} /></div>
+          <div className="tk-main"><b>{it.title}</b>
+            {it.status !== 'done' && <div className="track cy"><i style={{ width: (it.pct || 0) + '%' }} /></div>}
+          </div>
+          <div className={'tk-rt' + (it.status === 'done' ? ' gd' : '')}>{it.status === 'done' ? 'concluído' : (it.pct || 0) + '%'}</div>
+        </div>;
+      })}
     </div>
   </div>;
 }
 
+/* Notificações — jobs concluídos recentes */
 function NotifCenter({ onClick }) {
-  const items = [
-    { ic: 'check', t: 'AutoEditor concluído', d: 'compil_03 · 14 cenas · há 2 min' },
-    { ic: 'broadcast', t: 'Publicado em 2 plataformas', d: 'Edição premium maio · há 1 h' },
-    { ic: 'shield', t: 'Nova infração DMCA detectada', d: 'leak-site.net · Raposinha · há 3 h' },
-  ];
+  const [items, setItems] = React.useState([]);
+  React.useEffect(() => {
+    if (!window.mpApi) return;
+    window.mpApi.listAeJobs(5).then(jobs => {
+      setItems((jobs || []).filter(j => j.status === 'done').slice(0, 5).map(j => ({
+        ic: 'check',
+        t: 'AutoEditor concluído',
+        d: (j.result_video_object_key || '').split('/').pop() || (j.job_id || '').slice(0, 8),
+      })));
+    }).catch(() => {});
+  }, []);
   return <div className="flyout" onMouseDown={onClick}>
-    <div className="flyout-head"><h3>Notificações</h3><button className="btn sm ghost">Limpar</button></div>
+    <div className="flyout-head"><h3>Notificações</h3></div>
     <div className="flyout-body">
+      {!items.length && <div className="hint" style={{ padding: 12 }}>Sem notificações.</div>}
       {items.map((n, i) => <div key={i} className="task">
         <div className="tk-ic done"><Icon name={n.ic} /></div>
         <div className="tk-main"><b>{n.t}</b><small style={{ color: 'var(--muted)', fontSize: 11.5 }}>{n.d}</small></div>
