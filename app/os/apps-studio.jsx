@@ -286,7 +286,7 @@ function CriacaoApp() {
   const res = detail?.result || {};
   const sug = res.suggested || {};
   const grok = res.grok || {};
-  const frameSrc = (f) => typeof f === 'string' ? f : (f.url || f.b64 || '');
+  const frameSrc = window.frameSrc;
 
   return <div className="app" style={{ padding: 0 }}>
     <div style={{ padding: '22px 22px 0' }}>

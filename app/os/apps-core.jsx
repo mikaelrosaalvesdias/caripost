@@ -40,6 +40,62 @@ function RealPlayer({ objectKey, style }) {
   return <video src={src} controls preload="metadata" playsInline style={{ width: '100%', maxHeight: 420, background: '#000', borderRadius: 14, border: '1px solid var(--line2)', display: 'block', ...style }} />;
 }
 
+/* Converte frame (base64 puro, data-uri, url ou objeto) em src de <img> válido */
+function frameSrc(f) {
+  if (!f) return '';
+  let s = typeof f === 'string' ? f : (f.b64 || f.url || f.image || f.src || '');
+  if (!s) return '';
+  if (s.startsWith('data:') || s.startsWith('http') || s.startsWith('/')) return s;
+  return 'data:image/jpeg;base64,' + s;
+}
+
+/* ── ProcessModal — overlay fullscreen com círculo girando, tempo decorrido e ETA ── */
+function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel }) {
+  const [elapsed, setElapsed] = React.useState(0);
+  const startRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) { startRef.current = null; setElapsed(0); return; }
+    startRef.current = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [open]);
+  if (!open) return null;
+  const fmt = s => {
+    s = Math.max(0, Math.round(s));
+    const m = Math.floor(s / 60), ss = s % 60;
+    return (m > 0 ? m + 'm ' : '') + String(ss).padStart(m > 0 ? 2 : 1, '0') + 's';
+  };
+  const p = Math.max(0, Math.min(100, pct || 0));
+  // ETA estimado pela taxa de progresso
+  const eta = p > 3 && p < 100 ? (elapsed / p) * (100 - p) : null;
+  const isErr = phase === 'error';
+  const isDone = phase === 'done';
+  return <div className={'proc-modal' + (isErr ? ' err' : '')}>
+    <div className="proc-ring-wrap">
+      {isDone
+        ? <div style={{ width: 150, height: 150, borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'var(--good)', boxShadow: '0 0 30px rgba(0,230,118,.4)' }}><Icon name="check" style={{ width: 54, height: 54, color: '#fff' }} /></div>
+        : <>
+            <div className="proc-ring" />
+            <div className="proc-pct">{isErr ? '!' : p + '%'}</div>
+          </>}
+    </div>
+    <div className="proc-title">{isErr ? 'Falhou' : isDone ? 'Concluído!' : (title || 'Processando…')}</div>
+    <div className="proc-detail">{detail || ''}</div>
+    {!isDone && !isErr && <>
+      <div className="proc-track"><i style={{ width: p + '%' }} /></div>
+      <div className="proc-times">
+        <div className="proc-time-b"><b>{fmt(elapsed)}</b><span>decorrido</span></div>
+        <div className="proc-time-b"><b>{eta != null ? '~' + fmt(eta) : '—'}</b><span>restante</span></div>
+      </div>
+    </>}
+    <div className="proc-actions">
+      {(isDone || isErr)
+        ? <button className="btn pri" onClick={onClose}>Fechar</button>
+        : onCancel && <button className="btn ghost" onClick={onCancel}>Cancelar</button>}
+    </div>
+  </div>;
+}
+
 /* ── ANALYZE — transcrição, análise e prompt ── */
 function AnalyzeApp() {
   const [tab, setTab] = React.useState('prompt');
@@ -194,7 +250,7 @@ function AnalyzeApp() {
         </div>}
         {tab === 'vision' && <div className="stack">
           {frames.length > 0 && <div className="thumbs">{frames.slice(0, 6).map((f, i) =>
-            <div key={i} className="thumb"><img src={typeof f === 'string' ? f : (f.url || f.b64 || '')} alt={'frame ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
+            <div key={i} className="thumb"><img src={frameSrc(f)} alt={'frame ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
           </div>}
           <div className="panel" style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, maxHeight: 300, overflow: 'auto' }}>
             <b style={{ color: 'var(--cyan)' }}>Grok Vision:</b> {vision.analysis || vision.description || 'Sem análise de visão disponível.'}
@@ -322,7 +378,7 @@ function RunsApp() {
           {frames.length > 0 && <>
             <div className="sec mut"><Icon name="layers" />Frames-chave</div>
             <div className="thumbs">{frames.slice(0, 6).map((f, i) =>
-              <div key={i} className="thumb"><img src={typeof f === 'string' ? f : (f.url || f.b64 || '')} alt={'frame'} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
+              <div key={i} className="thumb"><img src={frameSrc(f)} alt={'frame'} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
             </div>
           </>}
           <div className="sec mut"><Icon name="doc" />Metadados</div>
@@ -557,4 +613,4 @@ function MediaApp() {
   </div>;
 }
 
-Object.assign(window, { AppHead, RealThumb, RealPlayer, AnalyzeApp, CompareApp, RunsApp, MediaApp });
+Object.assign(window, { AppHead, RealThumb, RealPlayer, frameSrc, ProcessModal, AnalyzeApp, CompareApp, RunsApp, MediaApp });

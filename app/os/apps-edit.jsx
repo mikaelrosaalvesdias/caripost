@@ -143,10 +143,9 @@ function LegendaApp() {
             <Field label="Cor"><select className="inp" value={fontColor} onChange={e => setFontColor(e.target.value)}><option value="white">Branco</option><option value="yellow">Amarelo</option><option value="cyan">Ciano</option></select></Field>
           </div>
         </div>}
-        {(phase === 'preparing' || phase === 'burning') && <div className="panel"><ProgressBar pct={pct} tone="cy" label={statusMsg} eta="" /></div>}
-        {phase === 'error' && <div className="panel" style={{ borderColor: 'var(--pri-line)' }}><span style={{ color: 'var(--pri)', fontSize: 13 }}>✗ {statusMsg}</span></div>}
-        {phase === 'done' && <div className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
+        {resultKey && phase !== 'preparing' && phase !== 'burning' && <div className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
           <div className="pill good" style={{ alignSelf: 'flex-start' }}><Icon name="check" />Queima concluída</div>
+          {resultKey && <RealPlayer objectKey={resultKey} style={{ maxHeight: 220 }} />}
           <div className="rowx">
             <button className="btn pri sm" onClick={async () => {
               const url = await window.mpApi.downloadUrl(resultKey, 'video_legendado');
@@ -165,6 +164,9 @@ function LegendaApp() {
         </div>
       </div>
     </div>
+    <ProcessModal open={phase === 'preparing' || phase === 'burning' || phase === 'error'}
+      title="Queimando legenda" detail={statusMsg} pct={pct} phase={phase === 'error' ? 'error' : 'running'}
+      onClose={() => setPhase('idle')} />
   </div>;
 }
 
@@ -256,10 +258,9 @@ function LogoApp() {
           <label className="lbl">Opacidade · {op}%</label>
           <input type="range" min="20" max="100" value={op} onChange={e => setOp(+e.target.value)} style={{ width: '100%', accentColor: 'var(--cyan)' }} />
         </div>
-        {phase === 'burning' && <div className="panel"><ProgressBar pct={pct} tone="cy" label={statusMsg} /></div>}
-        {phase === 'error' && <div className="panel" style={{ borderColor: 'var(--pri-line)' }}><span style={{ color: 'var(--pri)', fontSize: 13 }}>✗ {statusMsg}</span></div>}
-        {phase === 'done' && <div className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
+        {resultKey && phase !== 'burning' && <div className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
           <div className="pill good" style={{ alignSelf: 'flex-start' }}><Icon name="check" />Logo aplicada</div>
+          {resultKey && <RealPlayer objectKey={resultKey} style={{ maxHeight: 220 }} />}
           <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(resultKey, 'video_logo'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar resultado</button>
         </div>}
         <div className="rowx" style={{ justifyContent: 'flex-end' }}>
@@ -267,7 +268,106 @@ function LogoApp() {
         </div>
       </div>
     </div>
+    <ProcessModal open={phase === 'burning' || phase === 'error'}
+      title="Queimando logo" detail={statusMsg} pct={pct} phase={phase === 'error' ? 'error' : 'running'}
+      onClose={() => setPhase('idle')} />
   </div>;
+}
+
+/* ── LogoBurnModal — ajustes completos de logo sobre o teaser (modal) ── */
+function LogoBurnModal({ teaserKey, runId, profiles, onClose, onDone }) {
+  const [selProfile, setSelProfile] = React.useState(profiles[0] || null);
+  const [pos, setPos] = React.useState('br');
+  const [size, setSize] = React.useState(20);
+  const [op, setOp] = React.useState(85);
+  const [proc, setProc] = React.useState({ open: false, pct: 0, detail: '', phase: 'running' });
+  const pollRef = React.useRef(null);
+  const posPct = { tl: [3, 3], tr: [97, 3], bl: [3, 97], br: [97, 97], c: [50, 50] };
+  const coords = { tl: [6, 8], tr: [78, 8], bl: [6, 74], br: [78, 74], c: [42, 42] };
+  const lx = (coords[pos] || coords.br)[0], ly = (coords[pos] || coords.br)[1];
+
+  React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  async function burn() {
+    if (!selProfile) { alert('Selecione um perfil de logo.'); return; }
+    if (!runId) { alert('Sem run associado ao teaser — não é possível queimar a logo.'); return; }
+    setProc({ open: true, pct: 5, detail: 'Iniciando queima da logo…', phase: 'running' });
+    try {
+      const pp = posPct[pos] || posPct.br;
+      const r = await window.mpApi.fetch('/api/teaser/burn-logo', {
+        method: 'POST',
+        body: JSON.stringify({
+          run_id: runId,
+          teaser_object_key: teaserKey,
+          logo_profile_id: selProfile.id || selProfile.profile_id || '',
+          logo_profile_layout_linked: false,
+          logo_x: pp[0], logo_y: pp[1],
+          logo_scale_pct: size, logo_opacity: op,
+        }),
+      });
+      if (!r.job_id) throw new Error(r.error || r.detail || 'sem job_id');
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await window.mpApi.burnStatus(r.job_id);
+          setProc(p => ({ ...p, pct: st.progress_pct || p.pct, detail: st.detail || 'Queimando logo…' }));
+          if (st.status === 'done') {
+            clearInterval(pollRef.current);
+            const out = st.output_object_key || st.burned_object_key || st.result_object_key || teaserKey;
+            setProc(p => ({ ...p, pct: 100, phase: 'done', detail: 'Logo aplicada!', resultKey: out }));
+          } else if (st.status === 'error') {
+            clearInterval(pollRef.current);
+            setProc(p => ({ ...p, phase: 'error', detail: st.detail || 'Erro na queima' }));
+          }
+        } catch (_) {}
+      }, 3000);
+    } catch (e) { setProc({ open: true, pct: 0, detail: e.message, phase: 'error' }); }
+  }
+
+  return <>
+    <div className="lbm-veil" onClick={onClose} />
+    <div className="lbm-card">
+      <div className="lbm-head">
+        <div className="tb-ic" style={{ width: 36, height: 36, borderRadius: 10 }}><Icon name="logo" /></div>
+        <div><b style={{ fontFamily: 'var(--fh)', fontSize: 16 }}>Queimar logo no teaser</b><div style={{ fontSize: 12, color: 'var(--muted)' }}>posicione, ajuste tamanho e opacidade — igual à função Logo</div></div>
+        <button className="wbtn close" style={{ marginLeft: 'auto' }} onClick={onClose}><Icon name="x" /></button>
+      </div>
+      <div className="lbm-body">
+        <div className="stack">
+          <div className="sec cy"><Icon name="eye" />Prévia</div>
+          <div className="vstage" style={{ aspectRatio: '16/9', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', inset: 0 }}><RealThumb objectKey={teaserKey} /></div>
+            <div className="logo-drag" style={{ left: lx + '%', top: ly + '%', width: size + '%', opacity: op / 100, zIndex: 2 }}>
+              {selProfile?.logo_b64 ? <img src={selProfile.logo_b64} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : 'LOGO'}
+            </div>
+          </div>
+          <div className="hint" style={{ fontSize: 12, color: 'var(--cyan)', fontFamily: 'var(--fm)' }}>posição: {pos} · escala: {size}% · opacidade: {op}%</div>
+        </div>
+        <div className="stack">
+          <Field label="Perfil de logo">
+            <select className="inp" value={selProfile ? (selProfile.id || selProfile.profile_id || '') : ''} onChange={e => setSelProfile(profiles.find(p => (p.id || p.profile_id) === e.target.value) || null)}>
+              {!profiles.length && <option value="">Nenhum perfil cadastrado</option>}
+              {profiles.map(p => <option key={p.id || p.profile_id} value={p.id || p.profile_id}>{p.company_name || p.logo_name || p.id}</option>)}
+            </select>
+          </Field>
+          <Field label="Posição (cantos)">
+            <div className="checks">{[['tl', '↖ Sup. esq.'], ['tr', '↗ Sup. dir.'], ['c', '◎ Centro'], ['bl', '↙ Inf. esq.'], ['br', '↘ Inf. dir.']].map(([k, l]) => <Check key={k} on={pos === k} onClick={() => setPos(k)}>{l}</Check>)}</div>
+          </Field>
+          <div><label className="lbl">Tamanho · {size}%</label><input type="range" min="5" max="45" value={size} onChange={e => setSize(+e.target.value)} style={{ width: '100%', accentColor: 'var(--cyan)' }} /></div>
+          <div><label className="lbl">Opacidade · {op}%</label><input type="range" min="20" max="100" value={op} onChange={e => setOp(+e.target.value)} style={{ width: '100%', accentColor: 'var(--cyan)' }} /></div>
+        </div>
+      </div>
+      <div className="lbm-foot">
+        <button className="btn ghost" onClick={onClose}>Cancelar</button>
+        <button className="btn pri" onClick={burn}><Icon name="burn" />Queimar logo</button>
+      </div>
+    </div>
+    <ProcessModal open={proc.open} title="Queimando logo" detail={proc.detail} pct={proc.pct} phase={proc.phase}
+      onClose={() => {
+        const done = proc.phase === 'done';
+        setProc({ open: false, pct: 0, detail: '', phase: 'running' });
+        if (done) { onDone && onDone(proc.resultKey); onClose(); }
+      }} />
+  </>;
 }
 
 /* ── TEASER — corte curto dos melhores momentos ── */
@@ -289,22 +389,22 @@ function TeaserApp() {
   const [lastMin, setLastMin] = React.useState(0.5);
   const [crf, setCrf] = React.useState(26);
   const [fmt, setFmt] = React.useState('web'); // web | mobile | both
-  const [applyLogo, setApplyLogo] = React.useState(false);
   const [profiles, setProfiles] = React.useState([]);
-  const [selProfile, setSelProfile] = React.useState(null);
-  const [opener, setOpener] = React.useState(null);       // {object_key, n}
+  const [opener, setOpener] = React.useState(null);
   const [openerPos, setOpenerPos] = React.useState('start');
   const [openerPick, setOpenerPick] = React.useState(false);
   const [openerUpPct, setOpenerUpPct] = React.useState(0);
   const openerInputRef = React.useRef(null);
   // execução
-  const [jobs, setJobs] = React.useState([]);             // [{label, jobId, pct, msg, status, resultKey, videoUrl}]
+  const [jobs, setJobs] = React.useState([]);
+  const [genActive, setGenActive] = React.useState(false);
+  const [logoModal, setLogoModal] = React.useState(null); // {teaserKey, idx}
   const pollRefs = React.useRef({});
 
   const isBurned = file && (file.s === 'burn' || (file.object_key || '').includes('burns/'));
 
   React.useEffect(() => {
-    if (window.mpApi) window.mpApi.logoProfiles().then(p => { setProfiles(p); if (p.length) setSelProfile(p[0]); }).catch(() => {});
+    if (window.mpApi) window.mpApi.logoProfiles().then(setProfiles).catch(() => {});
     return () => { Object.values(pollRefs.current).forEach(t => clearInterval(t)); };
   }, []);
 
@@ -325,12 +425,8 @@ function TeaserApp() {
     }).catch(() => setLoadingFrames(false));
   }, [file?.object_key]);
 
-  function _frameSrc(f) { return typeof f === 'string' ? f : (f.url || f.b64 || ''); }
-  function _tsFor(i) {
-    const t = frameTimes[i];
-    if (t == null) return '';
-    return window.__mpFmtTime(t);
-  }
+  const _frameSrc = window.frameSrc;
+  function _tsFor(i) { const t = frameTimes[i]; return t == null ? '' : window.__mpFmtTime(t); }
 
   async function transcribeNow() {
     if (!file) return;
@@ -358,7 +454,6 @@ function TeaserApp() {
     } catch (e) { setOpenerUpPct(0); alert('Upload falhou: ' + e.message); }
   }
 
-  /* Plano de auto-distribuição: primeira/última customizadas, meio divide o resto */
   function _buildPlan(n, totMin, fMin, lMin) {
     const tot = totMin * 60, first = fMin * 60, last = lMin * 60;
     if (n < 2) return { ok: false, detail: 'Mínimo 2 cenas.' };
@@ -366,8 +461,7 @@ function TeaserApp() {
     const midCount = n - 2;
     const midDur = midCount > 0 ? (tot - first - last) / midCount : 0;
     if (midCount > 0 && midDur < 2) return { ok: false, detail: 'Cenas do meio ficariam com menos de 2s — reduza o nº de cenas ou aumente a duração total.' };
-    const durations = [first, ...Array(midCount).fill(midDur), last];
-    return { ok: true, durations };
+    return { ok: true, durations: [first, ...Array(midCount).fill(midDur), last] };
   }
 
   async function generate() {
@@ -384,8 +478,7 @@ function TeaserApp() {
       const planN = sortedSel.length >= 2 ? Math.min(sortedSel.length, 20) : nClips;
       const plan = _buildPlan(planN, totalMin, firstMin, lastMin);
       if (!plan.ok) { alert(plan.detail); return; }
-      nClips = planN;
-      ordered = plan.durations;
+      nClips = planN; ordered = plan.durations;
       cDur = Math.max(2, Math.min(Math.round(ordered.reduce((a, b) => a + b, 0) / ordered.length), 720));
       if (sortedSel.length) sortedSel.slice(0, nClips).forEach((idx, pos) => { perScene[idx] = ordered[pos]; });
     } else if (sortedSel.length) {
@@ -400,53 +493,36 @@ function TeaserApp() {
 
     const basePayload = {
       run_id: runId || undefined,
-      num_clips: nClips,
-      clip_duration: cDur,
-      output_crf: crf,
-      output_max_fps: 30,
+      num_clips: nClips, clip_duration: cDur, output_crf: crf, output_max_fps: 30,
       source_type: isBurned ? 'burned' : 'original',
       video_object_key: file.object_key,
       selected_frame_indexes: sortedSel,
       scene_durations_by_frame: perScene,
       ordered_scene_durations: ordered,
       frames_count: frames.length,
-      force_logo_overlay: !isBurned && applyLogo,
+      force_logo_overlay: false,
       opener: { object_key: opener?.object_key || null, position: openerPos },
     };
-    if (!isBurned && applyLogo && selProfile) {
-      basePayload.logo_profile_id = selProfile.id || selProfile.profile_id || '';
-      basePayload.logo_profile_layout_linked = true;
-    }
 
-    const newJobs = variants.map(v => ({ label: v.label, jobId: null, pct: 5, msg: 'Iniciando…', status: 'running', resultKey: '', videoUrl: '' }));
-    setJobs(newJobs);
+    setGenActive(true);
+    setJobs(variants.map(v => ({ label: v.label, jobId: null, pct: 5, msg: 'Iniciando…', status: 'running', resultKey: '' })));
 
     variants.forEach((v, vi) => {
       window.mpApi.teaserGenerate({ ...basePayload, output_max_height: v.h }).then(r => {
-        if (!r.job_id) {
-          setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: r.error || r.detail || 'sem job_id' } : j));
-          return;
-        }
+        if (!r.job_id) { setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: r.error || r.detail || 'sem job_id' } : j)); return; }
         setJobs(js => js.map((j, i) => i === vi ? { ...j, jobId: r.job_id } : j));
         pollRefs.current[vi] = setInterval(async () => {
           try {
             const st = await window.mpApi.teaserStatus(r.job_id);
             setJobs(js => js.map((j, i) => i === vi ? {
-              ...j,
-              pct: st.progress_pct || j.pct,
-              msg: st.detail || 'Renderizando…',
+              ...j, pct: st.progress_pct || j.pct, msg: st.detail || 'Renderizando…',
               status: st.status === 'done' ? 'done' : st.status === 'error' ? 'error' : 'running',
               resultKey: st.object_key || st.teaser_object_key || j.resultKey,
-              videoUrl: st.video_url || j.videoUrl,
             } : j));
-            if (st.status === 'done' || st.status === 'error') {
-              clearInterval(pollRefs.current[vi]);
-            }
+            if (st.status === 'done' || st.status === 'error') clearInterval(pollRefs.current[vi]);
           } catch (_) {}
         }, 3500);
-      }).catch(e => {
-        setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: e.message } : j));
-      });
+      }).catch(e => { setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: e.message } : j)); });
     });
   }
 
@@ -454,13 +530,18 @@ function TeaserApp() {
     const cur = (j.resultKey || '').split('/').pop();
     const name = prompt('Novo nome do teaser:', cur);
     if (!name || name === cur) return;
-    try {
-      await window.mpApi.renameMedia(j.resultKey, name);
-      setJobs(js => js.map((x, i) => i === idx ? { ...x, msg: '✓ renomeado para ' + name } : x));
-    } catch (e) { alert('Erro ao renomear: ' + e.message); }
+    try { await window.mpApi.renameMedia(j.resultKey, name); setJobs(js => js.map((x, i) => i === idx ? { ...x, msg: '✓ renomeado para ' + name } : x)); }
+    catch (e) { alert('Erro ao renomear: ' + e.message); }
   }
 
   const running = jobs.some(j => j.status === 'running');
+  // estado agregado p/ ProcessModal de geração
+  const avgPct = jobs.length ? Math.round(jobs.reduce((a, j) => a + (j.pct || 0), 0) / jobs.length) : 0;
+  const anyErr = jobs.some(j => j.status === 'error');
+  const allDone = jobs.length > 0 && jobs.every(j => j.status === 'done');
+  const genPhase = anyErr ? 'error' : allDone ? 'done' : 'running';
+  const genDetail = anyErr ? (jobs.find(j => j.status === 'error')?.msg || 'Erro')
+    : allDone ? 'Teaser pronto!' : (jobs.find(j => j.status === 'running')?.msg || 'Renderizando…') + (jobs.length > 1 ? ` · ${jobs.filter(j => j.status === 'done').length}/${jobs.length} formatos` : '');
 
   return <div className="app">
     <AppHead icon="scissors" title="Gerar Teaser" desc="Usa as cenas detectadas pela IA para montar um teaser curto, pronto pra divulgação."
@@ -468,19 +549,7 @@ function TeaserApp() {
     <CtxFileBar file={file} onPick={() => setPicking(p => !p)} />
     {picking && <FilePicker onClose={() => setPicking(false)} onSelect={f => { setFile(f); window.mpCtx.file = f; setPicking(false); setJobs([]); }} />}
 
-    {/* aviso de logo */}
-    {file && !isBurned && <div className="litem" style={{ borderColor: 'rgba(255,171,0,.35)', background: 'rgba(255,171,0,.06)' }}>
-      <span className="li-ic" style={{ color: 'var(--warn)' }}><Icon name="warning" /></span>
-      <div className="li-main"><b style={{ fontSize: 12.5 }}>Este vídeo não tem logo queimada</b><small>aplique a logo direto no teaser ou queime no vídeo antes</small></div>
-      <button className={'btn sm' + (applyLogo ? ' pri' : '')} onClick={() => setApplyLogo(a => !a)}><Icon name="logo" />{applyLogo ? '✓ Logo no teaser' : 'Aplicar logo no teaser'}</button>
-      <button className="btn sm ghost" onClick={() => { window.mpCtx.file = file; window.__mpOpen && window.__mpOpen('logo'); }}>Queimar no vídeo →</button>
-    </div>}
     {file && isBurned && <div className="hint" style={{ color: 'var(--good)', fontSize: 12 }}>✓ Vídeo já queimado (logo aplicada) — o teaser herda a marca.</div>}
-    {applyLogo && !isBurned && profiles.length > 0 && <Field label="Perfil de logo para o teaser">
-      <select className="inp" value={selProfile ? (selProfile.id || '') : ''} onChange={e => setSelProfile(profiles.find(p => p.id === e.target.value) || null)}>
-        {profiles.map(p => <option key={p.id} value={p.id}>{p.company_name || p.logo_name || p.id}</option>)}
-      </select>
-    </Field>}
 
     <div className="split">
       <div className="stack">
@@ -566,24 +635,20 @@ function TeaserApp() {
           </Field>}
         </div>}
 
-        {/* JOBS / RESULTADOS */}
-        {jobs.map((j, i) => <div key={i} className="panel stack" style={{ borderColor: j.status === 'done' ? 'rgba(0,230,118,.3)' : j.status === 'error' ? 'var(--pri-line)' : undefined }}>
+        {/* RESULTADOS — logo SÓ aparece aqui, depois de gerar */}
+        {jobs.filter(j => j.status === 'done').map((j, i) => <div key={i} className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
           <div className="rowx" style={{ justifyContent: 'space-between' }}>
             <b style={{ fontSize: 13, fontFamily: 'var(--fh)' }}>{j.label}</b>
-            <Pill kind={j.status === 'done' ? 'good' : j.status === 'error' ? 'pri' : 'cy'} dot>{j.status === 'done' ? 'pronto' : j.status === 'error' ? 'erro' : 'gerando'}</Pill>
+            <Pill kind="good" dot>pronto</Pill>
           </div>
-          {j.status === 'running' && <ProgressBar pct={j.pct} tone="cy" label={j.msg} />}
-          {j.status === 'error' && <span style={{ color: 'var(--pri)', fontSize: 13 }}>✗ {j.msg}</span>}
-          {j.status === 'done' && <>
-            {j.resultKey && <RealPlayer objectKey={j.resultKey} style={{ maxHeight: 220 }} />}
-            <div className="rowx" style={{ flexWrap: 'wrap' }}>
-              <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(j.resultKey, 'teaser'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar</button>
-              <button className="btn sm" onClick={() => renameResult(j, i)}><Icon name="pen" />Renomear</button>
-              <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('logo'); }}><Icon name="logo" />Queimar logo no teaser</button>
-              <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('telegram'); }}><Icon name="telegram" />Telegram</button>
-            </div>
-            {j.msg && j.msg.startsWith('✓') && <span className="hint" style={{ color: 'var(--good)' }}>{j.msg}</span>}
-          </>}
+          {j.resultKey && <RealPlayer objectKey={j.resultKey} style={{ maxHeight: 220 }} />}
+          <div className="rowx" style={{ flexWrap: 'wrap' }}>
+            <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(j.resultKey, 'teaser'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar</button>
+            <button className="btn sm" onClick={() => renameResult(j, jobs.indexOf(j))}><Icon name="pen" />Renomear</button>
+            {!isBurned && <button className="btn sm" onClick={() => setLogoModal({ teaserKey: j.resultKey, idx: jobs.indexOf(j) })}><Icon name="logo" />Queimar logo</button>}
+            <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('telegram'); }}><Icon name="telegram" />Telegram</button>
+          </div>
+          {j.msg && j.msg.startsWith('✓') && <span className="hint" style={{ color: 'var(--good)' }}>{j.msg}</span>}
         </div>)}
 
         <button className="btn pri block" disabled={!file || running} onClick={generate}>
@@ -591,6 +656,15 @@ function TeaserApp() {
         </button>
       </div>
     </div>
+
+    {/* MODAL fullscreen de geração */}
+    <ProcessModal open={genActive} title={jobs.length > 1 ? 'Gerando teasers' : 'Gerando teaser'} detail={genDetail} pct={avgPct} phase={genPhase}
+      onClose={() => setGenActive(false)} onCancel={() => { Object.values(pollRefs.current).forEach(t => clearInterval(t)); setGenActive(false); setJobs([]); }} />
+
+    {/* MODAL de queima de logo */}
+    {logoModal && <LogoBurnModal teaserKey={logoModal.teaserKey} runId={runId} profiles={profiles}
+      onClose={() => setLogoModal(null)}
+      onDone={(newKey) => { if (newKey) setJobs(js => js.map((x, i) => i === logoModal.idx ? { ...x, resultKey: newKey, msg: '✓ logo aplicada' } : x)); }} />}
   </div>;
 }
 
@@ -633,7 +707,7 @@ function ThumbnailApp() {
     } catch (e) { setPhase('error'); setStatusMsg(e.message); }
   }
 
-  const frameSrc = (f) => typeof f === 'string' ? f : (f.url || f.b64 || '');
+  const frameSrc = window.frameSrc;
 
   return <div className="app">
     <AppHead icon="thumbnail" title="Thumbnail IA" desc="Gera a capa ideal a partir dos frames-chave do vídeo, em alta resolução."
