@@ -274,71 +274,321 @@ function LogoApp() {
 function TeaserApp() {
   const [file, setFile] = React.useState(window.mpCtx?.file || null);
   const [picking, setPicking] = React.useState(false);
-  const [phase, setPhase] = React.useState('idle');
-  const [pct, setPct] = React.useState(0);
-  const [statusMsg, setStatusMsg] = React.useState('');
-  const [resultKey, setResultKey] = React.useState('');
-  const pollRef = React.useRef(null);
+  const [runId, setRunId] = React.useState(null);
+  const [frames, setFrames] = React.useState([]);
+  const [frameTimes, setFrameTimes] = React.useState([]);
+  const [selFrames, setSelFrames] = React.useState([]);
+  const [loadingFrames, setLoadingFrames] = React.useState(false);
+  // avançado
+  const [showAdv, setShowAdv] = React.useState(false);
+  const [numClips, setNumClips] = React.useState(8);
+  const [clipDur, setClipDur] = React.useState(6);
+  const [autoDist, setAutoDist] = React.useState(false);
+  const [totalMin, setTotalMin] = React.useState(2);
+  const [firstMin, setFirstMin] = React.useState(0.5);
+  const [lastMin, setLastMin] = React.useState(0.5);
+  const [crf, setCrf] = React.useState(26);
+  const [fmt, setFmt] = React.useState('web'); // web | mobile | both
+  const [applyLogo, setApplyLogo] = React.useState(false);
+  const [profiles, setProfiles] = React.useState([]);
+  const [selProfile, setSelProfile] = React.useState(null);
+  const [opener, setOpener] = React.useState(null);       // {object_key, n}
+  const [openerPos, setOpenerPos] = React.useState('start');
+  const [openerPick, setOpenerPick] = React.useState(false);
+  const [openerUpPct, setOpenerUpPct] = React.useState(0);
+  const openerInputRef = React.useRef(null);
+  // execução
+  const [jobs, setJobs] = React.useState([]);             // [{label, jobId, pct, msg, status, resultKey, videoUrl}]
+  const pollRefs = React.useRef({});
 
-  React.useEffect(() => { return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, []);
+  const isBurned = file && (file.s === 'burn' || (file.object_key || '').includes('burns/'));
 
-  async function doGenerate() {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
-    setPhase('running'); setPct(5); setStatusMsg('Preparando…');
-    try {
-      let rid = null;
-      try { rid = await window.mpApi.findRunForKey(file.object_key); } catch (_) {}
-      setStatusMsg('Gerando teaser…'); setPct(15);
-      const r = await window.mpApi.teaserGenerate({
-        run_id: rid || undefined,
-        video_object_key: file.object_key,
-      });
-      const jobId = r.job_id;
-      if (!jobId) {
-        const k = r.teaser_object_key || r.output_object_key || '';
-        if (k) { setPhase('done'); setPct(100); setResultKey(k); return; }
-        throw new Error(r.error || 'sem job_id');
-      }
-      pollRef.current = setInterval(async () => {
-        try {
-          const st = await window.mpApi.teaserStatus(jobId);
-          setPct(st.progress_pct || 50); setStatusMsg(st.detail || 'Renderizando…');
-          if (st.status === 'done') {
-            clearInterval(pollRef.current); setPhase('done'); setPct(100);
-            setResultKey(st.teaser_object_key || st.output_object_key || st.result_object_key || '');
-          } else if (st.status === 'error') {
-            clearInterval(pollRef.current); setPhase('error'); setStatusMsg(st.detail || 'Erro');
-          }
-        } catch (_) {}
-      }, 3500);
-    } catch (e) { setPhase('error'); setStatusMsg(e.message); }
+  React.useEffect(() => {
+    if (window.mpApi) window.mpApi.logoProfiles().then(p => { setProfiles(p); if (p.length) setSelProfile(p[0]); }).catch(() => {});
+    return () => { Object.values(pollRefs.current).forEach(t => clearInterval(t)); };
+  }, []);
+
+  React.useEffect(() => {
+    if (!file || !window.mpApi) return;
+    setLoadingFrames(true); setFrames([]); setFrameTimes([]); setSelFrames([]); setRunId(null);
+    window.mpApi.findRunForKey(file.object_key).then(async rid => {
+      if (!rid) { setLoadingFrames(false); return; }
+      setRunId(rid);
+      const [fr, run] = await Promise.all([
+        window.mpApi.getRunFrames(rid).catch(() => []),
+        window.mpApi.getRun(rid).catch(() => null),
+      ]);
+      setFrames(fr || []);
+      const ts = run?.result?.vision?.frame_timestamps;
+      setFrameTimes(Array.isArray(ts) ? ts : []);
+      setLoadingFrames(false);
+    }).catch(() => setLoadingFrames(false));
+  }, [file?.object_key]);
+
+  function _frameSrc(f) { return typeof f === 'string' ? f : (f.url || f.b64 || ''); }
+  function _tsFor(i) {
+    const t = frameTimes[i];
+    if (t == null) return '';
+    return window.__mpFmtTime(t);
   }
 
+  async function transcribeNow() {
+    if (!file) return;
+    setLoadingFrames(true);
+    try {
+      const rid = await window.mpApi.ensureRun(file, () => {});
+      setRunId(rid);
+      const fr = await window.mpApi.getRunFrames(rid).catch(() => []);
+      setFrames(fr || []);
+      const run = await window.mpApi.getRun(rid).catch(() => null);
+      const ts = run?.result?.vision?.frame_timestamps;
+      setFrameTimes(Array.isArray(ts) ? ts : []);
+    } catch (e) { alert('Análise falhou: ' + e.message); }
+    finally { setLoadingFrames(false); }
+  }
+
+  async function handleOpenerUpload(files) {
+    if (!files?.length || !window.mpApi) return;
+    const f = files[0];
+    try {
+      setOpenerUpPct(1);
+      const key = await window.mpApi.uploadFile(f, p => setOpenerUpPct(p));
+      setOpener({ object_key: key, n: f.name });
+      setOpenerUpPct(0);
+    } catch (e) { setOpenerUpPct(0); alert('Upload falhou: ' + e.message); }
+  }
+
+  /* Plano de auto-distribuição: primeira/última customizadas, meio divide o resto */
+  function _buildPlan(n, totMin, fMin, lMin) {
+    const tot = totMin * 60, first = fMin * 60, last = lMin * 60;
+    if (n < 2) return { ok: false, detail: 'Mínimo 2 cenas.' };
+    if (first + last >= tot) return { ok: false, detail: 'Primeira + última cena excedem a duração total.' };
+    const midCount = n - 2;
+    const midDur = midCount > 0 ? (tot - first - last) / midCount : 0;
+    if (midCount > 0 && midDur < 2) return { ok: false, detail: 'Cenas do meio ficariam com menos de 2s — reduza o nº de cenas ou aumente a duração total.' };
+    const durations = [first, ...Array(midCount).fill(midDur), last];
+    return { ok: true, durations };
+  }
+
+  async function generate() {
+    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    Object.values(pollRefs.current).forEach(t => clearInterval(t));
+    pollRefs.current = {};
+
+    let nClips = Math.max(2, Math.min(numClips, 20));
+    let cDur = Math.max(2, Math.min(clipDur, 720));
+    const sortedSel = selFrames.slice().sort((a, b) => a - b);
+    const perScene = {};
+    let ordered = [];
+    if (autoDist) {
+      const planN = sortedSel.length >= 2 ? Math.min(sortedSel.length, 20) : nClips;
+      const plan = _buildPlan(planN, totalMin, firstMin, lastMin);
+      if (!plan.ok) { alert(plan.detail); return; }
+      nClips = planN;
+      ordered = plan.durations;
+      cDur = Math.max(2, Math.min(Math.round(ordered.reduce((a, b) => a + b, 0) / ordered.length), 720));
+      if (sortedSel.length) sortedSel.slice(0, nClips).forEach((idx, pos) => { perScene[idx] = ordered[pos]; });
+    } else if (sortedSel.length) {
+      sortedSel.forEach(idx => { perScene[idx] = cDur; });
+    }
+    const totalSec = ordered.length ? ordered.reduce((a, b) => a + b, 0) : nClips * cDur;
+    if (totalSec > 1800) { alert('Teaser muito longo (' + Math.round(totalSec / 60) + ' min). Limite: 30 min.'); return; }
+
+    const variants = fmt === 'both'
+      ? [{ label: 'Web 1080p', h: 1080 }, { label: 'Celular 720p', h: 720 }]
+      : fmt === 'mobile' ? [{ label: 'Celular 720p', h: 720 }] : [{ label: 'Web 1080p', h: 1080 }];
+
+    const basePayload = {
+      run_id: runId || undefined,
+      num_clips: nClips,
+      clip_duration: cDur,
+      output_crf: crf,
+      output_max_fps: 30,
+      source_type: isBurned ? 'burned' : 'original',
+      video_object_key: file.object_key,
+      selected_frame_indexes: sortedSel,
+      scene_durations_by_frame: perScene,
+      ordered_scene_durations: ordered,
+      frames_count: frames.length,
+      force_logo_overlay: !isBurned && applyLogo,
+      opener: { object_key: opener?.object_key || null, position: openerPos },
+    };
+    if (!isBurned && applyLogo && selProfile) {
+      basePayload.logo_profile_id = selProfile.id || selProfile.profile_id || '';
+      basePayload.logo_profile_layout_linked = true;
+    }
+
+    const newJobs = variants.map(v => ({ label: v.label, jobId: null, pct: 5, msg: 'Iniciando…', status: 'running', resultKey: '', videoUrl: '' }));
+    setJobs(newJobs);
+
+    variants.forEach((v, vi) => {
+      window.mpApi.teaserGenerate({ ...basePayload, output_max_height: v.h }).then(r => {
+        if (!r.job_id) {
+          setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: r.error || r.detail || 'sem job_id' } : j));
+          return;
+        }
+        setJobs(js => js.map((j, i) => i === vi ? { ...j, jobId: r.job_id } : j));
+        pollRefs.current[vi] = setInterval(async () => {
+          try {
+            const st = await window.mpApi.teaserStatus(r.job_id);
+            setJobs(js => js.map((j, i) => i === vi ? {
+              ...j,
+              pct: st.progress_pct || j.pct,
+              msg: st.detail || 'Renderizando…',
+              status: st.status === 'done' ? 'done' : st.status === 'error' ? 'error' : 'running',
+              resultKey: st.object_key || st.teaser_object_key || j.resultKey,
+              videoUrl: st.video_url || j.videoUrl,
+            } : j));
+            if (st.status === 'done' || st.status === 'error') {
+              clearInterval(pollRefs.current[vi]);
+            }
+          } catch (_) {}
+        }, 3500);
+      }).catch(e => {
+        setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: e.message } : j));
+      });
+    });
+  }
+
+  async function renameResult(j, idx) {
+    const cur = (j.resultKey || '').split('/').pop();
+    const name = prompt('Novo nome do teaser:', cur);
+    if (!name || name === cur) return;
+    try {
+      await window.mpApi.renameMedia(j.resultKey, name);
+      setJobs(js => js.map((x, i) => i === idx ? { ...x, msg: '✓ renomeado para ' + name } : x));
+    } catch (e) { alert('Erro ao renomear: ' + e.message); }
+  }
+
+  const running = jobs.some(j => j.status === 'running');
+
   return <div className="app">
-    <AppHead icon="scissors" title="Gerar Teaser" desc="Detecta os melhores momentos e monta um teaser curto, pronto pra divulgação."
-      right={<Pill kind="cy" dot>auto-detecção de cenas</Pill>} />
+    <AppHead icon="scissors" title="Gerar Teaser" desc="Usa as cenas detectadas pela IA para montar um teaser curto, pronto pra divulgação."
+      right={<Pill kind="cy" dot>{frames.length ? frames.length + ' cenas da IA' : 'auto-detecção'}</Pill>} />
     <CtxFileBar file={file} onPick={() => setPicking(p => !p)} />
-    {picking && <FilePicker onClose={() => setPicking(false)} onSelect={f => { setFile(f); window.mpCtx.file = f; setPicking(false); setPhase('idle'); }} />}
+    {picking && <FilePicker onClose={() => setPicking(false)} onSelect={f => { setFile(f); window.mpCtx.file = f; setPicking(false); setJobs([]); }} />}
+
+    {/* aviso de logo */}
+    {file && !isBurned && <div className="litem" style={{ borderColor: 'rgba(255,171,0,.35)', background: 'rgba(255,171,0,.06)' }}>
+      <span className="li-ic" style={{ color: 'var(--warn)' }}><Icon name="warning" /></span>
+      <div className="li-main"><b style={{ fontSize: 12.5 }}>Este vídeo não tem logo queimada</b><small>aplique a logo direto no teaser ou queime no vídeo antes</small></div>
+      <button className={'btn sm' + (applyLogo ? ' pri' : '')} onClick={() => setApplyLogo(a => !a)}><Icon name="logo" />{applyLogo ? '✓ Logo no teaser' : 'Aplicar logo no teaser'}</button>
+      <button className="btn sm ghost" onClick={() => { window.mpCtx.file = file; window.__mpOpen && window.__mpOpen('logo'); }}>Queimar no vídeo →</button>
+    </div>}
+    {file && isBurned && <div className="hint" style={{ color: 'var(--good)', fontSize: 12 }}>✓ Vídeo já queimado (logo aplicada) — o teaser herda a marca.</div>}
+    {applyLogo && !isBurned && profiles.length > 0 && <Field label="Perfil de logo para o teaser">
+      <select className="inp" value={selProfile ? (selProfile.id || '') : ''} onChange={e => setSelProfile(profiles.find(p => p.id === e.target.value) || null)}>
+        {profiles.map(p => <option key={p.id} value={p.id}>{p.company_name || p.logo_name || p.id}</option>)}
+      </select>
+    </Field>}
+
     <div className="split">
       <div className="stack">
-        <div className="sec mut"><Icon name="wave" />Vídeo fonte</div>
-        {file ? <RealPlayer objectKey={file.object_key} /> : <div className="vstage" style={{ aspectRatio: '16/9' }}><div className="ph" /><div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'var(--muted)', fontSize: 13 }}>Selecione um vídeo</div></div>}
-      </div>
-      <div className="stack">
-        <div className="hint" style={{ fontSize: 12.5 }}>O teaser usa a detecção automática de cenas do servidor. Se o vídeo já tiver análise (run), os melhores momentos do Vision são priorizados.</div>
-        {phase === 'running' && <div className="panel stack">
-          <ProgressBar pct={pct} tone="cy" label={statusMsg} />
+        <div className="sec cy"><Icon name="image" />Cenas detectadas pela IA {selFrames.length ? `· ${selFrames.length} selecionada(s)` : ''}</div>
+        {loadingFrames && <div className="panel"><ProgressBar pct={60} tone="cy" label="Carregando cenas do analisador…" /></div>}
+        {!loadingFrames && !frames.length && file && <div className="panel stack">
+          <div className="hint">Este vídeo ainda não foi analisado pela IA — sem cenas detectadas. Analise agora para escolher as cenas, ou gere sem seleção (o servidor detecta automaticamente).</div>
+          <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={transcribeNow}><Icon name="sparkles" />Analisar agora</button>
         </div>}
-        {phase === 'error' && <div className="panel" style={{ borderColor: 'var(--pri-line)' }}><span style={{ color: 'var(--pri)', fontSize: 13 }}>✗ {statusMsg}</span></div>}
-        {phase === 'done' && <div className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
-          <div className="pill good" style={{ alignSelf: 'flex-start' }}><Icon name="check" />Teaser pronto</div>
-          {resultKey && <RealPlayer objectKey={resultKey} style={{ maxHeight: 260 }} />}
-          <div className="rowx">
-            <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(resultKey, 'teaser'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar</button>
-            <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('telegram'); }}><Icon name="telegram" />Enviar ao Telegram</button>
+        {frames.length > 0 && <>
+          <div className="thumbs" style={{ maxHeight: 240, overflowY: 'auto' }}>
+            {frames.map((f, i) => {
+              const on = selFrames.includes(i);
+              return <div key={i} className={'thumb' + (on ? ' sel' : '')} onClick={() => setSelFrames(p => on ? p.filter(x => x !== i) : [...p, i])} style={{ position: 'relative' }}>
+                <img src={_frameSrc(f)} alt={'cena ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                {on && <span style={{ position: 'absolute', top: 4, right: 4, width: 18, height: 18, borderRadius: 5, background: 'var(--pri)', display: 'grid', placeItems: 'center', fontSize: 11, color: '#fff', zIndex: 2 }}>✓</span>}
+                {_tsFor(i) && <span className="t">{_tsFor(i)}</span>}
+              </div>;
+            })}
           </div>
+          <div className="rowx">
+            <button className="btn sm ghost" onClick={() => setSelFrames(frames.map((_, i) => i))}>Selecionar todas</button>
+            <button className="btn sm ghost" onClick={() => setSelFrames([])}>Limpar</button>
+            <span className="hint" style={{ fontSize: 11.5 }}>{selFrames.length ? 'cenas escolhidas manualmente' : 'sem seleção → IA escolhe as melhores'}</span>
+          </div>
+        </>}
+        {file && <RealPlayer objectKey={file.object_key} style={{ maxHeight: 240 }} />}
+      </div>
+
+      <div className="stack">
+        {/* AVANÇADO */}
+        <button className="acc-h" style={{ border: '1px solid var(--line)', borderRadius: 12, background: 'var(--glass2)' }} onClick={() => setShowAdv(a => !a)}>
+          <Icon name="chevR" style={{ transform: showAdv ? 'rotate(90deg)' : 'none', width: 13, height: 13 }} />Avançado
+          <span className="hint" style={{ marginLeft: 'auto', fontSize: 11 }}>{numClips} cenas · {autoDist ? totalMin + ' min total' : clipDur + 's/cena'} · {fmt === 'both' ? '2 formatos' : fmt === 'mobile' ? 'celular' : 'web'}</span>
+        </button>
+        {showAdv && <div className="panel stack">
+          <div className="grid2">
+            <Field label="Nº de cenas (máx 20)"><input className="inp" type="number" min="2" max="20" value={numClips} onChange={e => setNumClips(+e.target.value || 8)} /></Field>
+            <Field label="Duração por cena (s)"><input className="inp" type="number" min="2" max="720" value={clipDur} disabled={autoDist} onChange={e => setClipDur(+e.target.value || 6)} /></Field>
+          </div>
+          <div className="rowx" style={{ justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 13 }}>Auto-distribuir duração total</span>
+            <Check on={autoDist} onClick={() => setAutoDist(a => !a)} />
+          </div>
+          {autoDist && <div className="grid3">
+            <Field label="Total (min)"><input className="inp" type="number" min="0.5" step="0.5" value={totalMin} onChange={e => setTotalMin(+e.target.value || 2)} /></Field>
+            <Field label="1ª cena (min)"><input className="inp" type="number" min="0.1" step="0.1" value={firstMin} onChange={e => setFirstMin(+e.target.value || 0.5)} /></Field>
+            <Field label="Última (min)"><input className="inp" type="number" min="0.1" step="0.1" value={lastMin} onChange={e => setLastMin(+e.target.value || 0.5)} /></Field>
+          </div>}
+          <Field label="Qualidade">
+            <select className="inp" value={crf} onChange={e => setCrf(+e.target.value)}>
+              <option value="24">Alta (CRF 24)</option>
+              <option value="26">Média (CRF 26)</option>
+              <option value="28">Econômica (CRF 28)</option>
+            </select>
+          </Field>
+          <Field label="Formato de saída">
+            <div className="checks">
+              <Check on={fmt === 'web'} onClick={() => setFmt('web')}>Web · 1080p</Check>
+              <Check on={fmt === 'mobile'} onClick={() => setFmt('mobile')}>Celular · 720p</Check>
+              <Check on={fmt === 'both'} onClick={() => setFmt('both')}>Os 2 (gera 2)</Check>
+            </div>
+          </Field>
+          <div className="sec mut" style={{ marginTop: 4 }}>Vídeo de abertura (opener)</div>
+          {opener
+            ? <div className="litem" style={{ padding: '8px 12px' }}>
+                <span className="li-ic"><Icon name="play" /></span>
+                <div className="li-main"><b style={{ fontSize: 12 }}>{opener.n}</b><small>posição: {openerPos === 'start' ? 'início' : 'fim'}</small></div>
+                <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={() => setOpener(null)}>✕</button>
+              </div>
+            : <div className="rowx">
+                <input ref={openerInputRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => handleOpenerUpload(e.target.files)} />
+                <button className="btn sm" onClick={() => openerInputRef.current && openerInputRef.current.click()}><Icon name="upload" />Subir da máquina</button>
+                <button className="btn sm" onClick={() => setOpenerPick(p => !p)}><Icon name="media" />Do servidor</button>
+              </div>}
+          {openerUpPct > 0 && openerUpPct < 100 && <ProgressBar pct={openerUpPct} tone="cy" label="Enviando abertura…" />}
+          {openerPick && <FilePicker onClose={() => setOpenerPick(false)} onSelect={f => { setOpener({ object_key: f.object_key, n: f.n }); setOpenerPick(false); }} />}
+          {opener && <Field label="Posição da abertura">
+            <div className="checks">
+              <Check on={openerPos === 'start'} onClick={() => setOpenerPos('start')}>Início</Check>
+              <Check on={openerPos === 'end'} onClick={() => setOpenerPos('end')}>Fim</Check>
+            </div>
+          </Field>}
         </div>}
-        <button className="btn pri block" disabled={!file || phase === 'running'} onClick={doGenerate}><Icon name="scissors" />{phase === 'running' ? 'Gerando…' : 'Gerar teaser'}</button>
+
+        {/* JOBS / RESULTADOS */}
+        {jobs.map((j, i) => <div key={i} className="panel stack" style={{ borderColor: j.status === 'done' ? 'rgba(0,230,118,.3)' : j.status === 'error' ? 'var(--pri-line)' : undefined }}>
+          <div className="rowx" style={{ justifyContent: 'space-between' }}>
+            <b style={{ fontSize: 13, fontFamily: 'var(--fh)' }}>{j.label}</b>
+            <Pill kind={j.status === 'done' ? 'good' : j.status === 'error' ? 'pri' : 'cy'} dot>{j.status === 'done' ? 'pronto' : j.status === 'error' ? 'erro' : 'gerando'}</Pill>
+          </div>
+          {j.status === 'running' && <ProgressBar pct={j.pct} tone="cy" label={j.msg} />}
+          {j.status === 'error' && <span style={{ color: 'var(--pri)', fontSize: 13 }}>✗ {j.msg}</span>}
+          {j.status === 'done' && <>
+            {j.resultKey && <RealPlayer objectKey={j.resultKey} style={{ maxHeight: 220 }} />}
+            <div className="rowx" style={{ flexWrap: 'wrap' }}>
+              <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(j.resultKey, 'teaser'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar</button>
+              <button className="btn sm" onClick={() => renameResult(j, i)}><Icon name="pen" />Renomear</button>
+              <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('logo'); }}><Icon name="logo" />Queimar logo no teaser</button>
+              <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('telegram'); }}><Icon name="telegram" />Telegram</button>
+            </div>
+            {j.msg && j.msg.startsWith('✓') && <span className="hint" style={{ color: 'var(--good)' }}>{j.msg}</span>}
+          </>}
+        </div>)}
+
+        <button className="btn pri block" disabled={!file || running} onClick={generate}>
+          <Icon name="scissors" />{running ? 'Gerando…' : fmt === 'both' ? 'Gerar 2 teasers (web + celular)' : 'Gerar teaser'}
+        </button>
       </div>
     </div>
   </div>;
