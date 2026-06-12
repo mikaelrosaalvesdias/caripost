@@ -461,6 +461,23 @@ function TeaserApp() {
     return { ok: true, durations: [first, ...Array(midCount).fill(midDur), last] };
   }
 
+  /* O backend do teaser não envia progress_pct incremental — estima pela fase (detail).
+     "Extraindo cena i/N" é o grosso do trabalho (15→70%). */
+  function _teaserPctFromDetail(detail) {
+    const d = (detail || '').toLowerCase();
+    const m = d.match(/cena\s+(\d+)\s*\/\s*(\d+)/);
+    if (m) { const i = +m[1], n = +m[2] || 1; return Math.round(15 + (i / n) * 55); }
+    if (d.includes('inicial')) return 4;
+    if (d.includes('baixando vídeo') || d.includes('baixando video')) return 8;
+    if (d.includes('analisando dura')) return 12;
+    if (d.includes('concatenando') && d.includes('abertura')) return 92;
+    if (d.includes('concatenando')) return 74;
+    if (d.includes('normalizando')) return 84;
+    if (d.includes('narração') || d.includes('narracao')) return 88;
+    if (d.includes('salvando')) return 96;
+    return 0;
+  }
+
   async function generate() {
     if (!file) { alert('Selecione um vídeo primeiro.'); return; }
     Object.values(pollRefs.current).forEach(t => clearInterval(t));
@@ -511,14 +528,17 @@ function TeaserApp() {
         pollRefs.current[vi] = setInterval(async () => {
           try {
             const st = await window.mpApi.teaserStatus(r.job_id);
+            const estimated = _teaserPctFromDetail(st.detail);
             setJobs(js => js.map((j, i) => i === vi ? {
-              ...j, pct: st.progress_pct || j.pct, msg: st.detail || 'Renderizando…',
+              ...j,
+              pct: st.status === 'done' ? 100 : Math.max(st.progress_pct || 0, estimated, j.pct < 95 ? j.pct : 0),
+              msg: st.detail || 'Renderizando…',
               status: st.status === 'done' ? 'done' : st.status === 'error' ? 'error' : 'running',
               resultKey: st.object_key || st.teaser_object_key || j.resultKey,
             } : j));
             if (st.status === 'done' || st.status === 'error') clearInterval(pollRefs.current[vi]);
           } catch (_) {}
-        }, 3500);
+        }, 3000);
       }).catch(e => { setJobs(js => js.map((j, i) => i === vi ? { ...j, status: 'error', msg: e.message } : j)); });
     });
   }

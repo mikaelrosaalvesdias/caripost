@@ -40,12 +40,15 @@ function RealPlayer({ objectKey, style }) {
   return <video src={src} controls preload="metadata" playsInline style={{ width: '100%', maxHeight: 420, background: '#000', borderRadius: 14, border: '1px solid var(--line2)', display: 'block', ...style }} />;
 }
 
-/* Converte frame (base64 puro, data-uri, url ou objeto) em src de <img> válido */
+/* Converte frame (base64 puro, data-uri, url ou objeto) em src de <img> válido.
+   ATENÇÃO: base64 de JPEG começa com "/9j/" e de PNG com "iVBOR" — NÃO confundir
+   com caminho de URL que começa com "/". Só caminhos /api ou /local são URLs. */
 function frameSrc(f) {
   if (!f) return '';
   let s = typeof f === 'string' ? f : (f.b64 || f.url || f.image || f.src || '');
   if (!s) return '';
-  if (s.startsWith('data:') || s.startsWith('http') || s.startsWith('/')) return s;
+  if (s.startsWith('data:') || s.startsWith('http')) return s;
+  if (s.startsWith('/api') || s.startsWith('/local') || s.startsWith('/uploads')) return s;
   return 'data:image/jpeg;base64,' + s;
 }
 
@@ -66,8 +69,8 @@ function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel }) {
     return (m > 0 ? m + 'm ' : '') + String(ss).padStart(m > 0 ? 2 : 1, '0') + 's';
   };
   const p = Math.max(0, Math.min(100, pct || 0));
-  // ETA estimado pela taxa de progresso
-  const eta = p > 3 && p < 100 ? (elapsed / p) * (100 - p) : null;
+  // ETA estimado pela taxa de progresso — só mostra depois de 10% p/ não exagerar
+  const eta = p >= 10 && p < 100 ? (elapsed / p) * (100 - p) : null;
   const isErr = phase === 'error';
   const isDone = phase === 'done';
   return <div className={'proc-modal' + (isErr ? ' err' : '')}>

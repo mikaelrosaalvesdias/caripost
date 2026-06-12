@@ -1,6 +1,6 @@
 /* MetaPorn OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.20.3';
+const MP_OS_VERSION = 'v1.20.4';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
