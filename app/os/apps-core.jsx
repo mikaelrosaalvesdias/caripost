@@ -439,6 +439,8 @@ function MediaApp() {
   const [view, setView] = React.useState('icons');
   const [filter, setFilter] = React.useState('all');
   const [search, setSearch] = React.useState('');
+  const [dateFilter, setDateFilter] = React.useState('all'); // all | today | 7d | 30d
+  const [sortBy, setSortBy] = React.useState('recent');       // recent | old | name | size
   const [sel, setSel] = React.useState(null);
   const [ctx, setCtx] = React.useState(null);
   const [allItems, setAllItems] = React.useState([]);
@@ -454,15 +456,34 @@ function MediaApp() {
     try {
       const items = await window.mpApi.listMedia();
       setAllItems(items);
-      // metadados em lote (rápido) para duração/resolução
       const keys = items.map(i => i.object_key);
       window.mpApi.metaBatch(keys).then(m => setMetaMap(m)).catch(() => {});
     } catch (_) {} finally { setLoading(false); }
   }
 
+  const now = Date.now();
+  const DAY = 86400000;
+  function _inDateRange(m) {
+    if (dateFilter === 'all') return true;
+    const t = m.ts ? new Date(m.ts).getTime() : 0;
+    if (!t) return false;
+    if (dateFilter === 'today') { const d = new Date(); d.setHours(0,0,0,0); return t >= d.getTime(); }
+    if (dateFilter === '7d') return now - t <= 7 * DAY;
+    if (dateFilter === '30d') return now - t <= 30 * DAY;
+    return true;
+  }
   const items = allItems
     .filter(m => filter === 'all' || m.s === filter || (filter === 'original' && m.s === '4K original'))
-    .filter(m => !search || m.n.toLowerCase().includes(search.toLowerCase()));
+    .filter(m => !search || m.n.toLowerCase().includes(search.toLowerCase()) || (m.object_key || '').toLowerCase().includes(search.toLowerCase()))
+    .filter(_inDateRange)
+    .sort((a, b) => {
+      if (sortBy === 'name') return a.n.localeCompare(b.n);
+      if (sortBy === 'size') return (b.size_bytes || 0) - (a.size_bytes || 0);
+      const ta = a.ts ? new Date(a.ts).getTime() : 0, tb = b.ts ? new Date(b.ts).getTime() : 0;
+      return sortBy === 'old' ? ta - tb : tb - ta;
+    });
+  const DATE_FILTERS = [['all', 'Qualquer data'], ['today', 'Hoje'], ['7d', '7 dias'], ['30d', '30 dias']];
+  const SORTS = [['recent', 'Mais recentes'], ['old', 'Mais antigos'], ['name', 'Nome (A-Z)'], ['size', 'Maiores']];
 
   function _techFor(m) {
     const meta = metaMap[m.object_key];
@@ -567,6 +588,18 @@ function MediaApp() {
       {FILTERS.map(([k, l]) => <button key={k} className={'tabx' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{l}</button>)}
       <span className="hint" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 11.5 }}>{loading ? 'carregando…' : items.length + ' arquivo(s)'}</span>
     </div>
+    <div className="rowx" style={{ gap: 8, flexWrap: 'wrap' }}>
+      <div className="rowx" style={{ gap: 4 }}>
+        <span className="lbl" style={{ alignSelf: 'center', margin: 0 }}>Data:</span>
+        {DATE_FILTERS.map(([k, l]) => <button key={k} className={'btn sm' + (dateFilter === k ? ' pri' : ' ghost')} onClick={() => setDateFilter(k)}>{l}</button>)}
+      </div>
+      <div className="rowx" style={{ gap: 6, marginLeft: 'auto' }}>
+        <span className="lbl" style={{ alignSelf: 'center', margin: 0 }}>Ordenar:</span>
+        <select className="inp" style={{ height: 34, fontSize: 12.5, width: 160 }} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          {SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+      </div>
+    </div>
 
     {loading && !allItems.length && <div className="hint" style={{ textAlign: 'center', padding: 50 }}>Carregando biblioteca…</div>}
 
@@ -581,6 +614,7 @@ function MediaApp() {
         </div>
         <div style={{ padding: '10px 4px 4px' }}>
           <b style={{ fontSize: 12.5, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.n}</b>
+          <div style={{ fontSize: 10, color: 'var(--faint)', marginTop: 3 }}><Icon name="clock" style={{ width: 10, height: 10, verticalAlign: '-1px' }} /> {m.date}</div>
           <div className="rowx" style={{ justifyContent: 'space-between', marginTop: 5 }}>
             <span style={{ fontSize: 10.5, color: 'var(--muted)' }}>{_techFor(m)} · {m.size}</span>
             <Pill kind={m.tone} dot>{m.s}</Pill>

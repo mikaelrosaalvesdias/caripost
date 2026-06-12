@@ -93,7 +93,7 @@ function LegendaApp() {
           if (st.status === 'done') {
             clearInterval(pollRef.current);
             setPhase('done'); setPct(100);
-            setResultKey(st.output_object_key || st.burned_object_key || st.result_object_key || '');
+            setResultKey(st.object_key || st.output_object_key || st.burned_object_key || st.result_object_key || '');
           } else if (st.status === 'error') {
             clearInterval(pollRef.current);
             setPhase('error'); setStatusMsg(st.detail || st.error || 'Erro na queima');
@@ -147,10 +147,7 @@ function LegendaApp() {
           <div className="pill good" style={{ alignSelf: 'flex-start' }}><Icon name="check" />Queima concluída</div>
           {resultKey && <RealPlayer objectKey={resultKey} style={{ maxHeight: 220 }} />}
           <div className="rowx">
-            <button className="btn pri sm" onClick={async () => {
-              const url = await window.mpApi.downloadUrl(resultKey, 'video_legendado');
-              if (url) window.open(url, '_blank');
-            }}><Icon name="download" />Baixar resultado</button>
+            <button className="btn pri sm" onClick={() => window.mpApi.download(resultKey, 'video_legendado.mp4')}><Icon name="download" />Baixar resultado</button>
             <button className="btn sm" onClick={() => { window.__mpOpen && window.__mpOpen('media'); }}><Icon name="media" />Ver em Arquivos</button>
           </div>
         </div>}
@@ -215,7 +212,7 @@ function LogoApp() {
           setPct(st.progress_pct || 50); setStatusMsg(st.detail || 'Processando…');
           if (st.status === 'done') {
             clearInterval(pollRef.current); setPhase('done'); setPct(100);
-            setResultKey(st.output_object_key || st.burned_object_key || '');
+            setResultKey(st.object_key || st.output_object_key || st.burned_object_key || '');
           } else if (st.status === 'error') {
             clearInterval(pollRef.current); setPhase('error'); setStatusMsg(st.detail || 'Erro');
           }
@@ -261,7 +258,7 @@ function LogoApp() {
         {resultKey && phase !== 'burning' && <div className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
           <div className="pill good" style={{ alignSelf: 'flex-start' }}><Icon name="check" />Logo aplicada</div>
           {resultKey && <RealPlayer objectKey={resultKey} style={{ maxHeight: 220 }} />}
-          <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(resultKey, 'video_logo'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar resultado</button>
+          <button className="btn pri sm" onClick={() => window.mpApi.download(resultKey, 'video_logo.mp4')}><Icon name="download" />Baixar resultado</button>
         </div>}
         <div className="rowx" style={{ justifyContent: 'flex-end' }}>
           <button className="btn pri" disabled={!file || phase === 'burning'} onClick={doBurnLogo}><Icon name="burn" />{phase === 'burning' ? 'Queimando…' : 'Queimar logo'}</button>
@@ -312,7 +309,7 @@ function LogoBurnModal({ teaserKey, runId, profiles, onClose, onDone }) {
           setProc(p => ({ ...p, pct: st.progress_pct || p.pct, detail: st.detail || 'Queimando logo…' }));
           if (st.status === 'done') {
             clearInterval(pollRef.current);
-            const out = st.output_object_key || st.burned_object_key || st.result_object_key || teaserKey;
+            const out = st.object_key || st.output_object_key || st.burned_object_key || st.result_object_key || teaserKey;
             setProc(p => ({ ...p, pct: 100, phase: 'done', detail: 'Logo aplicada!', resultKey: out }));
           } else if (st.status === 'error') {
             clearInterval(pollRef.current);
@@ -643,12 +640,13 @@ function TeaserApp() {
           </div>
           {j.resultKey && <RealPlayer objectKey={j.resultKey} style={{ maxHeight: 220 }} />}
           <div className="rowx" style={{ flexWrap: 'wrap' }}>
-            <button className="btn pri sm" onClick={async () => { const u = await window.mpApi.downloadUrl(j.resultKey, 'teaser'); if (u) window.open(u, '_blank'); }}><Icon name="download" />Baixar</button>
+            <button className="btn pri sm" onClick={() => window.mpApi.download(j.resultKey, 'teaser.mp4')}><Icon name="download" />Baixar</button>
             <button className="btn sm" onClick={() => renameResult(j, jobs.indexOf(j))}><Icon name="pen" />Renomear</button>
-            {!isBurned && <button className="btn sm" onClick={() => setLogoModal({ teaserKey: j.resultKey, idx: jobs.indexOf(j) })}><Icon name="logo" />Queimar logo</button>}
+            {!isBurned && !j.logoApplied && <button className="btn sm" onClick={() => setLogoModal({ teaserKey: j.resultKey, idx: jobs.indexOf(j) })}><Icon name="logo" />Queimar logo</button>}
+            {j.logoApplied && <span className="pill good" style={{ fontSize: 11 }}><Icon name="check" />logo aplicada</span>}
+            <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('media'); }}><Icon name="media" />Ver em Arquivos</button>
             <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: j.resultKey, n: 'teaser', s: 'teaser' }; window.__mpOpen && window.__mpOpen('telegram'); }}><Icon name="telegram" />Telegram</button>
           </div>
-          {j.msg && j.msg.startsWith('✓') && <span className="hint" style={{ color: 'var(--good)' }}>{j.msg}</span>}
         </div>)}
 
         <button className="btn pri block" disabled={!file || running} onClick={generate}>
@@ -664,7 +662,7 @@ function TeaserApp() {
     {/* MODAL de queima de logo */}
     {logoModal && <LogoBurnModal teaserKey={logoModal.teaserKey} runId={runId} profiles={profiles}
       onClose={() => setLogoModal(null)}
-      onDone={(newKey) => { if (newKey) setJobs(js => js.map((x, i) => i === logoModal.idx ? { ...x, resultKey: newKey, msg: '✓ logo aplicada' } : x)); }} />}
+      onDone={(newKey) => { if (newKey) setJobs(js => js.map((x, i) => i === logoModal.idx ? { ...x, resultKey: newKey, logoApplied: true } : x)); }} />}
   </div>;
 }
 

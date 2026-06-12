@@ -119,7 +119,7 @@
   /* ── Helpers ── */
   function _fmtDate(iso) {
     if (!iso) return '—';
-    try { return new Date(iso).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }); }
+    try { return new Date(iso).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo' }); }
     catch { return iso.slice(0, 16); }
   }
   function _fmtTime(sec) {
@@ -195,6 +195,8 @@
           dur: '',
           size: it.size_mb ? it.size_mb + ' MB' : '',
           date: _fmtDate(it.last_modified),
+          ts: it.last_modified || '',
+          size_bytes: it.size_bytes || 0,
           object_key: it.object_key,
           public_url: it.public_url || '',
           category: it.category || s,
@@ -241,6 +243,18 @@
     async downloadUrl(key, filename) {
       const r = await mpFetch('/api/video-download-url?object_key=' + _enc(key) + '&filename=' + _enc(filename || 'video'));
       return r.url || '';
+    },
+    /* Dispara o download de forma confiável (sem popup-block) */
+    async download(key, filename) {
+      if (!key) { alert('Arquivo indisponível para download.'); return; }
+      try {
+        const url = await this.downloadUrl(key, filename);
+        if (!url) throw new Error('sem url');
+        const a = document.createElement('a');
+        a.href = url.startsWith('http') ? url : (location.origin + url);
+        a.download = filename || key.split('/').pop();
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (e) { alert('Falha no download: ' + e.message); }
     },
     async renameMedia(key, newName) {
       return mpFetch('/api/media-manager/rename', {
