@@ -266,21 +266,31 @@
     },
 
     async uploadFile(file, onProgress) {
-      const presign = await mpFetch('/uploads/presign', {
-        method: 'POST',
-        body: JSON.stringify({ filename: file.name, content_type: file.type || 'video/mp4' }),
-      });
-      if (!presign.upload_url) throw new Error('Falha ao obter URL de upload');
       const xhr = new XMLHttpRequest();
-      await new Promise((res, rej) => {
-        xhr.upload.onprogress = e => onProgress && onProgress(Math.round(e.loaded / e.total * 100));
-        xhr.onload = () => (xhr.status < 300 ? res() : rej(new Error('Upload falhou: ' + xhr.status)));
+      const data = await new Promise((res, rej) => {
+        xhr.upload.onprogress = e => {
+          if (onProgress && e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
+        };
+        xhr.onload = () => {
+          let data = {};
+          try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+          if (xhr.status >= 200 && xhr.status < 300 && data.ok && data.object_key) {
+            res(data);
+            return;
+          }
+          rej(new Error(data.detail || data.error || 'Upload falhou: ' + xhr.status));
+        };
         xhr.onerror = () => rej(new Error('Erro de rede no upload'));
-        xhr.open('PUT', presign.upload_url);
-        xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+        xhr.onabort = () => rej(new Error('Upload cancelado pelo navegador'));
+        xhr.open('POST', '/uploads/local-stream?prefix=uploads&validate=1&delete_if_invalid=1');
+        const token = getToken();
+        if (token) xhr.setRequestHeader('X-Session-Token', token);
+        xhr.setRequestHeader('X-Filename', file.name || 'upload.bin');
+        xhr.setRequestHeader('X-File-Size', String(file.size || 0));
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
         xhr.send(file);
       });
-      return presign.object_key;
+      return data.object_key;
     },
 
     /* ════════ RUNS / ANALYZE ════════ */

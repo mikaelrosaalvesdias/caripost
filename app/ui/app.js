@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.7', date: '2026-06-13',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: upload de video passa a usar `/uploads/local-stream`, evitando falha de CORS/domínio no PUT direto do storage apos a migracao para CariPost.' },
+    ],
+  },
+  {
     version: 'v1.19.6', date: '2026-06-10',
     items: [
       { type: 'fix', text: 'Arquivos: primeiras capas da grade agora sao carregadas imediatamente no render, mesmo quando a lista fica abaixo da dobra dentro da janela do MetaPorn OS.' },
