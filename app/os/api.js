@@ -42,6 +42,17 @@
     localStorage.removeItem(STORAGE_KEY);
     sessionStorage.removeItem(LEGACY_SESSION_KEY);
   }
+  function isAuthError(data) {
+    return !!data && typeof data === 'object' && (
+      data.error === 'unauthorized' ||
+      data.detail === 'missing_or_invalid_api_key'
+    );
+  }
+  async function readJson(res) {
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) return null;
+    try { return await res.json(); } catch (_) { return null; }
+  }
 
   async function mpFetch(url, opts = {}) {
     const headers = { ...(opts.headers || {}) };
@@ -50,12 +61,23 @@
     }
     applyAuthHeaders(headers);
     const res = await fetch(url, { ...opts, headers });
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      const data = await res.json();
+      if (res.status === 401 || isAuthError(data)) {
+        _isOpen = false;
+        clearToken();
+        showLogin();
+        throw new Error(data.detail || data.error || 'unauthorized');
+      }
+      return data;
+    }
     if (res.status === 401) {
-      if (_isOpen !== true) { clearToken(); showLogin(); }
+      _isOpen = false;
+      clearToken();
+      showLogin();
       throw new Error('unauthorized');
     }
-    const ct = res.headers.get('content-type') || '';
-    if (ct.includes('application/json')) return res.json();
     return res.text();
   }
 
@@ -121,9 +143,23 @@
           const data = await me.json();
           if (data.user) { setToken(token, data.user); _isOpen = false; return; }
         }
+        clearToken();
+      }
+      if (getApiKey()) {
+        const res = await fetch('/runs?limit=1', { headers: applyAuthHeaders({}) });
+        const data = await readJson(res);
+        if (res.status !== 401 && !isAuthError(data)) { _isOpen = true; return; }
+      }
+      const setupRes = await fetch('/auth/check');
+      const setup = await readJson(setupRes);
+      if (setup?.auth_enabled) {
+        _isOpen = false;
+        showLogin();
+        return;
       }
       const res = await fetch('/runs?limit=1', { headers: applyAuthHeaders({}) });
-      if (res.status === 401) { _isOpen = false; showLogin(); }
+      const data = await readJson(res);
+      if (res.status === 401 || isAuthError(data)) { _isOpen = false; showLogin(); }
       else { _isOpen = true; }
     } catch { _isOpen = true; }
   }
@@ -278,6 +314,11 @@
     },
 
     async uploadFile(file, onProgress) {
+      if (!getToken() && !getApiKey()) {
+        _isOpen = false;
+        showLogin();
+        throw new Error('Faça login antes de enviar o vídeo.');
+      }
       const xhr = new XMLHttpRequest();
       const data = await new Promise((res, rej) => {
         xhr.upload.onprogress = e => {
@@ -289,6 +330,11 @@
           if (xhr.status >= 200 && xhr.status < 300 && data.ok && data.object_key) {
             res(data);
             return;
+          }
+          if (xhr.status === 401 || isAuthError(data)) {
+            _isOpen = false;
+            clearToken();
+            showLogin();
           }
           rej(new Error(data.detail || data.error || 'Upload falhou: ' + xhr.status));
         };

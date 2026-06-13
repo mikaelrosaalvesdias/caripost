@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.9', date: '2026-06-13',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: checagem de autenticacao agora reconhece `missing_or_invalid_api_key` mesmo quando o backend responde HTTP 200, forçando login antes do upload.' },
+    ],
+  },
+  {
     version: 'v1.19.8', date: '2026-06-13',
     items: [
       { type: 'fix', text: 'MetaPorn OS: upload via `/uploads/local-stream` agora tambem envia a `X-API-Key` salva pela UI antiga, evitando `missing_or_invalid_api_key` em ambientes com API key obrigatoria.' },
