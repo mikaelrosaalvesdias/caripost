@@ -1,0 +1,5 @@
+FROM adult-meta:latest
+
+COPY app/main.py /app/app/main.py
+COPY app/ui/app.js /app/app/ui/app.js
+COPY app/ui/index.html /app/app/ui/index.html

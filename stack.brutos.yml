@@ -1,0 +1,38 @@
+version: '3.8'
+
+networks:
+  metaporn_internal:
+    external: true
+
+volumes:
+  adult_meta_data:
+
+services:
+  adult-meta:
+    image: adult-meta:latest
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - adult_meta_data:/data
+      - /var/www2/adult-meta-media:/media
+    networks:
+      - metaporn_internal
+    environment:
+      # S3 interno: fala direto com o container MinIO sem passar por Apache
+      S3_ENDPOINT_URL: "http://minio:9000"
+      S3_ACCESS_KEY_ID: "0e1fb1161ed4f7c0a41b0fa7"
+      S3_SECRET_ACCESS_KEY: "64ac389164e77eb46ef7bc9bb3791fd5a0803abdb51cc52a"
+      S3_BUCKET: "metaporn"
+      # URL pública continua via HTTPS para o browser
+      S3_PUBLIC_BASE_URL: "https://s3.metaporn.com.br"
+      ADULT_META_MEDIA_ROOT: "/media"
+      OLLAMA_BASE_URL: "http://172.17.0.1:11434"
+      # 8 burns simultâneos × 10 threads ffmpeg = 80 cores ocupados, deixa 8 pro sistema
+      BURN_MAX_PARALLEL: "8"
+      FFMPEG_BURN_THREADS: "10"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3

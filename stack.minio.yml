@@ -1,0 +1,33 @@
+version: '3.8'
+
+networks:
+  metaporn_internal:
+    external: true
+
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: "0e1fb1161ed4f7c0a41b0fa7"
+      MINIO_ROOT_PASSWORD: "64ac389164e77eb46ef7bc9bb3791fd5a0803abdb51cc52a"
+      MINIO_API_REQUESTS_MAX: "10000"
+      MINIO_API_REQUESTS_DEADLINE: "10m"
+    volumes:
+      - type: bind
+        source: /var/www2/minio-data
+        target: /data
+    networks:
+      - metaporn_internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints:
+          - node.role == manager
