@@ -150,16 +150,10 @@
         const data = await readJson(res);
         if (res.status !== 401 && !isAuthError(data)) { _isOpen = true; return; }
       }
-      const setupRes = await fetch('/auth/check');
-      const setup = await readJson(setupRes);
-      if (setup?.auth_enabled) {
-        _isOpen = false;
-        showLogin();
-        return;
-      }
       const res = await fetch('/runs?limit=1', { headers: applyAuthHeaders({}) });
       const data = await readJson(res);
-      if (res.status === 401 || isAuthError(data)) { _isOpen = false; showLogin(); }
+      if (res.status === 401) { _isOpen = false; showLogin(); }
+      else if (isAuthError(data)) { _isOpen = false; }
       else { _isOpen = true; }
     } catch { _isOpen = true; }
   }

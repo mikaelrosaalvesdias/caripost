@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.10', date: '2026-06-13',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: a checagem inicial de auth preserva a abertura visual anterior e deixa o login aparecer somente quando uma ação protegida exigir credencial.' },
+    ],
+  },
+  {
     version: 'v1.19.9', date: '2026-06-13',
     items: [
       { type: 'fix', text: 'MetaPorn OS: checagem de autenticacao agora reconhece `missing_or_invalid_api_key` mesmo quando o backend responde HTTP 200, forçando login antes do upload.' },
