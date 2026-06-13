@@ -8,7 +8,7 @@
 
 O MetaPorn é uma aplicação web full-stack que centraliza o fluxo de criação de conteúdo adulto. Ele integra scraping de vídeos de referência, geração de textos/metadados por IA, transcrição de áudio, edição de vídeo (legendas, logo, teaser), armazenamento em nuvem e agendamento de posts.
 
-**URL de produção:** `https://metaporn.n8nmikael.com.br`
+**URL de produção:** `https://caripost.n8nmikael.com.br`
 
 ---
 

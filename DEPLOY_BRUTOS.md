@@ -233,7 +233,7 @@ httpd -M | grep -E "proxy_module|proxy_http_module|ssl_module|rewrite_module"
 ```bash
 cat > /etc/httpd/conf.d/metaporn.conf << 'EOF'
 <VirtualHost *:80>
-    ServerName metaporn.n8nmikael.com.br
+    ServerName caripost.n8nmikael.com.br
 
     ProxyPreserveHost On
     ProxyPass        / http://127.0.0.1:8765/
@@ -266,7 +266,7 @@ echo "Reload: $?"
 
 ### 8.5 Teste local (sem precisar mudar DNS)
 ```bash
-curl -s -H "Host: metaporn.n8nmikael.com.br" http://127.0.0.1/health
+curl -s -H "Host: caripost.n8nmikael.com.br" http://127.0.0.1/health
 ```
 → Deve retornar `{"status":"ok"}`. Se retornar 404 ou HTML do Apache, verifique o VirtualHost.
 
@@ -276,13 +276,13 @@ curl -s -H "Host: metaporn.n8nmikael.com.br" http://127.0.0.1/health
 
 > **Pré-condição:**
 > 1. Fase 8 concluída e teste local passando
-> 2. DNS `metaporn.n8nmikael.com.br` já apontando para `177.104.176.165` (humano alterou no painel)
+> 2. DNS `caripost.n8nmikael.com.br` já apontando para `177.104.176.165` (humano alterou no painel)
 >
 > **NÃO execute se o DNS ainda aponta para o servidor antigo (213.199.32.244).**
 
 ```bash
 # 9.1 Confirmar que DNS mudou para esta máquina
-DNS_IP=$(nslookup metaporn.n8nmikael.com.br 2>/dev/null | grep -A1 "Name:" | grep Address | awk '{print $2}')
+DNS_IP=$(nslookup caripost.n8nmikael.com.br 2>/dev/null | grep -A1 "Name:" | grep Address | awk '{print $2}')
 echo "DNS resolve para: $DNS_IP"
 echo "IP desta máquina: 177.104.176.165"
 
@@ -296,12 +296,12 @@ fi
 ```bash
 # 9.2 Emitir certificado
 # Nota: ssl.conf está desabilitado nesta máquina — certbot criará o bloco SSL manualmente
-certbot --apache -d metaporn.n8nmikael.com.br --non-interactive --agree-tos -m admin@n8nmikael.com.br
+certbot --apache -d caripost.n8nmikael.com.br --non-interactive --agree-tos -m admin@n8nmikael.com.br
 
 # 9.3 Verificar o que certbot criou
 cat /etc/httpd/conf.d/metaporn.conf
 ls /etc/httpd/conf.d/ | grep metaporn
-ls /etc/letsencrypt/live/metaporn.n8nmikael.com.br/
+ls /etc/letsencrypt/live/caripost.n8nmikael.com.br/
 ```
 
 ### Se certbot NÃO criou o bloco SSL automaticamente:
@@ -310,11 +310,11 @@ ls /etc/letsencrypt/live/metaporn.n8nmikael.com.br/
 # Criar bloco SSL manualmente (só se necessário)
 cat > /etc/httpd/conf.d/metaporn-ssl.conf << 'EOF'
 <VirtualHost *:443>
-    ServerName metaporn.n8nmikael.com.br
+    ServerName caripost.n8nmikael.com.br
 
     SSLEngine on
-    SSLCertificateFile    /etc/letsencrypt/live/metaporn.n8nmikael.com.br/fullchain.pem
-    SSLCertificateKeyFile /etc/letsencrypt/live/metaporn.n8nmikael.com.br/privkey.pem
+    SSLCertificateFile    /etc/letsencrypt/live/caripost.n8nmikael.com.br/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/caripost.n8nmikael.com.br/privkey.pem
 
     ProxyPreserveHost On
     ProxyPass        / http://127.0.0.1:8765/
@@ -347,10 +347,10 @@ docker ps --filter name=metaporn_adult-meta --format "table {{.Names}}\t{{.Statu
 curl -s http://127.0.0.1:8765/health
 
 # 10.3 Via Apache HTTP (host header)
-curl -s -H "Host: metaporn.n8nmikael.com.br" http://127.0.0.1/health
+curl -s -H "Host: caripost.n8nmikael.com.br" http://127.0.0.1/health
 
 # 10.4 Via HTTPS público (após DNS + certbot)
-curl -sv https://metaporn.n8nmikael.com.br/health 2>&1 | grep -E "SSL|HTTP|status|ok"
+curl -sv https://caripost.n8nmikael.com.br/health 2>&1 | grep -E "SSL|HTTP|status|ok"
 
 # 10.5 Logs sem erros?
 docker service logs metaporn_adult-meta --tail 20 2>&1 | grep -Ev "GET /health|GET /ui"

@@ -20,7 +20,7 @@ SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
-SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@metaporn.com.br")
+SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@caripost.n8nmikael.com.br")
 SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "MetaPorn Agency")
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
@@ -151,7 +151,7 @@ async def send_briefing_email(creator: Dict, briefing: Dict) -> Dict[str, Any]:
 <hr style="border-color:#333;margin:24px 0">
 <p style="color:#555;font-size:12px;text-align:center">
   MetaPorn Agency — Conteúdo automatizado com IA<br>
-  <a href="https://metaporn.com.br" style="color:#ff1744">metaporn.com.br</a>
+  <a href="https://caripost.n8nmikael.com.br" style="color:#ff1744">caripost.n8nmikael.com.br</a>
 </p>
 </body></html>"""
 
@@ -194,7 +194,7 @@ async def send_monthly_report_email(creator: Dict, report: Dict) -> Dict[str, An
     <td style="padding:10px;border:1px solid #333">{views:,}</td>
   </tr>
 </table>
-<p style="color:#555;font-size:12px">MetaPorn Agency · <a href="https://metaporn.com.br" style="color:#ff1744">metaporn.com.br</a></p>
+<p style="color:#555;font-size:12px">MetaPorn Agency · <a href="https://caripost.n8nmikael.com.br" style="color:#ff1744">caripost.n8nmikael.com.br</a></p>
 </body></html>"""
 
     return await send_email(

@@ -85,7 +85,7 @@ Envia um vídeo para melhoria. Retorna `job_id` para acompanhar o status.
 **Via upload de arquivo:**
 
 ```bash
-curl -s -X POST "https://metaporn.com.br/api/video-enhancer/enhance?resolution=720p" \
+curl -s -X POST "https://caripost.n8nmikael.com.br/api/video-enhancer/enhance?resolution=720p" \
   -H "X-API-Key: secret" \
   -F "file=@/caminho/do/video.mp4"
 ```
@@ -93,7 +93,7 @@ curl -s -X POST "https://metaporn.com.br/api/video-enhancer/enhance?resolution=7
 **Via referência de vídeo já armazenado:**
 
 ```bash
-curl -s -X POST "https://metaporn.com.br/api/video-enhancer/enhance" \
+curl -s -X POST "https://caripost.n8nmikael.com.br/api/video-enhancer/enhance" \
   -H "X-API-Key: secret" \
   -H "Content-Type: application/json" \
   -d '{"video_object_key": "local:uploads/2026/04/meu-video.mp4", "resolution": "720p"}'
@@ -120,7 +120,7 @@ curl -s -X POST "https://metaporn.com.br/api/video-enhancer/enhance" \
 Acompanhar o progresso do job.
 
 ```bash
-curl -s "https://metaporn.com.br/api/video-enhancer/status/uuid-do-job" \
+curl -s "https://caripost.n8nmikael.com.br/api/video-enhancer/status/uuid-do-job" \
   -H "X-API-Key: secret"
 ```
 
@@ -154,7 +154,7 @@ curl -s "https://metaporn.com.br/api/video-enhancer/status/uuid-do-job" \
 Lista os jobs recentes.
 
 ```bash
-curl -s "https://metaporn.com.br/api/video-enhancer/jobs?limit=10" \
+curl -s "https://caripost.n8nmikael.com.br/api/video-enhancer/jobs?limit=10" \
   -H "X-API-Key: secret"
 ```
 
@@ -165,7 +165,7 @@ curl -s "https://metaporn.com.br/api/video-enhancer/jobs?limit=10" \
 Verifica se o Video2X está instalado.
 
 ```bash
-curl -s "https://metaporn.com.br/api/video-enhancer/check" \
+curl -s "https://caripost.n8nmikael.com.br/api/video-enhancer/check" \
   -H "X-API-Key: secret"
 ```
 

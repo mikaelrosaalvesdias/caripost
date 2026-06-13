@@ -124,7 +124,7 @@ Headers enviados:
 ```http
 Authorization: Bearer {token}
 Content-Type: application/json
-HTTP-Referer: https://metaporn.com.br/
+HTTP-Referer: https://caripost.n8nmikael.com.br/
 X-Title: MetaPorn Admin
 ```
 

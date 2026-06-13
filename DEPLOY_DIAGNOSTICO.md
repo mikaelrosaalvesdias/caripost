@@ -206,19 +206,19 @@ curl -s -o /dev/null -w "HTTP %{http_code} | tempo %{time_total}s" \
 ## 12. DNS — Domínio do Projeto
 
 ```bash
-# O domínio metaporn.n8nmikael.com.br aponta para este servidor?
+# O domínio caripost.n8nmikael.com.br aponta para este servidor?
 curl -s -o /dev/null -w "HTTP %{http_code}" \
-  "https://metaporn.n8nmikael.com.br/health" \
+  "https://caripost.n8nmikael.com.br/health" \
   --max-time 10 2>/dev/null || echo "Domínio não acessível ainda (normal antes do deploy)"
 
 # Resolver o IP do domínio
-nslookup metaporn.n8nmikael.com.br 2>/dev/null || host metaporn.n8nmikael.com.br 2>/dev/null
+nslookup caripost.n8nmikael.com.br 2>/dev/null || host caripost.n8nmikael.com.br 2>/dev/null
 
 # IP público desta máquina
 curl -s --max-time 5 https://ifconfig.me || curl -s --max-time 5 https://api.ipify.org
 ```
 
-**O que verificar:** O IP resolvido para `metaporn.n8nmikael.com.br` é o IP desta máquina? Se não for, o Traefik não vai receber as requisições e o TLS não vai funcionar.
+**O que verificar:** O IP resolvido para `caripost.n8nmikael.com.br` é o IP desta máquina? Se não for, o Traefik não vai receber as requisições e o TLS não vai funcionar.
 
 ---
 
@@ -301,7 +301,7 @@ Após executar todos os blocos acima, responda:
 | Certresolver `letsencrypt` configurado no Traefik? | ✅ / ❌ |
 | Porta 8765 livre no host? | ✅ / ❌ |
 | MinIO `s3.n8nmikael.com.br` acessível? | ✅ / ❌ |
-| DNS `metaporn.n8nmikael.com.br` → IP desta máquina? | ✅ / ❌ |
+| DNS `caripost.n8nmikael.com.br` → IP desta máquina? | ✅ / ❌ |
 | Volume `adult_meta_data` já existe? | ✅ / ❌ (novo) |
 | Imagem `adult-meta:latest` já existe? | ✅ / ❌ (precisa build) |
 | Nenhum conflito de nome de serviço/router? | ✅ / ❌ |

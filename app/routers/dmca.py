@@ -85,7 +85,7 @@ async def send_takedown(infringement_id: str, body: DmcaSendTakedownRequest, req
     if err:
         return err
     body = _model_dump(body)
-    contact_email = body.get("contact_email", "dmca@metaporn.com.br")
+    contact_email = body.get("contact_email", "dmca@caripost.n8nmikael.com.br")
 
     from ..services.dmca_takedown import send_takedown as do_takedown
     result = await do_takedown(infringement_id, contact_email=contact_email)
@@ -99,7 +99,7 @@ async def bulk_takedown(body: DmcaBulkTakedownRequest, request: Request):
         return err
     body = _model_dump(body)
     infringement_ids = body.get("infringement_ids", [])
-    contact_email = body.get("contact_email", "dmca@metaporn.com.br")
+    contact_email = body.get("contact_email", "dmca@caripost.n8nmikael.com.br")
 
     from ..services.dmca_takedown import send_takedown as do_takedown
     results = {}

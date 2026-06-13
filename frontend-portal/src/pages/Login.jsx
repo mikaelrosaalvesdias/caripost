@@ -9,7 +9,7 @@ export default function LoginPage({ onLogin, creator, entrySlug = "" }) {
   const [error, setError] = useState("");
   const branding = getPortalBranding(creator);
   const creatorName = creator?.name || branding.brand_name || "Criador";
-  const entryUrl = entrySlug ? `criador.metaporn.com.br/${entrySlug}` : "criador.metaporn.com.br";
+  const entryUrl = entrySlug ? `criador.caripost.n8nmikael.com.br/${entrySlug}` : "criador.caripost.n8nmikael.com.br";
 
   async function handleSubmit(event) {
     event.preventDefault();

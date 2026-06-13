@@ -44,7 +44,7 @@ Date: {date}
 """
 
 
-async def send_takedown(infringement_id: str, contact_email: str = "dmca@metaporn.com.br") -> Dict[str, Any]:
+async def send_takedown(infringement_id: str, contact_email: str = "dmca@caripost.n8nmikael.com.br") -> Dict[str, Any]:
     """Generate and send a DMCA takedown notice."""
     # Load infringement
     infringements = dmca_list()

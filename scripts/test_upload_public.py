@@ -2,7 +2,7 @@ import httpx
 import os
 import time
 
-url = "https://metaporn.n8nmikael.com.br/uploads/proxy"
+url = "https://caripost.n8nmikael.com.br/uploads/proxy"
 payload_size = 5 * 1024 * 1024 # 5MB
 print(f"Uploading {payload_size} bytes to {url}...")
 

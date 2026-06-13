@@ -81,7 +81,7 @@ docker service update --force metaporn_adult-meta
 Depois do deploy, valide a versao exposta pelo app e o status do container:
 
 ```bash
-curl -s https://metaporn.com.br/ | grep -o "v1\\.[0-9][0-9]\\.[0-9][0-9]" | sort -u
+curl -s https://caripost.n8nmikael.com.br/ | grep -o "v1\\.[0-9][0-9]\\.[0-9][0-9]" | sort -u
 docker ps --filter name=adult-meta
 ```
 

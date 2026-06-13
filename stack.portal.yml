@@ -19,7 +19,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=metaporn_internal
-        - traefik.http.routers.metaporn-creator.rule=Host(`criador.metaporn.com.br`)
+        - traefik.http.routers.metaporn-creator.rule=Host(`criador.caripost.n8nmikael.com.br`)
         - traefik.http.routers.metaporn-creator.entrypoints=websecure
         - traefik.http.routers.metaporn-creator.tls=true
         - traefik.http.routers.metaporn-creator.tls.certresolver=letsencrypt

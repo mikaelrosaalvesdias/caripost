@@ -1496,7 +1496,7 @@ Transcricao pelo botao OpenRouter STT usa token:openrouter.
 ### 23.1 Transcrever com Premium
 
 ```bash
-curl -X POST "https://metaporn.com.br/transcribe" \
+curl -X POST "https://caripost.n8nmikael.com.br/transcribe" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: SUA_KEY" \
   -d '{
@@ -1512,7 +1512,7 @@ curl -X POST "https://metaporn.com.br/transcribe" \
 ### 23.2 Transcrever com OpenRouter STT
 
 ```bash
-curl -X POST "https://metaporn.com.br/transcribe" \
+curl -X POST "https://caripost.n8nmikael.com.br/transcribe" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: SUA_KEY" \
   -d '{
@@ -1527,7 +1527,7 @@ curl -X POST "https://metaporn.com.br/transcribe" \
 ### 23.3 Salvar SRT editado
 
 ```bash
-curl -X PUT "https://metaporn.com.br/runs/RUN_ID/transcript" \
+curl -X PUT "https://caripost.n8nmikael.com.br/runs/RUN_ID/transcript" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: SUA_KEY" \
   -d '{
@@ -1542,7 +1542,7 @@ curl -X PUT "https://metaporn.com.br/runs/RUN_ID/transcript" \
 ### 23.4 Queimar legenda
 
 ```bash
-curl -X POST "https://metaporn.com.br/api/burn-subtitles" \
+curl -X POST "https://caripost.n8nmikael.com.br/api/burn-subtitles" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: SUA_KEY" \
   -d '{

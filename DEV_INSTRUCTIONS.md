@@ -54,16 +54,16 @@ Nunca confirmar "está pronto" sem testar. Para endpoints de API:
 
 ```bash
 # Testar GET
-curl -s https://metaporn.com.br/api/ENDPOINT -H "X-API-Key: secret"
+curl -s https://caripost.n8nmikael.com.br/api/ENDPOINT -H "X-API-Key: secret"
 
 # Testar POST
-curl -s -X POST https://metaporn.com.br/api/ENDPOINT \
+curl -s -X POST https://caripost.n8nmikael.com.br/api/ENDPOINT \
   -H "X-API-Key: secret" \
   -H "Content-Type: application/json" \
   -d '{"campo": "valor"}'
 
 # Verificar versão no servidor
-curl -s https://metaporn.com.br/ | grep -o "v1\.[0-9][0-9]\.[0-9]" | sort -u
+curl -s https://caripost.n8nmikael.com.br/ | grep -o "v1\.[0-9][0-9]\.[0-9]" | sort -u
 
 # Verificar versão no container
 CONTAINER=$(docker ps --filter name=adult-meta --format '{{.ID}}' | head -1)

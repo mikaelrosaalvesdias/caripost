@@ -24,7 +24,7 @@ services:
       S3_SECRET_ACCESS_KEY: "64ac389164e77eb46ef7bc9bb3791fd5a0803abdb51cc52a"
       S3_BUCKET: "metaporn"
       # URL pública continua via HTTPS para o browser
-      S3_PUBLIC_BASE_URL: "https://s3.metaporn.com.br"
+      S3_PUBLIC_BASE_URL: "https://s3.caripost.n8nmikael.com.br"
       ADULT_META_MEDIA_ROOT: "/media"
       OLLAMA_BASE_URL: "http://172.17.0.1:11434"
       # 8 burns simultâneos × 10 threads ffmpeg = 80 cores ocupados, deixa 8 pro sistema

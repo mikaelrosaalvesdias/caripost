@@ -34,7 +34,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=metaporn_internal
-        - traefik.http.routers.metaporn.rule=Host(`metaporn.com.br`)
+        - traefik.http.routers.metaporn.rule=Host(`caripost.n8nmikael.com.br`)
         - traefik.http.routers.metaporn.entrypoints=websecure
         - traefik.http.routers.metaporn.tls=true
         - traefik.http.routers.metaporn.tls.certresolver=letsencrypt

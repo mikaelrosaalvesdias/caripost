@@ -2433,7 +2433,7 @@ async def _translate_segments_llm(
         or_headers = {
             "Authorization": f"Bearer {openrouter_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://metaporn.n8nmikael.com.br",
+            "HTTP-Referer": "https://caripost.n8nmikael.com.br",
             "X-Title": "MetaPorn Translation",
         }
         for or_model in or_models:
@@ -4740,7 +4740,7 @@ async def _openrouter_stt_request(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://metaporn.com.br/",
+        "HTTP-Referer": "https://caripost.n8nmikael.com.br/",
         "X-Title": "MetaPorn Admin",
     }
     response = await client.post(
@@ -5351,7 +5351,7 @@ class AnalyzeRequest(BaseModel):
 
 def _setup_s3_cors():
     # CORS is configured at MinIO server level via:
-    #   mc admin config set minio/ api cors_allow_origin=https://metaporn.n8nmikael.com.br
+    #   mc admin config set minio/ api cors_allow_origin=https://caripost.n8nmikael.com.br
     # PutBucketCors S3 API is not supported by MinIO — silently skip.
     pass
 
@@ -11468,7 +11468,7 @@ async def _openrouter_vision_chat_json(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://metaporn.n8nmikael.com.br",
+        "HTTP-Referer": "https://caripost.n8nmikael.com.br",
         "X-Title": "MetaPorn Vision",
     }
     attempts: List[Dict[str, Any]] = []
@@ -12366,7 +12366,7 @@ def _tg_app_public_url() -> str:
     row = settings_get(key=_TELEGRAM_APP_PUBLIC_KEY)
     val = (row["value"] if row else "").strip().rstrip("/")
     if not val:
-        val = os.environ.get("APP_PUBLIC_URL", "https://metaporn.n8nmikael.com.br").rstrip("/")
+        val = os.environ.get("APP_PUBLIC_URL", "https://caripost.n8nmikael.com.br").rstrip("/")
     return val
 
 

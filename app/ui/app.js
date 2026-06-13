@@ -1065,7 +1065,7 @@ const CHANGELOG = [
     version: 'v1.11.7', date: '2026-04-14',
     items: [
       { type: 'feat', text: 'Criadores: campo "Canais de Referência" (URL por linha) adicionado ao formulário — salvo no criador e usado pelo Trend Radar para scraping de vídeos reais.' },
-      { type: 'feat', text: 'Criadores: campo "Senha do Portal" no formulário — ao salvar, configura automaticamente o acesso do criador em criador.metaporn.com.br via /api/portal/set-password.' },
+      { type: 'feat', text: 'Criadores: campo "Senha do Portal" no formulário — ao salvar, configura automaticamente o acesso do criador em criador.caripost.n8nmikael.com.br via /api/portal/set-password.' },
       { type: 'fix', text: 'Criadores: ao criar um novo criador, o creator_id retornado é usado imediatamente para definir a senha do portal, sem necessidade de etapa manual.' },
     ],
   },
@@ -14735,7 +14735,7 @@ function _creatorSlugify(value, fallback = 'criador') {
 
 function _creatorPortalUrl(slug) {
   const clean = String(slug || '').trim();
-  return clean ? `https://criador.metaporn.com.br/${clean}` : '';
+  return clean ? `https://criador.caripost.n8nmikael.com.br/${clean}` : '';
 }
 
 function _updateCreatorSlugHint() {
