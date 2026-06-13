@@ -4,6 +4,7 @@
 
   const STORAGE_KEY = 'mp_session_token';
   const LEGACY_SESSION_KEY = 'mp_session';
+  const LEGACY_API_KEY = 'adult_meta_api_key';
   let _loginShown = false;
   let _isOpen = null;
 
@@ -21,6 +22,18 @@
   function getToken() {
     return getLegacySession()?.token || localStorage.getItem(STORAGE_KEY) || '';
   }
+  function getApiKey() {
+    try {
+      return sessionStorage.getItem(LEGACY_API_KEY) || '';
+    } catch (_) { return ''; }
+  }
+  function applyAuthHeaders(headers) {
+    const token = getToken();
+    const apiKey = getApiKey();
+    if (token) headers['X-Session-Token'] = token;
+    if (apiKey) headers['X-API-Key'] = apiKey;
+    return headers;
+  }
   function setToken(t, user) {
     localStorage.setItem(STORAGE_KEY, t);
     if (user) sessionStorage.setItem(LEGACY_SESSION_KEY, JSON.stringify({ token: t, user }));
@@ -31,12 +44,11 @@
   }
 
   async function mpFetch(url, opts = {}) {
-    const token = getToken();
     const headers = { ...(opts.headers || {}) };
     if (!(opts.body instanceof FormData)) {
       headers['Content-Type'] = headers['Content-Type'] || 'application/json';
     }
-    if (token) headers['x-session-token'] = token;
+    applyAuthHeaders(headers);
     const res = await fetch(url, { ...opts, headers });
     if (res.status === 401) {
       if (_isOpen !== true) { clearToken(); showLogin(); }
@@ -110,7 +122,7 @@
           if (data.user) { setToken(token, data.user); _isOpen = false; return; }
         }
       }
-      const res = await fetch('/runs?limit=1');
+      const res = await fetch('/runs?limit=1', { headers: applyAuthHeaders({}) });
       if (res.status === 401) { _isOpen = false; showLogin(); }
       else { _isOpen = true; }
     } catch { _isOpen = true; }
@@ -283,8 +295,8 @@
         xhr.onerror = () => rej(new Error('Erro de rede no upload'));
         xhr.onabort = () => rej(new Error('Upload cancelado pelo navegador'));
         xhr.open('POST', '/uploads/local-stream?prefix=uploads&validate=1&delete_if_invalid=1');
-        const token = getToken();
-        if (token) xhr.setRequestHeader('X-Session-Token', token);
+        const authHeaders = applyAuthHeaders({});
+        Object.keys(authHeaders).forEach(name => xhr.setRequestHeader(name, authHeaders[name]));
         xhr.setRequestHeader('X-Filename', file.name || 'upload.bin');
         xhr.setRequestHeader('X-File-Size', String(file.size || 0));
         xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');

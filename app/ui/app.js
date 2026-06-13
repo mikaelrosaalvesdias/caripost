@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.8', date: '2026-06-13',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: upload via `/uploads/local-stream` agora tambem envia a `X-API-Key` salva pela UI antiga, evitando `missing_or_invalid_api_key` em ambientes com API key obrigatoria.' },
+    ],
+  },
+  {
     version: 'v1.19.7', date: '2026-06-13',
     items: [
       { type: 'fix', text: 'MetaPorn OS: upload de video passa a usar `/uploads/local-stream`, evitando falha de CORS/domínio no PUT direto do storage apos a migracao para CariPost.' },
