@@ -21,13 +21,20 @@ def _get_api_key() -> str:
 
 def require_api_key(request: Request):
     """
-    Check X-API-Key header. Returns JSONResponse(401) if invalid, None if OK.
+    Check browser session or X-API-Key header.
+    Returns JSONResponse(401) if invalid, None if OK.
     Compatible with the existing _require_api_key pattern in main.py.
     """
+    from .routers.auth import verify_session_token
+
+    session_token = request.headers.get("X-Session-Token", "")
+    if session_token and verify_session_token(session_token):
+        return None
+
     api_key = _get_api_key()
     if not api_key:
         return None  # no key configured → open
-    provided = request.headers.get("X-API-Key", "")
+    provided = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
     if provided != api_key:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return None

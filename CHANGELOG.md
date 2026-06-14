@@ -2,6 +2,10 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.19.12 - 2026-06-14
+
+- Alinha os routers modulares ao login do MetaPorn OS: `app/main_utils.py` agora aceita `X-Session-Token` valido antes de exigir API key, liberando leituras autenticadas em AutoEditor, Enhancer, Publicar, Criadores, DMCA, Agenda, Tendencias e Financeiro apos login normal.
+
 ## v1.19.11 - 2026-06-14
 
 - Corrige o upload do MetaPorn OS quando o usuario seleciona um video sem sessao valida: o overlay de login agora e aguardado e o mesmo arquivo continua o envio apos autenticar, com uma nova tentativa quando a sessao expira durante o upload.

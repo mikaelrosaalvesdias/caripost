@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.12', date: '2026-06-14',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: routers modulares agora aceitam o mesmo X-Session-Token do login, liberando AutoEditor, Enhancer, Publicar, Criadores, DMCA, Agenda, Tendencias e Financeiro apos autenticar.' },
+    ],
+  },
+  {
     version: 'v1.19.11', date: '2026-06-14',
     items: [
       { type: 'fix', text: 'MetaPorn OS: upload agora aguarda o login no overlay e retoma o mesmo arquivo selecionado, com uma nova tentativa quando a sessao expira.' },
