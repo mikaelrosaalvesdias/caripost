@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.11', date: '2026-06-14',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: upload agora aguarda o login no overlay e retoma o mesmo arquivo selecionado, com uma nova tentativa quando a sessao expira.' },
+    ],
+  },
+  {
     version: 'v1.19.10', date: '2026-06-13',
     items: [
       { type: 'fix', text: 'MetaPorn OS: a checagem inicial de auth preserva a abertura visual anterior e deixa o login aparecer somente quando uma ação protegida exigir credencial.' },

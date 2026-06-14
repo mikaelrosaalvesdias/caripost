@@ -7,6 +7,7 @@
   const LEGACY_API_KEY = 'adult_meta_api_key';
   let _loginShown = false;
   let _isOpen = null;
+  let _loginPromise = null;
 
   /* ── Contexto global compartilhado entre apps ──
      mpCtx.file = { object_key, filename, s (status), run_id? }
@@ -41,6 +42,9 @@
   function clearToken() {
     localStorage.removeItem(STORAGE_KEY);
     sessionStorage.removeItem(LEGACY_SESSION_KEY);
+  }
+  function hasAuthCredential() {
+    return !!(getToken() || getApiKey());
   }
   function isAuthError(data) {
     return !!data && typeof data === 'object' && (
@@ -83,7 +87,7 @@
 
   /* ── Login overlay ── */
   function showLogin() {
-    if (_loginShown) return;
+    if (_loginPromise) return _loginPromise;
     _loginShown = true;
     const el = document.createElement('div');
     el.id = 'mp-login-overlay';
@@ -106,32 +110,45 @@
         <div id="mp-login-err" style="color:#ff6b6b;font-size:13px;text-align:center;min-height:18px;"></div>
       </form>`;
     document.body.appendChild(el);
-    document.getElementById('mp-login-form').addEventListener('submit', async e => {
-      e.preventDefault();
-      const u = document.getElementById('mp-u').value.trim();
-      const p = document.getElementById('mp-p').value;
-      const errEl = document.getElementById('mp-login-err');
-      const btn = e.target.querySelector('button');
-      errEl.textContent = ''; btn.textContent = 'Entrando…'; btn.disabled = true;
-      try {
-        const res = await fetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: u, password: p }),
-        });
-        const data = await res.json();
-        if (data.ok && data.token) {
-          setToken(data.token, data.user);
-          _loginShown = false;
-          el.remove();
-        } else {
-          errEl.textContent = data.error === 'invalid_credentials' ? 'Usuário ou senha incorretos.' : (data.error || 'Erro');
-        }
-      } catch (err) {
-        errEl.textContent = 'Erro de conexão: ' + err.message;
-      } finally { btn.textContent = 'Entrar'; btn.disabled = false; }
+    _loginPromise = new Promise(resolve => {
+      document.getElementById('mp-login-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const u = document.getElementById('mp-u').value.trim();
+        const p = document.getElementById('mp-p').value;
+        const errEl = document.getElementById('mp-login-err');
+        const btn = e.target.querySelector('button');
+        errEl.textContent = ''; btn.textContent = 'Entrando…'; btn.disabled = true;
+        try {
+          const res = await fetch('/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u, password: p }),
+          });
+          const data = await res.json();
+          if (data.ok && data.token) {
+            setToken(data.token, data.user);
+            _loginShown = false;
+            _loginPromise = null;
+            el.remove();
+            resolve(true);
+          } else {
+            errEl.textContent = data.error === 'invalid_credentials' ? 'Usuário ou senha incorretos.' : (data.error || 'Erro');
+          }
+        } catch (err) {
+          errEl.textContent = 'Erro de conexão: ' + err.message;
+        } finally { btn.textContent = 'Entrar'; btn.disabled = false; }
+      });
     });
     setTimeout(() => document.getElementById('mp-u')?.focus(), 100);
+    return _loginPromise;
+  }
+
+  async function ensureAuth() {
+    if (hasAuthCredential()) return true;
+    _isOpen = false;
+    await showLogin();
+    if (hasAuthCredential()) return true;
+    throw new Error('Faça login antes de enviar o vídeo.');
   }
 
   async function checkAuth() {
@@ -308,40 +325,50 @@
     },
 
     async uploadFile(file, onProgress) {
-      if (!getToken() && !getApiKey()) {
-        _isOpen = false;
-        showLogin();
-        throw new Error('Faça login antes de enviar o vídeo.');
+      await ensureAuth();
+      const sendUpload = async () => {
+        const xhr = new XMLHttpRequest();
+        return new Promise((res, rej) => {
+          xhr.upload.onprogress = e => {
+            if (onProgress && e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
+          };
+          xhr.onload = () => {
+            let data = {};
+            try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+            if (xhr.status >= 200 && xhr.status < 300 && data.ok && data.object_key) {
+              res(data);
+              return;
+            }
+            if (xhr.status === 401 || isAuthError(data)) {
+              _isOpen = false;
+              clearToken();
+              rej(new Error(data.detail || data.error || 'unauthorized'));
+              return;
+            }
+            rej(new Error(data.detail || data.error || 'Upload falhou: ' + xhr.status));
+          };
+          xhr.onerror = () => rej(new Error('Erro de rede no upload'));
+          xhr.onabort = () => rej(new Error('Upload cancelado pelo navegador'));
+          xhr.open('POST', '/uploads/local-stream?prefix=uploads&validate=1&delete_if_invalid=1');
+          const authHeaders = applyAuthHeaders({});
+          Object.keys(authHeaders).forEach(name => xhr.setRequestHeader(name, authHeaders[name]));
+          xhr.setRequestHeader('X-Filename', file.name || 'upload.bin');
+          xhr.setRequestHeader('X-File-Size', String(file.size || 0));
+          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+          xhr.send(file);
+        });
+      };
+      let data;
+      try {
+        data = await sendUpload();
+      } catch (err) {
+        if (err.message === 'missing_or_invalid_api_key' || err.message === 'unauthorized') {
+          await showLogin();
+          data = await sendUpload();
+        } else {
+          throw err;
+        }
       }
-      const xhr = new XMLHttpRequest();
-      const data = await new Promise((res, rej) => {
-        xhr.upload.onprogress = e => {
-          if (onProgress && e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
-        };
-        xhr.onload = () => {
-          let data = {};
-          try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
-          if (xhr.status >= 200 && xhr.status < 300 && data.ok && data.object_key) {
-            res(data);
-            return;
-          }
-          if (xhr.status === 401 || isAuthError(data)) {
-            _isOpen = false;
-            clearToken();
-            showLogin();
-          }
-          rej(new Error(data.detail || data.error || 'Upload falhou: ' + xhr.status));
-        };
-        xhr.onerror = () => rej(new Error('Erro de rede no upload'));
-        xhr.onabort = () => rej(new Error('Upload cancelado pelo navegador'));
-        xhr.open('POST', '/uploads/local-stream?prefix=uploads&validate=1&delete_if_invalid=1');
-        const authHeaders = applyAuthHeaders({});
-        Object.keys(authHeaders).forEach(name => xhr.setRequestHeader(name, authHeaders[name]));
-        xhr.setRequestHeader('X-Filename', file.name || 'upload.bin');
-        xhr.setRequestHeader('X-File-Size', String(file.size || 0));
-        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-        xhr.send(file);
-      });
       return data.object_key;
     },
 
