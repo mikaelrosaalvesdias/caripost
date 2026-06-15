@@ -2,6 +2,11 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.19.13 - 2026-06-15
+
+- Corrige o MetaPorn OS para que o tour automatico nao intercepte cliques nas areas de upload: o tutorial continua visivel, mas o usuario consegue selecionar videos no Analyzer e nos demais fluxos com upload.
+- Adiciona cache bust ao `os.css`, garantindo que a correcao do tour chegue ao navegador junto com os scripts `v=121100`.
+
 ## v1.19.12 - 2026-06-14
 
 - Alinha os routers modulares ao login do MetaPorn OS: `app/main_utils.py` agora aceita `X-Session-Token` valido antes de exigir API key, liberando leituras autenticadas em AutoEditor, Enhancer, Publicar, Criadores, DMCA, Agenda, Tendencias e Financeiro apos login normal.

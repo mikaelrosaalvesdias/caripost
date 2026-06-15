@@ -530,6 +530,12 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.19.13', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'MetaPorn OS: o tour automatico deixa de bloquear cliques nas areas de upload, permitindo selecionar videos no Analyzer e nos fluxos com upload mesmo com o tutorial visivel.' },
+    ],
+  },
+  {
     version: 'v1.19.12', date: '2026-06-14',
     items: [
       { type: 'fix', text: 'MetaPorn OS: routers modulares agora aceitam o mesmo X-Session-Token do login, liberando AutoEditor, Enhancer, Publicar, Criadores, DMCA, Agenda, Tendencias e Financeiro apos autenticar.' },

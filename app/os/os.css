@@ -527,7 +527,7 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .toast .btn{margin-left:auto}
 
 /* ─────────── COACHMARK / TOUR ─────────── */
-.tour-veil{position:fixed;inset:0;z-index:1500;background:rgba(5,5,10,.55);backdrop-filter:blur(1px)}
+.tour-veil{position:fixed;inset:0;z-index:1500;background:rgba(5,5,10,.55);backdrop-filter:blur(1px);pointer-events:none}
 .spot-ring{position:fixed;z-index:1501;border:2px solid var(--pri);border-radius:14px;pointer-events:none;
   box-shadow:0 0 0 9999px rgba(5,5,10,.62),0 0 24px rgba(255,45,85,.5);transition:.3s var(--spring)}
 .coach{position:fixed;z-index:1502;width:320px;background:var(--solid2);border:1px solid var(--pri-line);

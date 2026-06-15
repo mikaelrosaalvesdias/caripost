@@ -63,7 +63,7 @@ from .routers.video_enhancer import router as video_enhancer_router
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-app = FastAPI(title="Adult Meta (internal)", version="1.19.12")
+app = FastAPI(title="Adult Meta (internal)", version="1.19.13")
 
 app.add_middleware(
     CORSMiddleware,
