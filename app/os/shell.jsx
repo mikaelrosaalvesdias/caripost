@@ -1,4 +1,4 @@
-/* MetaPorn OS — shell: boot, desktop, window manager, taskbar, start, tour */
+/* Caripost OS — shell: boot, desktop, window manager, taskbar, start, tour */
 
 const APPS = {
   // Inteligência e Mídia
@@ -13,6 +13,7 @@ const APPS = {
   legenda:    { title: 'Legenda',         icon: 'captions',   C: 'LegendaApp',    w: 1040, h: 730, grp: 'edit' },
   logo:       { title: 'Logo',            icon: 'logo',       C: 'LogoApp',       w: 1020, h: 700, grp: 'edit' },
   teaser:     { title: 'Teaser',          icon: 'scissors',   C: 'TeaserApp',     w: 1020, h: 730, grp: 'edit' },
+  cortes:     { title: 'Cortes',          icon: 'cortes',     C: 'CortesApp',     w: 1020, h: 760, grp: 'edit' },
   thumbnail:  { title: 'Thumbnail',       icon: 'thumbnail',  C: 'ThumbnailApp',  w: 1020, h: 710, grp: 'edit' },
   // Operação e Distribuição
   criacao:    { title: 'Criação',         icon: 'post',       C: 'CriacaoApp',    w: 1060, h: 730, grp: 'op' },
@@ -42,14 +43,14 @@ const TOURS = {
   ],
   analyze: [
     { sel: '[data-tour="an-drop"]', title: 'Comece pelo vídeo', body: 'Arraste um ou vários vídeos. Eles sobem em fila paralela direto para o storage.' },
-    { sel: '[data-tour="an-go"]', title: 'Analise', body: 'Gera transcrição, prompt, visão IA e JSON — tudo nas abas do resultado ao lado.' },
+    { sel: '[data-tour="an-go"]', title: 'Analise', body: 'Gera referências, Vision IA e JSON — tudo nas abas do resultado ao lado.' },
   ],
 };
 
 function App() {
   const [booting, setBooting] = React.useState(true);
   const [bootPct, setBootPct] = React.useState(0);
-  const [bootMsg, setBootMsg] = React.useState('Iniciando MetaPorn OS…');
+  const [bootMsg, setBootMsg] = React.useState('Iniciando Caripost OS…');
   const [wins, setWins] = React.useState([]);
   const [zTop, setZTop] = React.useState(10);
   const [start, setStart] = React.useState(false);
@@ -67,7 +68,7 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    const msgs = ['Iniciando MetaPorn OS…', 'Carregando módulos de IA…', 'Conectando storage…', 'Verificando tokens…', 'Pronto.'];
+    const msgs = ['Iniciando Caripost OS…', 'Carregando módulos de IA…', 'Conectando storage…', 'Verificando tokens…', 'Pronto.'];
     const DUR = 2200, t0 = Date.now();
     let raf, done = false;
     const tick = () => {
@@ -125,7 +126,7 @@ function App() {
 
     <div className="wallpaper">
       <div className="aurora a1" /><div className="aurora a2" /><div className="aurora a3" />
-      <div className="wall-logo">META<em>P</em></div>
+      <div className="wall-logo">CARI<em>POST</em></div>
     </div>
 
     {/* desktop — grouped grid, ALL apps visible */}
@@ -165,7 +166,7 @@ function App() {
     {/* taskbar */}
     <div className="taskbar" onMouseDown={e => e.stopPropagation()}>
       <button className="tb-start" onClick={() => { setStart(s => !s); setTasks(false); setNotif(false); }}>
-        <span className="m">M</span>Iniciar</button>
+        <span className="m">C</span>Iniciar</button>
       <button className="tb-search" onClick={() => { setStart(true); setTasks(false); setNotif(false); }}><Icon name="search" />Buscar app ou ação<kbd>Ctrl + Espaço</kbd></button>
       <div className="tb-apps">
         {PINNED.map(id => {
@@ -190,11 +191,11 @@ function App() {
 
 function Boot({ pct, msg, onSkip }) {
   return <div className={'boot' + (pct >= 100 ? ' fade' : '')} onClick={onSkip} title="clique para entrar">
-    <div className="boot-mark">M</div>
-    <div className="boot-logo">Meta<em>Porn</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
+    <div className="boot-mark">C</div>
+    <div className="boot-logo">Cari<em>post</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
     <div className="boot-bar"><i style={{ width: pct + '%' }} /></div>
     <div className="boot-status">{msg} {pct < 100 && pct + '%'}</div>
-    <div className="boot-ver">v1.20.11 · admin platform</div>
+    <div className="boot-ver">v1.21.0 · cortes com IA</div>
   </div>;
 }
 
