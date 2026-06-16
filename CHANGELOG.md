@@ -2,6 +2,64 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.21.0 - 2026-06-15
+
+- Cortes com IA: Vision analisa frames e seleciona os melhores momentos automaticamente — sem sliders de minutagem.
+- Extração paralela de clips com semáforo (máx 3 simultâneos) — speedup de 3x.
+- Cache de análise por vídeo — mesma mídia não reanalisada pela IA.
+- UI redesenhadada do Cortes: limpa, sem inputs de quantidade/duração, foco em 1 clique.
+- Fallback automático para detecção clássica de cenas quando IA está indisponível.
+
+## v1.20.27 - 2026-06-15
+
+- Analyze passa a enviar `stt_provider: none`, pulando transcrição automática.
+- Backend respeita o modo sem transcrição e continua com referências do criador, Vision IA, geração de JSON/metadados e prompt.
+- OS remove a escolha de STT e a aba SRT do Analyze enquanto a etapa de legenda/transcrição estiver cortada.
+
+## v1.20.24 - 2026-06-15
+
+- Adiciona timeout por request no upload via XHR para partes que ficam penduradas sem disparar erro do navegador.
+- Timeouts passam a entrar no retry existente, preservando o arquivo selecionado e o fluxo de upload em partes.
+
+## v1.20.23 - 2026-06-15
+
+- Adiciona modal de tela inteira durante uploads, com circulo de progresso, percentual, tempo restante e descricao da etapa atual.
+- Mantem o fluxo existente de upload local/por partes e apenas adiciona feedback visual global.
+
+## v1.20.22 - 2026-06-15
+
+- Adiciona retry ao upload pequeno via `/uploads/local-stream`, reaproveitando o mesmo arquivo selecionado quando a rede oscila.
+- Mantem o caminho em partes para arquivos acima de 128 MB.
+
+## v1.20.21 - 2026-06-15
+
+- Corrige o registro auxiliar do complete idempotente para nao transformar upload finalizado em erro 500.
+- O armazenamento do resultado do complete passa a ser best effort: se falhar, o arquivo salvo ainda retorna sucesso ao navegador.
+
+## v1.20.20 - 2026-06-15
+
+- Troca a chamada de finalizacao de `/uploads/chunk/complete` para XHR, usando o mesmo canal que envia as partes do arquivo.
+- Mantem retries e idempotencia no complete para evitar falhas no fim de uploads grandes quando o navegador derruba `fetch` depois de transferir muitos chunks.
+
+## v1.20.19 - 2026-06-15
+
+- Serializa a finalizacao de uploads em partes por `upload_id`, evitando corrida entre tentativas repetidas de `/uploads/chunk/complete`.
+- Faz o abort aguardar a finalizacao em andamento e preservar uploads ja completados, impedindo perda do arquivo quando a rede oscila no fim do envio.
+
+## v1.20.18 - 2026-06-15
+
+- Reforca o upload em partes para redes instaveis: inicializacao, envio de partes e finalizacao agora fazem retry em falhas transitorias.
+- Torna `/uploads/chunk/complete` idempotente: se o arquivo for salvo mas a resposta se perder, uma nova tentativa retorna o mesmo `object_key` em vez de abortar o upload.
+
+## v1.20.17 - 2026-06-15
+
+- Corrige uploads grandes no Caripost: arquivos acima de 128 MB passam a ser enviados em partes para `/uploads/chunk/*`, montados no storage local e validados antes de serem aceitos.
+- Mantem `/uploads/local-stream` para arquivos menores e evita voltar ao fluxo antigo de PUT direto/presigned no S3.
+
+## v1.20.16 - 2026-06-15
+
+- Alinha as versoes publicas do Caripost OS e do painel ao backend em producao, removendo indicadores antigos e forçando novo cache bust dos assets do OS.
+
 ## v1.19.13 - 2026-06-15
 
 - Corrige o MetaPorn OS para que o tour automatico nao intercepte cliques nas areas de upload: o tutorial continua visivel, mas o usuario consegue selecionar videos no Analyzer e nos demais fluxos com upload.

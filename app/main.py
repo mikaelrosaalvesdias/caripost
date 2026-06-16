@@ -61,9 +61,10 @@ from .routers.auth import router as auth_router, verify_session_token
 from .routers.video_enhancer import router as video_enhancer_router
 
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
+from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.19.13")
+app = FastAPI(title="Adult Meta (internal)", version="1.21.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,16 +75,30 @@ app.add_middleware(
 )
 
 
-class NoCacheHtmlMiddleware(BaseHTTPMiddleware):
-    """Force no-cache on HTML/JS so browsers always load the latest UI."""
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        ct = response.headers.get("content-type", "")
-        if "text/html" in ct or request.url.path.startswith("/ui/"):
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-        return response
+class NoCacheHtmlMiddleware:
+    """Force no-cache on UI assets without wrapping request upload streams."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path") or ""
+
+        async def send_with_no_cache(message):
+            if message.get("type") == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                ct = headers.get("content-type", "")
+                if "text/html" in ct or path.startswith("/ui/"):
+                    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                    headers["Pragma"] = "no-cache"
+                    headers["Expires"] = "0"
+            await send(message)
+
+        await self.app(scope, receive, send_with_no_cache)
 
 
 app.add_middleware(NoCacheHtmlMiddleware)
@@ -2833,11 +2848,39 @@ def _persist_local_ref_from_path(*, src_path: str, media_ref: str) -> Dict[str, 
     }
 
 
+def _persist_local_ref_by_move(*, src_path: str, media_ref: str) -> Dict[str, Any]:
+    abs_path = _local_media_abs_path_from_ref(media_ref)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    try:
+        os.replace(src_path, abs_path)
+    except OSError:
+        shutil.copyfile(src_path, abs_path)
+        try:
+            os.remove(src_path)
+        except FileNotFoundError:
+            pass
+    size_bytes = max(0, int(os.path.getsize(abs_path) or 0))
+    return {
+        "object_key": media_ref,
+        "public_url": _build_local_media_url(media_ref),
+        "size_bytes": size_bytes,
+        "storage_kind": "local",
+        "storage_path": abs_path,
+    }
+
+
 def _store_local_path(*, src_path: str, prefix: str, filename: str, content_type: str = "application/octet-stream") -> Dict[str, Any]:
     safe_prefix = _sanitize_storage_prefix(prefix, "uploads")
     safe_name = _safe_storage_filename(filename, "upload.bin")
     rel_path = f"{safe_prefix}/{datetime.now(timezone.utc).strftime('%Y/%m/%d')}/{uuid.uuid4()}-{safe_name}"
     return _persist_local_ref_from_path(src_path=src_path, media_ref=_local_media_ref(rel_path))
+
+
+def _store_local_path_by_move(*, src_path: str, prefix: str, filename: str, content_type: str = "application/octet-stream") -> Dict[str, Any]:
+    safe_prefix = _sanitize_storage_prefix(prefix, "uploads")
+    safe_name = _safe_storage_filename(filename, "upload.bin")
+    rel_path = f"{safe_prefix}/{datetime.now(timezone.utc).strftime('%Y/%m/%d')}/{uuid.uuid4()}-{safe_name}"
+    return _persist_local_ref_by_move(src_path=src_path, media_ref=_local_media_ref(rel_path))
 
 
 def _store_teaser_with_name(*, src_path: str, run_id: str, burned_object_key: str = "") -> Dict[str, Any]:
@@ -5331,7 +5374,12 @@ class AnalyzeRequest(BaseModel):
     original_filename: str = ""
     transcript: Optional[Transcript] = None
 
-    # Referências e Filtros
+    # Conteúdo social (Caripost)
+    creator_id: Optional[str] = None
+    platforms: List[str] = Field(default_factory=lambda: ["youtube", "instagram"])
+    stt_provider: Optional[str] = None
+
+    # Referências e Filtros (legado adulto — ignorado)
     ref_sites: List[str] = Field(default_factory=lambda: ["xvideos"])
     ref_actor: Optional[str] = None
     ref_actor_count: Optional[str] = None
@@ -5486,7 +5534,7 @@ def _maybe_delete_uploaded_video(req: AnalyzeRequest) -> Optional[str]:
         return f"delete_failed:{_safe_error_detail(e, 'storage_delete_failed')}"
 
 
-async def _analyze_core(req: AnalyzeRequest) -> Dict[str, Any]:
+async def _analyze_core(req: AnalyzeRequest, request: Optional[Request] = None) -> Dict[str, Any]:
     """Core analyze logic (no auth). Called by /analyze and /analyze/start."""
     run_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
@@ -5524,8 +5572,8 @@ async def _analyze_core(req: AnalyzeRequest) -> Dict[str, Any]:
                         _emit_analyze_progress(25, "Extraindo frames por cena…")
                         _thresh_s = settings_get(key="vision:scene_threshold")
                         _maxf_s = settings_get(key="vision:max_adult_frames")
-                        scene_threshold = float(_thresh_s["value"]) if _thresh_s else 0.32
-                        max_frames = int(_maxf_s["value"]) if _maxf_s else 10
+                        scene_threshold = float(_thresh_s["value"]) if _thresh_s else 0.22
+                        max_frames = int(_maxf_s["value"]) if _maxf_s else 40
                         frame_items, _cut_pts = await asyncio.to_thread(
                             _extract_intelligent_adult_keyframes,
                             in_path=in_path,
@@ -5564,323 +5612,191 @@ async def _analyze_core(req: AnalyzeRequest) -> Dict[str, Any]:
         if vision_debug.get("probe_auto"):
             probe = vision_debug["probe_auto"]
 
-        _emit_analyze_progress(65, "Buscando referências…")
-        # transcript snippet (local STT)
+        # ── Transcrição automática (gera SRT/segments p/ legenda) ──
+        # stt_provider=none permite Analyze leve: referências + Vision + JSON,
+        # sem travar o servidor em Whisper/legendas.
+        skip_transcription = (req.stt_provider or "").strip().lower() in {
+            "none", "skip", "off", "disabled", "no", "sem_transcricao", "sem-transcricao"
+        }
+        if skip_transcription:
+            _emit_analyze_progress(55, "Transcrição pulada; seguindo com referência e Vision…")
+        elif (not (req.transcript and (req.transcript.text or req.transcript.segments))) and req.video_object_key and request is not None:
+            _emit_analyze_progress(55, "Transcrevendo áudio…")
+            try:
+                t_req = TranscribeRequest(
+                    video_object_key=req.video_object_key,
+                    provider=(req.stt_provider or "auto"),
+                    adult_mode=False,
+                )
+                t_res = await transcribe(t_req, request)
+                if isinstance(t_res, dict) and t_res.get("ok") and isinstance(t_res.get("transcript"), dict):
+                    t = t_res["transcript"]
+                    req.transcript = Transcript(
+                        provider=t.get("provider"),
+                        lang=t.get("lang"),
+                        text=t.get("text") or "",
+                        segments=t.get("segments") or None,
+                        srt=t.get("srt") or None,
+                    )
+            except Exception as _te:
+                print(f"[analyze] transcrição automática falhou: {_te}", flush=True)
+
         transcript_text = (req.transcript.text if req.transcript and req.transcript.text else "").strip()
         transcript_snip = transcript_text[:500] if transcript_text else ""
-        transcript_lang = (req.transcript.lang if req.transcript else None) or ""
 
-        # Query automática: construída do conteúdo do vídeo (idioma, visão, transcrição)
-        auto_query = _build_smart_search_query(
-            vision_analysis=vision_analysis,
-            transcript_lang=transcript_lang,
-            transcript_text=transcript_text,
-        )
-
-        # Filtros explícitos do usuário
-        ref_actor = (req.ref_actor or "").strip()
-        ref_actor_count = (req.ref_actor_count or "").strip()
-        ref_country = (req.ref_country or "").strip()
-        ref_category = (req.ref_category or "").strip()
-        ref_studio = (req.ref_studio or "").strip()
-
-        has_taxonomy_filters = any([ref_country, ref_category, ref_actor_count])
-        has_structured_filters = bool(ref_actor) or bool(ref_studio)
-        has_numeric_filters = any([
-            req.ref_dur_min is not None,
-            req.ref_dur_max is not None,
-            req.ref_views_min is not None,
-            req.ref_views_max is not None,
-            req.ref_likes_min is not None,
-        ])
-        has_user_filters = has_taxonomy_filters or has_structured_filters or has_numeric_filters
-        active_filter_count = sum(
-            1 for _flag in [
-                bool(ref_actor),
-                bool(ref_actor_count),
-                bool(ref_country),
-                bool(ref_category),
-                bool(ref_studio),
-                req.ref_dur_min is not None,
-                req.ref_dur_max is not None,
-                req.ref_views_min is not None,
-                req.ref_views_max is not None,
-                req.ref_likes_min is not None,
-            ] if _flag
-        )
-        # Evita "results aleatórios": só permite fallback relaxado quando há no máximo 1 filtro ativo.
-        allow_relaxed_profile_fallback = active_filter_count <= 1 and bool(ref_actor or ref_studio)
-
-        # Duration: usuário sobrescreve; fallback calcula ±30% da duração real do vídeo
-        _probe_dur = probe.get("duration_seconds") if probe else None
-        auto_dur_min: Optional[int] = None
-        auto_dur_max: Optional[int] = None
-        if _probe_dur and _probe_dur > 0:
-            _margin = max(120, int(_probe_dur * 0.3))
-            auto_dur_min = max(0, int(_probe_dur) - _margin)
-            auto_dur_max = int(_probe_dur) + _margin
-        ref_dur_min = req.ref_dur_min if req.ref_dur_min is not None else auto_dur_min
-        ref_dur_max = req.ref_dur_max if req.ref_dur_max is not None else auto_dur_max
-
-        # ── xvideos_top: referências principais ───────────────────────────────
-        # Regra: quando usuário define QUALQUER filtro (ator/studio/país/categoria/duração/views/likes),
-        # os resultados principais devem respeitar esses filtros; não misturar com busca automática aleatória.
-        xvideos_top: Dict = {"videos": [], "top_tags": [], "avg_duration_minutes": None}
-        top_used_relevance_fallback = False
-        if has_user_filters:
+        # ── Referências do criador (sem scraping — contexto de estilo) ──
+        _emit_analyze_progress(65, "Carregando referências do criador…")
+        creator: Optional[Dict[str, Any]] = None
+        creator_refs: List[str] = []
+        if req.creator_id:
             try:
-                xvideos_top = await asyncio.to_thread(
-                    fetch_search_videos,
-                    query="",
-                    limit=req.limit,
-                    sort="views",
-                    actor=ref_actor,
-                    actor_count=ref_actor_count,
-                    country=ref_country,
-                    category=ref_category,
-                    studio=ref_studio,
-                    dur_min=ref_dur_min,
-                    dur_max=ref_dur_max,
-                    views_min=req.ref_views_min,
-                    views_max=req.ref_views_max,
-                    likes_min=req.ref_likes_min,
-                )
-            except Exception as _xe:
-                print(f"xvideos_top (filtros_usuario_estritos) failed: {_xe}")
-            if not (xvideos_top.get("videos") or []):
-                try:
-                    xvideos_top = await asyncio.to_thread(
-                        fetch_search_videos,
-                        query="",
-                        limit=req.limit,
-                        sort="relevance",
-                        actor=ref_actor,
-                        actor_count=ref_actor_count,
-                        country=ref_country,
-                        category=ref_category,
-                        studio=ref_studio,
-                        dur_min=ref_dur_min,
-                        dur_max=ref_dur_max,
-                        views_min=req.ref_views_min,
-                        views_max=req.ref_views_max,
-                        likes_min=req.ref_likes_min,
-                    )
-                    top_used_relevance_fallback = bool(xvideos_top.get("videos") or [])
-                except Exception as _xe:
-                    print(f"xvideos_top (fallback_relevance_estrito) failed: {_xe}")
-        elif auto_query:
-            # Sem filtros do usuário → usa conteúdo analisado do vídeo
-            try:
-                xvideos_top = await asyncio.to_thread(
-                    fetch_search_videos,
-                    query=auto_query,
-                    limit=req.limit,
-                    sort="views",
-                    dur_min=ref_dur_min,
-                    dur_max=ref_dur_max,
-                )
-            except Exception as _xe:
-                print(f"xvideos_top (auto) failed: {_xe}")
-        else:
-            # Sem vídeo nem filtros → tendência global
-            try:
-                xvideos_top = await asyncio.to_thread(fetch_top_videos, limit=req.limit)
-            except Exception as _xe:
-                print(f"xvideos_top (global) failed: {_xe}")
+                from .db_agency import creator_get
+                creator = creator_get(req.creator_id)
+            except Exception as _ce:
+                print(f"[analyze] creator_get falhou: {_ce}", flush=True)
+                creator = None
+        if creator:
+            for _k in ("reference_channels", "own_channel_urls"):
+                for _v in (creator.get(_k) or []):
+                    _v = str(_v).strip()
+                    if _v and _v not in creator_refs:
+                        creator_refs.append(_v)
 
-        # ── xvideos_search: busca complementar para enriquecer prompt ─────────
-        xvideos_search = None
-        _search_limit = min(req.limit, 20)
+        def _ctx_list(label: str, values: Any) -> str:
+            vals = [str(v).strip() for v in (values or []) if str(v).strip()]
+            return f"- **{label}:** {', '.join(vals)}\n" if vals else ""
 
-        if has_user_filters:
-            if not top_used_relevance_fallback:
-                try:
-                    xvideos_search = await asyncio.to_thread(
-                        fetch_search_videos,
-                        query="",
-                        limit=_search_limit,
-                        sort="relevance",
-                        actor=ref_actor,
-                        actor_count=ref_actor_count,
-                        country=ref_country,
-                        category=ref_category,
-                        studio=ref_studio,
-                        dur_min=ref_dur_min,
-                        dur_max=ref_dur_max,
-                        views_min=req.ref_views_min,
-                        views_max=req.ref_views_max,
-                        likes_min=req.ref_likes_min,
-                    )
-                except Exception as _xe:
-                    print(f"xvideos_search (filtros_usuario_estritos) failed: {_xe}")
-
-                # Fallback estruturado quando a busca estrita volta vazia
-                _search_videos = (xvideos_search or {}).get("videos") if isinstance(xvideos_search, dict) else []
-                if (not _search_videos) and (not allow_relaxed_profile_fallback) and (ref_actor or ref_studio):
-                    print("xvideos_search fallback skipped (strict_multi_filter_mode)")
-                if (not _search_videos) and allow_relaxed_profile_fallback and ref_actor:
-                    try:
-                        xvideos_search = await asyncio.to_thread(
-                            fetch_pornstar_videos,
-                            name=ref_actor,
-                            limit=_search_limit,
-                        )
-                    except Exception as _xe:
-                        print(f"xvideos_pornstar fallback failed: {_xe}")
-                if ((not ((xvideos_search or {}).get("videos") or [])) and allow_relaxed_profile_fallback and ref_studio):
-                    try:
-                        xvideos_search = await asyncio.to_thread(
-                            fetch_channel_videos,
-                            name=ref_studio,
-                            limit=_search_limit,
-                        )
-                    except Exception as _xe:
-                        print(f"xvideos_channel fallback failed: {_xe}")
-        elif auto_query:
-            try:
-                xvideos_search = await asyncio.to_thread(
-                    fetch_search_videos,
-                    query=auto_query,
-                    limit=_search_limit,
-                    sort="relevance",
-                    dur_min=ref_dur_min,
-                    dur_max=ref_dur_max,
-                )
-            except Exception as _xe:
-                print(f"xvideos_search (auto_query) failed: {_xe}")
-        # Se não há query e não há filtros, search pode ficar nulo (top já cobre).
-
-        # Salva a query efetiva usada (para debug e re-busca futura)
-        def _source_query(src: Optional[Dict[str, Any]]) -> str:
-            try:
-                return str((((src or {}).get("method") or {}).get("params") or {}).get("query") or "").strip()
-            except Exception:
-                return ""
-
-        search_query = _source_query(xvideos_search) or _source_query(xvideos_top) or (auto_query if not has_user_filters else "")
-        if search_query:
-            if has_user_filters:
-                search_query_note = "derivada dos filtros do usuário (ator/studio/país/categoria/duração/views/likes)"
-            else:
-                search_query_note = f"gerada automaticamente: lang={transcript_lang or 'n/a'}, vision+transcrição"
-        else:
-            search_query_note = ""
-
-        # very simple suggestion: top tags from xvideos top + search
-        suggested_tags: List[str] = []
-        for tag, _count in xvideos_top.get("top_tags", []):
-            if tag and tag not in suggested_tags:
-                suggested_tags.append(tag)
-            if len(suggested_tags) >= 30:
-                break
-        if xvideos_search:
-            for tag, _count in xvideos_search.get("top_tags", []):
-                if tag and tag not in suggested_tags:
-                    suggested_tags.append(tag)
-                if len(suggested_tags) >= 30:
-                    break
-
-        # description suggestion: top tags + duration target
-        avg_min = xvideos_top.get("avg_duration_minutes")
-        duration_hint = f"~{round(avg_min)} min" if isinstance(avg_min, (int, float)) else ""
-
-        # Markdown prompt in pt-BR (but KEEP collected strings in original language)
-        top_refs = xvideos_top.get("videos", [])[: min(10, len(xvideos_top.get("videos", [])))]
-        refs_lines = []
-        for r in top_refs:
-            refs_lines.append(
-                f"- {r.get('title')}\n  - url: {r.get('url')}\n  - duração: {r.get('duration_raw')}\n  - views: {r.get('views_raw')}\n  - likes: {r.get('likes_raw')}\n  - tags(originais): {', '.join((r.get('tags') or [])[:25])}"
+        creator_ctx = ""
+        if creator:
+            creator_ctx = (
+                "## Perfil do criador / empresa\n"
+                f"- **Nome:** {creator.get('name') or creator.get('brand_name') or 'N/A'}\n"
+                + _ctx_list("Canais de referência", creator.get("reference_channels"))
+                + _ctx_list("Canais próprios", creator.get("own_channel_urls"))
+                + _ctx_list("Categorias preferidas", creator.get("preferred_categories"))
+                + _ctx_list("Tags habituais", creator.get("preferred_tags"))
+                + (f"- **Descrição/estilo:** {creator.get('performer_description')}\n" if creator.get("performer_description") else "")
+                + (f"- **Idioma do conteúdo:** {creator.get('content_language')}\n" if creator.get("content_language") else "")
+                + "\n"
             )
-        search_refs_lines = []
-        if xvideos_search:
-            for r in (xvideos_search.get("videos", [])[:5] or []):
-                search_refs_lines.append(
-                    f"- {r.get('title')}\n  - url: {r.get('url')}\n  - duração: {r.get('duration_raw')}\n  - views: {r.get('views_raw')}\n  - likes: {r.get('likes_raw')}\n  - tags(originais): {', '.join((r.get('tags') or [])[:25])}"
-                )
 
-        # Vision section for prompt
+        # tags sugeridas: visão + tags habituais do criador
+        suggested_tags = []
+        if vision_analysis and isinstance(vision_analysis, dict):
+            for _tag in (vision_analysis.get("tags") or []):
+                if _tag and _tag not in suggested_tags:
+                    suggested_tags.append(_tag)
+        if creator:
+            for _tag in (creator.get("preferred_tags") or []):
+                if _tag and _tag not in suggested_tags:
+                    suggested_tags.append(_tag)
+        suggested_tags = suggested_tags[:40]
+
+        _probe_dur = probe.get("duration_seconds") if probe else None
+        duration_hint = f"~{round(float(_probe_dur))}s" if _probe_dur else ""
+        platforms_list = [str(p).strip().lower() for p in (req.platforms or []) if str(p).strip()] or ["youtube", "instagram"]
+
+        # ── Seção de visão p/ prompt (schema mainstream) ──
         vision_prompt_section = ""
         if vision_analysis and isinstance(vision_analysis, dict):
             va = vision_analysis
+            _scenes = va.get("scenes") or []
             vision_prompt_section = (
-                "## Análise Visual Automática (Vision IA — frames extraídos por cenas)\n"
+                "## Análise Visual Automática (Vision IA — frames por cena)\n"
                 f"- **Descrição:** {va.get('description', 'N/A')}\n"
                 f"- **Tags detectadas:** {', '.join(va.get('tags') or [])}\n"
-                f"- **Performers:** {json.dumps(va.get('performers') or {}, ensure_ascii=False)}\n"
+                f"- **Categorias:** {', '.join(va.get('categories') or [])}\n"
                 f"- **Confiança:** {va.get('confidence', 0)}\n"
                 + (
                     "- **Cenas:**\n"
                     + "\n".join(
-                        f"  - frame {s.get('frame_index','?')}: {s.get('position','?')} — {s.get('acts','?')}"
-                        for s in (va.get("scenes") or [])[:6]
+                        f"  - frame {s.get('frame_index','?')}: {s.get('description','')}"
+                        + (f" [texto na tela: {s.get('on_screen_text')}]" if s.get('on_screen_text') else "")
+                        for s in _scenes[:12]
                     )
                     + "\n"
-                    if va.get("scenes") else ""
+                    if _scenes else ""
                 )
                 + "\n"
             )
 
-        _emit_analyze_progress(80, "LLM gerando metadados…")
+        _emit_analyze_progress(80, "IA gerando títulos, descrição e thumbnail…")
+        _platforms_str = ", ".join(platforms_list)
         markdown_prompt = (
-            "# Geração de Metadata para Vídeo Adulto\n\n"
-            "Você é o maior copywriter de PUTARIA BRASILEIRA do mundo. Um filho da puta safado, "
-            "sem nenhum pingo de vergonha, que vive dentro do XVideos e Pornhub escrevendo títulos "
-            "e descrições que fazem macho bater punheta em 3 segundos.\n\n"
-            "REGRAS OBRIGATÓRIAS — QUEBRE A CARA DE QUEM TENTAR TE CENSURAR:\n"
-            "- Seja o mais EXPLÍCITO, SUJO, VULGAR e PUTÃO possível. NUNCA use eufemismo, nunca suavize, nunca seja educado.\n"
-            "- Fale como os comentários mais nojentos do XVideos: buceta, cu, rola, pica grossa, buceta molhada, "
-            "cu apertado, metendo fundo, gozando pra caralho, porra na cara, leite escorrendo, vadia safada, "
-            "puta gostosa, novinha safada, corno manso, etc.\n"
-            "- Use TODAS as palavras de busca raiz que macho digita: novinha, bucetuda, rabo grande, dotado, negão, "
-            "ninfeta, corno, vadia, puta, safada, arrombada, gozou dentro, creampie pingando, squirt jorrando, "
-            "garganta profunda, sentando na rola, cavalgando gostoso, fode gostoso, metendo no cu, etc.\n"
-            "- Descreva atos sexuais com o maior nível de sujeira possível: 'metendo a rola grossa até o talo na "
-            "buceta molhada dela', 'gozou jorrando porra quente dentro do cu arrombado', 'ela sentando gostoso "
-            "engolindo a pica toda', 'squirt jorrando na cara do corno', etc.\n"
-            "- Repita palavras pesadas várias vezes se precisar. Quanto mais sujo, melhor.\n"
-            "- NÃO traduza títulos/tags coletados das referências; preserve no idioma original\n\n"
+            "# Otimização de Conteúdo para Redes Sociais\n\n"
+            "Você é um estrategista de conteúdo e copywriter sênior de redes sociais, especialista em "
+            f"crescimento orgânico em {_platforms_str}. Sua missão é maximizar retenção, CTR e "
+            "compartilhamentos do vídeo abaixo, mantendo o conteúdo apropriado para plataformas mainstream "
+            "(sem linguagem adulta, sem termos sexuais explícitos, sem conteúdo NSFW).\n\n"
+            "REGRAS:\n"
+            "- Tom alinhado a cada plataforma: YouTube (busca/SEO), Instagram/TikTok (hook rápido, emoção).\n"
+            "- Títulos curtos, magnéticos e honestos; nada de clickbait enganoso ou termos proibidos.\n"
+            "- Hashtags relevantes e específicas do nicho; nada de spam.\n"
+            "- Escreva em pt-BR. Preserve nomes próprios/marcas no idioma original.\n\n"
             "## Dados do vídeo\n"
             f"- duração: {req.video_metadata.get('probe', {}).get('duration_seconds', 'n/a')}s\n"
-            f"- resolução: {req.video_metadata.get('probe', {}).get('width', 'n/a')}x{req.video_metadata.get('probe', {}).get('height', 'n/a')}\n\n"
+            f"- resolução: {req.video_metadata.get('probe', {}).get('width', 'n/a')}x{req.video_metadata.get('probe', {}).get('height', 'n/a')}\n"
+            f"- plataformas-alvo: {_platforms_str}\n\n"
             + vision_prompt_section
-            + "## Filtros de Referência\n"
-            f"- Sites: {', '.join(req.ref_sites)}\n"
-            + (f"- Performer: {req.ref_actor}\n" if req.ref_actor else "")
-            + (f"- Qtd performers: {req.ref_actor_count}\n" if req.ref_actor_count else "")
-            + (f"- País: {req.ref_country}\n" if req.ref_country else "")
-            + (f"- Categoria: {req.ref_category}\n" if req.ref_category else "")
-            + (f"- Studio: {req.ref_studio}\n" if req.ref_studio else "")
-            + (f"- Duração: {req.ref_dur_min or 0}s–{req.ref_dur_max or 'inf'}s\n" if req.ref_dur_min or req.ref_dur_max else "")
-            + "\n"
-            "## Transcrição do vídeo (áudio original)\n"
+            + creator_ctx
+            + "## Transcrição do vídeo (áudio original)\n"
             + (f"```\n{transcript_text[:4000]}\n```\n\n" if transcript_text else "(sem áudio/transcrição)\n\n")
-            + "## Referências de alto desempenho (preserve strings originais)\n"
-            + ("\n".join(refs_lines) + "\n\n" if refs_lines else "(sem referências)\n\n")
-            + "## Referências por busca temática\n"
-            + (f"- query usada: `{search_query}` *({search_query_note})*\n" if search_query else "- query: (não definida)\n")
-            + ("\n".join(search_refs_lines) + "\n\n" if search_refs_lines else "(sem resultados)\n\n")
-            + "## TAREFA — FAÇA TUDO BEM PUTÃO\n\n"
-            + "**1. TAGS (40 no total):**\n"
-            + "   - 30 tags principais em inglês (atos, posições, categorias, características físicas, fetiches)\n"
-            + "   - 10 long-tail em inglês bem específicas\n\n"
-            + "**2. TÍTULOS (3 opções em pt-BR):**\n"
-            + "   - Título A: ato principal + característica do performer\n"
-            + "   - Título B: fetiche/categoria + contexto\n"
-            + "   - Título C: clickbait bem safado e nojento\n"
-            + "   - Use obrigatoriamente palavras como: 'fode', 'meteu', 'gozou', 'buceta', 'cu', 'rola', "
-            + "'pica', 'sentando', 'cavalgando', 'arrombada', 'gozando dentro', 'porra na cara'\n\n"
-            + "**3. DESCRIÇÃO (pt-BR, 150-250 palavras):**\n"
-            + "   - Descreva TODOS os atos sexuais na ordem cronológica de forma BEM EXPLÍCITA, detalhada e suja pra caralho\n"
-            + "   - Fale das características físicas das putas: buceta raspada, rabo empinado, peitos grandes, boca de chupar rola, etc.\n"
-            + "   - Termine com as 15 tags mais relevantes separadas por vírgula\n\n"
-            + "**4. RECOMENDAÇÕES DE PUBLICAÇÃO:**\n"
-            + "   - Duração ideal para este tipo de putaria\n"
-            + "   - Hook dos primeiros 10 segundos (bem safado)\n"
-            + "   - Sugestão de thumbnail (a cena mais puta e impactante)\n"
-            + "   - Categoria principal e subcategorias\n\n"
-            + "Agora vai, seu filho da puta: escreva tudo do jeito mais safado, nojento e viciante possível. "
-            + "Quero o macho lendo e já ficando de rola dura.\n"
+            + "## TAREFA\n\n"
+            + "1. TÍTULOS: 3 opções em pt-BR (A=SEO/busca p/ YouTube; B=curiosidade/hook p/ Reels/Shorts/TikTok; C=benefício/resultado claro).\n"
+            + "2. DESCRIÇÃO: pt-BR 80-180 palavras, agrega valor e termina com CTA (seguir/comentar/salvar).\n"
+            + "3. HASHTAGS: 15-25 relevantes do nicho.\n"
+            + "4. CONCEITO DE THUMBNAIL: cena/frame de maior impacto + texto curto (3-5 palavras) que deve aparecer.\n"
+            + "5. RECOMENDAÇÕES: hook dos primeiros 3s, duração ideal por formato, melhor horário/frequência.\n\n"
+            + "Responda SOMENTE em JSON válido com as chaves: "
+            + "{\"titles\": [\"...\",\"...\",\"...\"], \"description\": \"...\", \"hashtags\": [\"#...\"], "
+            + "\"thumbnail_concept\": \"...\", \"recommendations\": \"...\"}\n"
         )
+
+        # ── Geração real via LLM (best-effort, mainstream) ──
+        grok_out: Dict[str, Any] = {"markdown_prompt_ptbr_keep_original": markdown_prompt}
+        try:
+            from .llm import ProviderSpec, run_providers_to_completion
+            from .db import settings_get as _settings_get
+            _provider = None
+            for _pname, _pmodel in [
+                ("openai", "gpt-4o-mini"),
+                ("gemini", "gemini-1.5-flash"),
+                ("grok", "grok-3"),
+                ("openrouter", "x-ai/grok-3-fast"),
+                ("deepseek", "deepseek-chat"),
+            ]:
+                _saved = _settings_get(key=f"token:{_pname}")
+                if _saved and _saved.get("value"):
+                    _provider = ProviderSpec(name=_pname, model=_pmodel, api_key=_saved["value"])
+                    break
+            if _provider is not None:
+                _res = await run_providers_to_completion(
+                    providers=[_provider],
+                    prompt=markdown_prompt,
+                    params={"temperature": 0.6, "max_tokens": 1800},
+                )
+                _txt = (_res[0].get("text") or "").strip() if _res else ""
+                if _txt:
+                    grok_out["raw"] = _txt
+                    _clean = _txt
+                    if "```" in _clean:
+                        _clean = _clean.split("```", 2)[1] if _clean.count("```") >= 2 else _clean
+                        if _clean.lstrip().lower().startswith("json"):
+                            _clean = _clean.lstrip()[4:]
+                    try:
+                        _parsed = json.loads(_clean[_clean.find("{"): _clean.rfind("}") + 1])
+                        grok_out["generated"] = _parsed
+                        _titles = _parsed.get("titles") or []
+                        grok_out["title"] = (_titles[0] if _titles else "") or ""
+                        grok_out["description"] = _parsed.get("description") or ""
+                        for _h in (_parsed.get("hashtags") or []):
+                            _h = str(_h).lstrip("#").strip()
+                            if _h and _h not in suggested_tags:
+                                suggested_tags.append(_h)
+                    except Exception as _pe:
+                        print(f"[analyze] parse JSON do LLM falhou: {_pe}", flush=True)
+        except Exception as _le:
+            print(f"[analyze] geração LLM falhou: {_le}", flush=True)
 
         result = {
             "run_id": run_id,
@@ -5888,18 +5804,18 @@ async def _analyze_core(req: AnalyzeRequest) -> Dict[str, Any]:
             "suggested": {
                 "tags": suggested_tags,
                 "description_template": (
-                    "Suggested tags based on current high-view references: "
-                    + ", ".join(suggested_tags[:10])
-                    + (f". Target duration: {duration_hint}." if duration_hint else ".")
+                    "Tags sugeridas: " + ", ".join(suggested_tags[:10])
+                    + (f". Duração-alvo: {duration_hint}." if duration_hint else ".")
                 ),
             },
             "inputs": {
                 "transcript_present": bool(transcript_text),
+                "transcript_skipped": bool(skip_transcription),
                 "transcript_snippet": transcript_snip,
+                "platforms": platforms_list,
+                "creator_id": req.creator_id,
             },
-            "grok": {
-                "markdown_prompt_ptbr_keep_original": markdown_prompt,
-            },
+            "grok": grok_out,
             "vision": {
                 "analysis": vision_analysis,
                 "frames_count": len(frames_b64),
@@ -5908,15 +5824,8 @@ async def _analyze_core(req: AnalyzeRequest) -> Dict[str, Any]:
                 "debug": vision_debug,
             },
             "sources": {
-                "xvideos_top": xvideos_top,
-                "xvideos_search": xvideos_search,
-                "xvideos_search_query": search_query,
-                "xvideos_filter_debug": {
-                    "has_user_filters": has_user_filters,
-                    "active_filter_count": active_filter_count,
-                    "allow_relaxed_profile_fallback": allow_relaxed_profile_fallback,
-                    "top_used_relevance_fallback": top_used_relevance_fallback,
-                },
+                "creator_refs": creator_refs,
+                "platforms": platforms_list,
             },
         }
 
@@ -5974,7 +5883,7 @@ async def analyze(req: AnalyzeRequest, request: Request):
     auth_err = _require_api_key(request)
     if auth_err:
         return auth_err
-    return await _analyze_core(req)
+    return await _analyze_core(req, request)
 
 
 @app.post("/analyze/start")
@@ -5993,7 +5902,7 @@ async def analyze_start(req: AnalyzeRequest, request: Request):
         tok = _analyze_job_ctx.set(job_id)
         try:
             print(f"[analyze/start] job={job_id} iniciando", flush=True)
-            result = await _analyze_core(req)
+            result = await _analyze_core(req, request)
             async_job_merge(kind=_ASYNC_JOB_KIND_ANALYZE, job_id=job_id, patch={
                 "status": "done", "progress_pct": 100, "detail": "✓ Análise concluída",
                 "result": result, "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -8470,6 +8379,308 @@ async def _concat_worker(job_id: str, first_key: str, second_key: str, run_id: O
         _teaser_job_put(job_id, {"status": "error", "error": "internal_error", "detail": str(e)})
 
 
+# ════════════════ CORTES — clipes verticais p/ redes sociais ════════════════
+_CORTES_ASPECTS = {
+    "9:16": (1080, 1920),
+    "1:1":  (1080, 1080),
+    "4:5":  (1080, 1350),
+}
+_CORTES_SEMAPHORE = asyncio.Semaphore(2)
+_CORTES_VISION_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def _cortes_crop_scale_filter(aspect: str, max_h: int) -> str:
+    w, h = _CORTES_ASPECTS.get(aspect, _CORTES_ASPECTS["9:16"])
+    out_h = max(320, min(int(max_h or h), 2160))
+    out_w = int(round(out_h * w / h))
+    out_w -= out_w % 2
+    out_h -= out_h % 2
+    return (
+        f"crop='min(iw,ih*{w}/{h})':'min(ih,iw*{h}/{w})',"
+        f"scale={out_w}:{out_h}:flags=lanczos,setsar=1"
+    )
+
+
+async def _analyze_frames_for_clips(frames: List[str]) -> Optional[Dict[str, Any]]:
+    or_saved = settings_get(key="token:openrouter")
+    or_key = (or_saved or {}).get("value")
+    xai_saved = settings_get(key="token:grok")
+    xai_key = (xai_saved or {}).get("value")
+    if not or_key and not xai_key:
+        return None
+
+    content: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"Analise estes {len(frames)} frames extraídos de um vídeo adulto em momentos de mudança de cena. "
+                "Identifique os MELHORES MOMENTOS para cortes verticais (Shorts/Reels). "
+                "Priorize cenas com: ação intensa, close-ups, mudanças de posição, expressões faciais marcantes, boa iluminação. "
+                "EVITE: cenas escuras, momentos de pausa/transição, takes muito longos sem variação.\n\n"
+                "Responda SOMENTE em JSON com a chave 'clips' contendo uma lista de objetos:\n"
+                "- 'start_time': float (segundo exato do início do corte)\n"
+                "- 'end_time': float (segundo exato do fim do corte)\n"
+                "- 'reason': string pt-BR explicando por que este momento é bom (ex: 'Close-up intenso com expressão marcante')\n"
+                "- 'quality_score': float 0.0-1.0 indicando qualidade do corte\n\n"
+                "REGRAS:\n"
+                "- Máximo 8 clips\n"
+                "- Duração entre 15s e 60s cada clip (start_time e end_time devem refletir isso)\n"
+                "- Os clips NÃO devem se sobrepor (espaçamento mínimo de 2s entre eles)\n"
+                "- Distribua os clips ao longo do vídeo (não todos no mesmo minuto)\n"
+                "- Inclua pelo menos um hook/abertura forte no primeiro clip"
+            ),
+        }
+    ]
+    for b64 in frames:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+        })
+
+    messages = [
+        {
+            "role": "system",
+            "content": "Você é um editor de vídeo especializado em criar cortes virais para redes sociais (Shorts, Reels, TikTok). Sua função é analisar frames e identificar os momentos de maior impacto. Responda apenas JSON."
+        },
+        {
+            "role": "user",
+            "content": content
+        }
+    ]
+
+    if or_key:
+        result = await _openrouter_vision_chat_json(api_key=or_key, messages=messages)
+    else:
+        result = {"_api_error": 503, "_detail": "no_openrouter_key"}
+
+    if (result.get("_api_error") or result.get("_exception")) and xai_key:
+        r2 = await _xai_vision_chat_json(api_key=xai_key, messages=messages)
+        if not r2.get("_api_error") and not r2.get("_exception"):
+            r2["_or_attempts"] = result.get("_model_attempts") or []
+            result = r2
+
+    if "clips" not in result and not result.get("_api_error") and not result.get("_exception"):
+        return {"_refused": True, "_raw": result}
+    return result
+
+
+async def _ai_select_best_clips(video_path: str, duration: float, td: str) -> List[Dict[str, Any]]:
+    frame_items, _ = await asyncio.to_thread(
+        _extract_intelligent_adult_keyframes,
+        in_path=video_path,
+        out_dir=td,
+        duration=duration,
+        max_frames=20,
+        scene_threshold=0.25,
+        quick=True,
+    )
+    if not frame_items:
+        step = max(10.0, duration / 20)
+        for i in range(20):
+            t = step * i
+            if t >= duration:
+                break
+            out_path = os.path.join(td, f"kf_{i:03d}.jpg")
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", video_path,
+                "-frames:v", "1", "-vf", "scale=-2:480:flags=bilinear",
+                "-q:v", "3", out_path,
+            ], capture_output=True, timeout=30)
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                frame_items.append({"path": out_path, "timestamp": t})
+
+    frames_b64 = [
+        _file_to_base64(str(item.get("path") or ""))
+        for item in frame_items
+        if str(item.get("path") or "").strip()
+    ]
+    if not frames_b64:
+        return []
+
+    result = await _analyze_frames_for_clips(frames_b64)
+    if not result or result.get("_api_error") or result.get("_exception") or result.get("_refused"):
+        return []
+
+    clips_raw = result.get("clips") or []
+    if not clips_raw:
+        return []
+
+    valid = []
+    for c in clips_raw:
+        start = float(c.get("start_time") or 0)
+        end = float(c.get("end_time") or 0)
+        score = float(c.get("quality_score") or 0)
+        clip_dur = end - start
+        if clip_dur >= 10 and end <= duration and start >= 0 and score >= 0.3:
+            valid.append({
+                "start": start,
+                "end": end,
+                "duration": round(clip_dur, 1),
+                "reason": (c.get("reason") or "").strip(),
+                "quality_score": round(score, 2),
+            })
+
+    valid.sort(key=lambda x: x["quality_score"], reverse=True)
+    return valid[:10]
+
+
+async def _cortes_worker(job_id, video_object_key, aspect,
+                         output_max_height, output_crf, run_id=""):
+    def _patch(p):
+        cur = async_job_get(kind="cortes", job_id=job_id) or {}
+        cur.update(p)
+        cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+        async_job_put(kind="cortes", job_id=job_id, payload=cur)
+
+    _patch({"status": "running", "detail": "Baixando vídeo…", "progress_pct": 5})
+    s3 = _s3_client()
+    try:
+        with tempfile.TemporaryDirectory(prefix="cortes-", dir=_preferred_tmpdir_root("cortes")) as td:
+            in_path = os.path.join(td, "input_video")
+            await asyncio.to_thread(_download_media_ref_to_file, media_ref=video_object_key, out_path=in_path, s3=s3)
+            duration = await asyncio.to_thread(_probe_duration, in_path)
+            if not duration or duration <= 0:
+                _patch({"status": "error", "detail": "Não foi possível ler a duração do vídeo.", "progress_pct": 0})
+                return
+
+            _patch({"detail": "IA analisando frames para encontrar melhores momentos…", "progress_pct": 15})
+
+            cache_key = f"cortes_vision:{video_object_key}"
+            cached = _CORTES_VISION_CACHE.get(cache_key)
+            if cached is not None:
+                ai_clips = cached
+                _patch({"detail": f"Usando análise em cache — {len(ai_clips)} cena(s) encontrada(s).", "progress_pct": 20})
+            else:
+                ai_clips = await _ai_select_best_clips(in_path, duration, td)
+                if ai_clips:
+                    _CORTES_VISION_CACHE[cache_key] = ai_clips
+                    if len(_CORTES_VISION_CACHE) > 500:
+                        _CORTES_VISION_CACHE.clear()
+
+            if not ai_clips:
+                _patch({"detail": "IA indisponível, usando detecção automática de cenas…", "progress_pct": 20})
+                timestamps = await asyncio.to_thread(_detect_scene_timestamps, in_path, 0.30, duration)
+                default_count = 6
+                if len(timestamps) < default_count:
+                    step = max(1.0, duration / (default_count + 1))
+                    timestamps = sorted(set([round(step * (i + 1), 2) for i in range(default_count)] + list(timestamps)))
+                picked_ts = []
+                clip_dur = min(30.0, duration / 3)
+                for t in timestamps:
+                    if t + clip_dur <= duration + 0.5 and all(abs(t - p) >= clip_dur for p in picked_ts):
+                        picked_ts.append(t)
+                    if len(picked_ts) >= 6:
+                        break
+                if not picked_ts:
+                    picked_ts = [0.0]
+                ai_clips = [{"start": t, "end": min(t + clip_dur, duration), "duration": clip_dur, "reason": "Cena detectada automaticamente", "quality_score": 0.5} for t in picked_ts]
+
+            vf = _cortes_crop_scale_filter(aspect, output_max_height)
+            outputs = []
+
+            async def _extract_one(i, clip_info):
+                start = clip_info["start"]
+                end = min(clip_info["end"], duration)
+                clip_dur = round(end - start, 3)
+                if clip_dur < 3:
+                    return None
+                async with _CORTES_SEMAPHORE:
+                    clip_path = os.path.join(td, f"corte_{i + 1}.mp4")
+                    cmd = [
+                        "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", in_path, "-t", f"{clip_dur:.3f}",
+                        "-vf", vf, "-c:v", "libx264", "-crf", str(output_crf), "-preset", "veryfast",
+                        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", clip_path,
+                    ]
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                    )
+                    _, errb = await proc.communicate()
+                    if proc.returncode != 0 or not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1024:
+                        print(f"[cortes] job={job_id} corte {i + 1} falhou rc={proc.returncode}", flush=True)
+                        return None
+                    stored = await asyncio.to_thread(
+                        _store_local_path, src_path=clip_path, prefix="cortes",
+                        filename=f"corte_{aspect.replace(':', 'x')}_{i + 1}.mp4", content_type="video/mp4",
+                    )
+                    return {
+                        "object_key": stored["object_key"],
+                        "start": start,
+                        "end": end,
+                        "duration": clip_dur,
+                        "reason": clip_info.get("reason", ""),
+                        "quality_score": clip_info.get("quality_score", 0.5),
+                        "index": i + 1,
+                    }
+
+            _patch({"detail": f"Extraindo {len(ai_clips)} corte(s) em paralelo…", "progress_pct": 25})
+            tasks = [_extract_one(i, c) for i, c in enumerate(ai_clips)]
+            results = await asyncio.gather(*tasks)
+            outputs = [r for r in results if r is not None]
+
+            if not outputs:
+                _patch({"status": "error", "detail": "Nenhum corte foi gerado.", "progress_pct": 0})
+                return
+
+            for i, o in enumerate(outputs):
+                _patch({"progress_pct": 25 + int(70 * (i + 1) / len(outputs))})
+
+            _patch({
+                "status": "done",
+                "detail": f"✓ {len(outputs)} corte(s) gerado(s) por IA ({aspect}).",
+                "progress_pct": 100,
+                "clips": outputs,
+                "object_key": outputs[0]["object_key"],
+                "aspect": aspect,
+            })
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        _patch({"status": "error", "detail": f"Erro: {exc}", "progress_pct": 0})
+
+
+@app.post("/api/cortes/generate")
+async def cortes_generate(request: Request):
+    """Gera cortes verticais (Shorts/Reels) usando IA para selecionar as melhores cenas. Retorna job_id."""
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    video_object_key = (body.get("video_object_key") or "").strip()
+    if not video_object_key or not _is_valid_object_key(video_object_key):
+        return JSONResponse({"error": "invalid_video_object_key"}, status_code=400)
+    aspect = str(body.get("aspect") or "9:16").strip()
+    if aspect not in _CORTES_ASPECTS:
+        aspect = "9:16"
+    output_max_height = max(640, min(int(body.get("output_max_height") or 1920), 2160))
+    output_crf = max(18, min(int(body.get("output_crf") or 23), 32))
+    run_id = (body.get("run_id") or "").strip()
+    job_id = str(uuid.uuid4())
+    async_job_put(kind="cortes", job_id=job_id, payload={
+        "status": "queued", "progress_pct": 0, "detail": "Na fila…",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    asyncio.create_task(_cortes_worker(
+        job_id, video_object_key, aspect,
+        output_max_height, output_crf, run_id,
+    ))
+    return {"job_id": job_id}
+
+
+@app.get("/api/cortes/status/{job_id}")
+async def cortes_status(job_id: str, request: Request):
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    job = async_job_get(kind="cortes", job_id=job_id)
+    if not job:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return job
+
+
 @app.post("/api/teaser/generate")
 async def teaser_generate(request: Request):
     """Gera teaser com as melhores cenas do vídeo. Retorna job_id para polling."""
@@ -10041,23 +10252,307 @@ def google_drive_intake_import_status(job_id: str, request: Request):
     return job
 
 
-# ── Upload chunked legado (desativado) ───────────────────────────────────────
-# O fluxo antigo de chunk/multipart foi aposentado para blindar o sistema
-# contra uploads incompletos/corrompidos. Qualquer cliente legado deve migrar
-# para `/uploads/local-stream`, que recebe o arquivo inteiro em uma única requisição.
+# ── Upload chunked local ─────────────────────────────────────────────────────
+# Arquivos pequenos continuam em `/uploads/local-stream`. Para arquivos grandes,
+# o navegador envia partes menores; o backend monta e valida antes de mover para
+# o storage local definitivo.
+
+_CHUNK_UPLOAD_ID_RE = re.compile(r"^[a-f0-9]{32}$", re.IGNORECASE)
+_CHUNK_UPLOAD_MAX_PARTS = 100000
+_CHUNK_UPLOAD_READ_SIZE = 1024 * 1024
+_chunk_complete_locks: Dict[str, threading.Lock] = {}
+_chunk_complete_locks_guard = threading.Lock()
 
 
-def _chunk_upload_disabled_response() -> JSONResponse:
-    return JSONResponse(
-        {
-            "error": "chunk_upload_disabled",
-            "detail": (
-                "O upload particionado foi desativado para evitar corrupção de arquivo. "
-                "Use /uploads/local-stream e envie o arquivo completo em uma única requisição."
-            ),
-        },
-        status_code=410,
+class _ChunkUploadHTTPError(Exception):
+    def __init__(self, payload: Dict[str, Any], status_code: int = 400):
+        super().__init__(str(payload.get("error") or "chunk_upload_error"))
+        self.payload = payload
+        self.status_code = status_code
+
+
+def _chunk_upload_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "sim", "on"}
+
+
+def _chunk_upload_root() -> str:
+    root = _preferred_tmpdir_root("upload-chunks") or os.path.join(tempfile.gettempdir(), "upload-chunks")
+    os.makedirs(root, exist_ok=True)
+    return os.path.abspath(root)
+
+
+def _safe_chunk_upload_id(upload_id: str) -> str:
+    safe_id = str(upload_id or "").strip().lower()
+    if not _CHUNK_UPLOAD_ID_RE.fullmatch(safe_id):
+        raise ValueError("invalid_upload_id")
+    return safe_id
+
+
+def _chunk_upload_dir(upload_id: str) -> str:
+    safe_id = _safe_chunk_upload_id(upload_id)
+    root = _chunk_upload_root()
+    path = os.path.abspath(os.path.join(root, safe_id))
+    if os.path.commonpath([root, path]) != root:
+        raise ValueError("invalid_upload_path")
+    return path
+
+
+def _chunk_parts_dir(upload_id: str) -> str:
+    return os.path.join(_chunk_upload_dir(upload_id), "parts")
+
+
+def _chunk_part_path(upload_id: str, part_number: int) -> str:
+    return os.path.join(_chunk_parts_dir(upload_id), f"{int(part_number):06d}.part")
+
+
+def _chunk_meta_path(upload_id: str) -> str:
+    return os.path.join(_chunk_upload_dir(upload_id), "meta.json")
+
+
+def _read_chunk_upload_meta(upload_id: str) -> Dict[str, Any]:
+    try:
+        with open(_chunk_meta_path(upload_id), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def _write_chunk_upload_meta(upload_id: str, meta: Dict[str, Any]) -> None:
+    upload_dir = _chunk_upload_dir(upload_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    os.makedirs(_chunk_parts_dir(upload_id), exist_ok=True)
+    tmp_path = f"{_chunk_meta_path(upload_id)}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, sort_keys=True)
+    os.replace(tmp_path, _chunk_meta_path(upload_id))
+
+
+def _delete_chunk_upload(upload_id: str, *, delete_db: bool = True) -> None:
+    try:
+        shutil.rmtree(_chunk_upload_dir(upload_id), ignore_errors=True)
+    except Exception:
+        pass
+    if delete_db:
+        try:
+            multipart_delete(_safe_chunk_upload_id(upload_id))
+        except Exception:
+            pass
+
+
+def _chunk_completed_key(upload_id: str) -> str:
+    return f"chunk-upload-complete:{_safe_chunk_upload_id(upload_id)}"
+
+
+def _chunk_completed_get(upload_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        row = settings_get(key=_chunk_completed_key(upload_id))
+    except Exception:
+        row = None
+    if not row:
+        return None
+    try:
+        data = json.loads(row.get("value") or "{}")
+    except Exception:
+        data = None
+    return data if isinstance(data, dict) and data.get("ok") and data.get("object_key") else None
+
+
+def _chunk_completed_set(upload_id: str, payload: Dict[str, Any]) -> None:
+    safe_payload = dict(payload)
+    now = datetime.now(timezone.utc).isoformat()
+    safe_payload["completed_at"] = now
+    try:
+        settings_set(
+            key=_chunk_completed_key(upload_id),
+            value=json.dumps(safe_payload, ensure_ascii=False),
+            updated_at=now,
+        )
+    except Exception:
+        pass
+
+
+def _chunk_complete_lock(upload_id: str) -> threading.Lock:
+    safe_id = _safe_chunk_upload_id(upload_id)
+    with _chunk_complete_locks_guard:
+        lock = _chunk_complete_locks.get(safe_id)
+        if lock is None:
+            lock = threading.Lock()
+            _chunk_complete_locks[safe_id] = lock
+        return lock
+
+
+def _chunk_upload_error(error: str, detail: str, status_code: int = 400, **extra: Any) -> JSONResponse:
+    payload = {"error": error, "detail": detail}
+    payload.update(extra)
+    return JSONResponse(payload, status_code=status_code)
+
+
+def _chunk_upload_complete_sync(upload_id: str, state: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
+    safe_id = _safe_chunk_upload_id(upload_id)
+    expected_size = max(0, int(state.get("expected_size") or meta.get("expected_size") or 0))
+    expected_parts = max(0, int(state.get("expected_parts") or meta.get("expected_parts") or 0))
+    if expected_size <= 0 or expected_parts <= 0:
+        raise _ChunkUploadHTTPError(
+            {
+                "error": "invalid_chunk_upload_state",
+                "detail": "Sessão de upload sem tamanho ou quantidade de partes esperada.",
+            },
+            status_code=400,
+        )
+
+    received_parts = set()
+    for part in state.get("parts") or []:
+        try:
+            pn = int(part.get("PartNumber"))
+        except Exception:
+            continue
+        if pn > 0:
+            received_parts.add(pn)
+    missing = [pn for pn in range(1, expected_parts + 1) if pn not in received_parts or not os.path.exists(_chunk_part_path(safe_id, pn))]
+    if missing:
+        raise _ChunkUploadHTTPError(
+            {
+                "error": "missing_upload_parts",
+                "detail": f"Upload incompleto: {len(missing)} parte(s) ainda nao chegaram.",
+                "missing_parts": missing[:50],
+                "expected_parts": expected_parts,
+                "received_parts": len(received_parts),
+            },
+            status_code=409,
+        )
+
+    safe_name = _safe_storage_filename(str(meta.get("filename") or state.get("object_key") or "upload.bin"), "upload.bin")
+    safe_prefix = _sanitize_storage_prefix(str(meta.get("prefix") or "uploads"), "uploads")
+    content_type = _normalize_content_type(str(meta.get("content_type") or "")) or _guess_response_content_type(safe_name)
+    assembled_path = os.path.join(_chunk_upload_dir(safe_id), f"assembled-{safe_name}")
+    tmp_assembled = f"{assembled_path}.tmp"
+    sha256 = hashlib.sha256()
+    written = 0
+
+    try:
+        with open(tmp_assembled, "wb") as out:
+            for pn in range(1, expected_parts + 1):
+                part_path = _chunk_part_path(safe_id, pn)
+                with open(part_path, "rb") as inp:
+                    while True:
+                        buf = inp.read(4 * 1024 * 1024)
+                        if not buf:
+                            break
+                        out.write(buf)
+                        sha256.update(buf)
+                        written += len(buf)
+        os.replace(tmp_assembled, assembled_path)
+    finally:
+        try:
+            if os.path.exists(tmp_assembled):
+                os.remove(tmp_assembled)
+        except Exception:
+            pass
+
+    if written <= 0:
+        _delete_chunk_upload(safe_id)
+        raise _ChunkUploadHTTPError(
+            {"error": "empty_upload", "detail": "O arquivo recebido está vazio."},
+            status_code=400,
+        )
+    if expected_size > 0 and written != expected_size:
+        _delete_chunk_upload(safe_id)
+        raise _ChunkUploadHTTPError(
+            {
+                "error": "upload_size_mismatch",
+                "detail": (
+                    "O tamanho montado nao bate com o tamanho informado pelo navegador. "
+                    f"Esperado: {expected_size} bytes; recebido: {written} bytes."
+                ),
+                "expected_bytes": expected_size,
+                "received_bytes": written,
+            },
+            status_code=400,
+        )
+
+    validation_result = None
+    should_validate = _chunk_upload_bool(meta.get("validate")) and _looks_like_video_upload(filename=safe_name, content_type=content_type)
+    if should_validate:
+        validation_result = _validate_video_path_sync(
+            in_path=assembled_path,
+            size_bytes=written,
+            storage_path=assembled_path,
+        )
+        if not validation_result.get("ok"):
+            if _chunk_upload_bool(meta.get("delete_if_invalid")):
+                _delete_chunk_upload(safe_id)
+            raise _ChunkUploadHTTPError(
+                {
+                    "error": "uploaded_media_invalid",
+                    "detail": validation_result.get("detail") or "O vídeo enviado falhou na validação.",
+                    "deleted": _chunk_upload_bool(meta.get("delete_if_invalid")),
+                    "validation": validation_result,
+                },
+                status_code=422,
+            )
+
+    stored = _store_local_path_by_move(
+        src_path=assembled_path,
+        prefix=safe_prefix,
+        filename=safe_name,
+        content_type=content_type,
     )
+    result = {
+        "ok": True,
+        **stored,
+        "sha256": sha256.hexdigest(),
+        "validation": validation_result,
+        "chunked": True,
+        "parts": expected_parts,
+    }
+    _chunk_completed_set(safe_id, result)
+    _delete_chunk_upload(safe_id)
+    return result
+
+
+def _chunk_upload_complete_locked(upload_id: str) -> Dict[str, Any]:
+    safe_id = _safe_chunk_upload_id(upload_id)
+    with _chunk_complete_lock(safe_id):
+        completed = _chunk_completed_get(safe_id)
+        if completed:
+            return completed
+        state = multipart_get(safe_id)
+        if not state:
+            raise _ChunkUploadHTTPError(
+                {
+                    "error": "upload_not_found",
+                    "detail": "Sessão de upload não encontrada ou expirada.",
+                },
+                status_code=404,
+            )
+        meta = _read_chunk_upload_meta(safe_id)
+        if not meta:
+            completed = _chunk_completed_get(safe_id)
+            if completed:
+                return completed
+            raise _ChunkUploadHTTPError(
+                {
+                    "error": "upload_files_expired",
+                    "detail": "Arquivos temporários do upload expiraram. Envie o vídeo novamente.",
+                },
+                status_code=410,
+            )
+        return _chunk_upload_complete_sync(safe_id, state, meta)
+
+
+def _chunk_upload_abort_locked(upload_id: str) -> None:
+    safe_id = _safe_chunk_upload_id(upload_id)
+    with _chunk_complete_lock(safe_id):
+        if _chunk_completed_get(safe_id):
+            return
+        _delete_chunk_upload(safe_id)
 
 
 @app.post("/uploads/chunk/init")
@@ -10065,7 +10560,74 @@ async def upload_chunk_init(request: Request):
     auth_err = _require_api_key(request)
     if auth_err:
         return auth_err
-    return _chunk_upload_disabled_response()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    filename = str(body.get("filename") or "upload.bin")
+    safe_name = _safe_storage_filename(filename, "upload.bin")
+    safe_prefix = _sanitize_storage_prefix(str(body.get("prefix") or "uploads"), "uploads")
+    content_type = _normalize_content_type(str(body.get("content_type") or "")) or _guess_response_content_type(safe_name)
+    try:
+        expected_size = max(0, int(body.get("size") or body.get("total_size") or body.get("expected_size") or 0))
+    except Exception:
+        expected_size = 0
+    try:
+        chunk_size = max(1024 * 1024, int(body.get("chunk_size") or (16 * 1024 * 1024)))
+    except Exception:
+        chunk_size = 16 * 1024 * 1024
+    chunk_size = min(chunk_size, 128 * 1024 * 1024)
+    try:
+        expected_parts = max(0, int(body.get("total_parts") or body.get("expected_parts") or 0))
+    except Exception:
+        expected_parts = 0
+    if expected_parts <= 0 and expected_size > 0:
+        expected_parts = (expected_size + chunk_size - 1) // chunk_size
+
+    if expected_size <= 0:
+        return _chunk_upload_error("invalid_upload_size", "Tamanho do arquivo ausente ou inválido.", 400)
+    if expected_parts <= 0 or expected_parts > _CHUNK_UPLOAD_MAX_PARTS:
+        return _chunk_upload_error("invalid_upload_parts", "Quantidade de partes ausente ou inválida.", 400)
+
+    upload_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+    meta = {
+        "upload_id": upload_id,
+        "filename": safe_name,
+        "original_filename": filename,
+        "prefix": safe_prefix,
+        "content_type": content_type,
+        "expected_size": expected_size,
+        "expected_parts": expected_parts,
+        "chunk_size": chunk_size,
+        "validate": _chunk_upload_bool(body.get("validate")),
+        "delete_if_invalid": _chunk_upload_bool(body.get("delete_if_invalid")),
+        "created_at": now,
+    }
+    _write_chunk_upload_meta(upload_id, meta)
+    try:
+        multipart_create(
+            upload_id=upload_id,
+            object_key=safe_name,
+            minio_upload_id=f"local:{upload_id}",
+            created_at=now,
+            expected_size=expected_size,
+            expected_parts=expected_parts,
+        )
+    except Exception:
+        _delete_chunk_upload(upload_id, delete_db=False)
+        raise
+
+    return {
+        "ok": True,
+        "upload_id": upload_id,
+        "chunk_size": chunk_size,
+        "expected_size": expected_size,
+        "expected_parts": expected_parts,
+    }
 
 
 @app.post("/uploads/chunk/part")
@@ -10073,7 +10635,56 @@ async def upload_chunk_part(request: Request, upload_id: str = Form(...), part_n
     auth_err = _require_api_key(request)
     if auth_err:
         return auth_err
-    return _chunk_upload_disabled_response()
+    try:
+        safe_id = _safe_chunk_upload_id(upload_id)
+    except ValueError:
+        return _chunk_upload_error("invalid_upload_id", "ID de upload inválido.", 400)
+    state = multipart_get(safe_id)
+    if not state:
+        return _chunk_upload_error("upload_not_found", "Sessão de upload não encontrada ou expirada.", 404)
+    meta = _read_chunk_upload_meta(safe_id)
+    expected_parts = max(0, int(state.get("expected_parts") or meta.get("expected_parts") or 0))
+    if part_number < 1 or (expected_parts > 0 and part_number > expected_parts):
+        return _chunk_upload_error("invalid_part_number", "Número da parte inválido.", 400)
+
+    os.makedirs(_chunk_parts_dir(safe_id), exist_ok=True)
+    part_path = _chunk_part_path(safe_id, part_number)
+    tmp_path = f"{part_path}.tmp-{uuid.uuid4().hex}"
+    sha256 = hashlib.sha256()
+    written = 0
+    try:
+        with open(tmp_path, "wb") as out:
+            while True:
+                buf = await chunk.read(_CHUNK_UPLOAD_READ_SIZE)
+                if not buf:
+                    break
+                out.write(buf)
+                sha256.update(buf)
+                written += len(buf)
+        if written <= 0:
+            return _chunk_upload_error("empty_upload_part", "Parte recebida vazia.", 400)
+        os.replace(tmp_path, part_path)
+        etag = f"{written}:{sha256.hexdigest()}"
+        multipart_add_part(upload_id=safe_id, part_number=part_number, etag=etag)
+        return {
+            "ok": True,
+            "upload_id": safe_id,
+            "part_number": part_number,
+            "size_bytes": written,
+            "etag": etag,
+        }
+    except ClientDisconnect:
+        return _chunk_upload_error("client_disconnected", "O upload da parte foi interrompido.", 499, part_number=part_number)
+    finally:
+        try:
+            await chunk.close()
+        except Exception:
+            pass
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 @app.post("/uploads/chunk/complete")
@@ -10081,7 +10692,41 @@ async def upload_chunk_complete(request: Request):
     auth_err = _require_api_key(request)
     if auth_err:
         return auth_err
-    return _chunk_upload_disabled_response()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        safe_id = _safe_chunk_upload_id(str(body.get("upload_id") or ""))
+    except ValueError:
+        return _chunk_upload_error("invalid_upload_id", "ID de upload inválido.", 400)
+    try:
+        return await asyncio.to_thread(_chunk_upload_complete_locked, safe_id)
+    except _ChunkUploadHTTPError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
+    except Exception as exc:
+        return _chunk_upload_error("chunk_complete_failed", _safe_error_detail(exc, "chunk_complete_failed"), 500)
+
+
+@app.post("/uploads/chunk/abort")
+async def upload_chunk_abort(request: Request):
+    auth_err = _require_api_key(request)
+    if auth_err:
+        return auth_err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        safe_id = _safe_chunk_upload_id(str(body.get("upload_id") or ""))
+    except ValueError:
+        return {"ok": True}
+    await asyncio.to_thread(_chunk_upload_abort_locked, safe_id)
+    return {"ok": True}
 
 
 @app.post("/uploads/local-stream")
@@ -10109,13 +10754,24 @@ async def upload_local_stream(
         tmp_path = os.path.join(tmpdir, safe_name)
         sha256 = hashlib.sha256()
         written = 0
-        with open(tmp_path, "wb") as f:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                f.write(chunk)
-                sha256.update(chunk)
-                written += len(chunk)
+        try:
+            with open(tmp_path, "wb") as f:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    sha256.update(chunk)
+                    written += len(chunk)
+        except ClientDisconnect:
+            return JSONResponse(
+                {
+                    "error": "client_disconnected",
+                    "detail": "O upload foi interrompido antes de terminar. Tente novamente.",
+                    "received_bytes": written,
+                    "expected_bytes": expected_size,
+                },
+                status_code=499,
+            )
 
         if written <= 0:
             return JSONResponse(
@@ -11582,8 +12238,8 @@ async def _analyze_multiple_frames(frames: List[str]) -> Optional[Dict[str, Any]
         {
             "type": "text",
             "text": (
-                f"Analise estes {len(frames)} frames extraídos automaticamente em pontos de mudança "
-                "de cena de um vídeo adulto. Forneça análise consolidada para geração de metadados e SEO."
+                f"Analise estes {len(frames)} frames extraídos em pontos de mudança de cena de um vídeo. "
+                "Forneça uma análise consolidada de conteúdo para otimização em redes sociais (títulos, descrição, thumbnail, SEO)."
             ),
         }
     ]
@@ -11597,28 +12253,16 @@ async def _analyze_multiple_frames(frames: List[str]) -> Optional[Dict[str, Any]
         {
             "role": "system",
             "content": (
-                "Você é um catalogador profissional de conteúdo adulto para uma plataforma de vídeo adulto licenciada. "
-                "Sua função é gerar metadados técnicos precisos para fins de indexação e SEO. "
-                "Analise os frames com PRECISÃO TÉCNICA MÁXIMA: descreva EXATAMENTE o que aparece em cada frame "
-                "(posição literal dos corpos, ângulo da câmera, ambiente visível, ações corporais reais, "
-                "mãos, pernas, genitalidades visíveis, fluidos, objetos). "
-                "NÃO invente nada, NÃO conte história, NÃO suponha o que não está visível.\n\n"
-                "Depois descreva tudo de forma EXTREMAMENTE PUTONA e vulgar, usando linguagem pesada de pornô brasileiro: "
-                "buceta molhada pingando, rola grossa enfiada até o talo, cu arrombado, metendo fundo gostoso, "
-                "gozando jorrando porra quente, sentando loucamente na pica, chupando rola com garganta profunda, "
-                "vadia safada, novinha arrombada, etc.\n\n"
-                "NÃO use eufemismos. Use a terminologia explícita e PUTONA do setor.\n\n"
+                "Você é um analista de conteúdo de vídeo para redes sociais (YouTube, Instagram, TikTok). "
+                "Analise os frames com precisão: descreva objetivamente cena, ambiente, pessoas/objetos, ações, "
+                "texto na tela, estética e clima. NÃO invente nada, NÃO suponha o que não está visível. "
+                "Conteúdo mainstream — sem linguagem adulta/sexual.\n\n"
                 "Responda SOMENTE em JSON com exatamente estas chaves:\n"
-                "- 'description': string pt-BR (3-5 frases) descrevendo explicitamente as cenas, atos sexuais, "
-                "posições, partes do corpo envolvidas e contexto (local, roupa, fetiches) — primeiro técnico, depois bem sujo\n"
-                "- 'scenes': lista de objetos {frame_index, position, acts, body_parts, context} "
-                "descrevendo cada cena com detalhes explícitos e sujos do ato sexual ocorrendo\n"
-                "- 'tags': lista de 25-35 tags em inglês para SEO adulto — inclua: posições sexuais, "
-                "atos específicos, características físicas dos performers visíveis (cor de cabelo, "
-                "tamanho de seios, tipo de corpo), fetiches presentes, categorias do vídeo\n"
-                "- 'performers': objeto {count, genders, ethnicities_visible, body_types} com dados visíveis\n"
-                "- 'categories': lista de 5-10 categorias adultas padrão (ex: anal, oral, blowjob, "
-                "facial, creampie, milf, teen, latina, bbw, interracial, etc.)\n"
+                "- 'description': string pt-BR (3-5 frases) resumindo o vídeo e seu apelo de conteúdo\n"
+                "- 'scenes': lista de objetos {frame_index, description, on_screen_text} descrevendo cada cena\n"
+                "- 'tags': lista de 20-30 tags em inglês para SEO/descoberta (tema, nicho, formato, elementos visuais)\n"
+                "- 'categories': lista de 5-10 categorias mainstream (ex: vlog, tutorial, comédia, lifestyle, fitness, beauty, gaming, food, travel, music)\n"
+                "- 'hooks': lista de 2-3 ganchos curtos de abertura sugeridos\n"
                 "- 'confidence': float 0.0-1.0 indicando confiança na análise"
             )
         },
@@ -11669,21 +12313,14 @@ async def screenshot_analyze(req: ScreenshotAnalyzeRequest, request: Request):
         {
             "role": "system",
             "content": (
-                "Você é um catalogador profissional de conteúdo adulto para plataforma licenciada. "
-                "Analise a imagem com PRECISÃO TÉCNICA MÁXIMA: descreva EXATAMENTE o que aparece na tela, "
-                "posição literal dos corpos, ângulo da câmera, ambiente visível, ações corporais reais, "
-                "mãos, pernas, objetos e genitalidades visíveis. "
-                "NÃO invente nada, NÃO conte história, NÃO suponha o que não está visível.\n\n"
-                "Depois descreva tudo de forma EXTREMAMENTE PUTONA e vulgar, usando linguagem pesada de pornô brasileiro: "
-                "buceta molhada pingando, rola grossa, punheta firme, chupando pica, enfiando no cu, "
-                "gozando jorrando, vadia safada, novinha arrombada, sentando gostoso, etc.\n\n"
+                "Você é um analista de conteúdo de vídeo para redes sociais. "
+                "Analise a imagem objetivamente: descreva cena, ambiente, pessoas/objetos, ações, texto na tela, "
+                "estética e clima. NÃO invente nada, NÃO suponha o que não está visível. Conteúdo mainstream, sem linguagem adulta.\n\n"
                 "Responda SOMENTE em JSON com:\n"
-                "- 'description' (pt-BR, 2-4 frases: comece descrevendo a posição técnica exata + ambiente + ações visíveis, "
-                "depois use linguagem bem suja e explícita para detalhar os atos sexuais, partes do corpo e fluidos)\n"
-                "- 'tags' (25-30 tags em inglês: atos, posições, categorias, físico dos performers)\n"
-                "- 'categories' (lista de 5 categorias adultas padrão do vídeo)\n"
-                "- 'confidence' (0.0-1.0)\n"
-                "- 'nsfw_score' (0.0-1.0)"
+                "- 'description' (pt-BR, 2-4 frases: o que aparece, ambiente, ações e apelo de conteúdo)\n"
+                "- 'tags' (20-25 tags em inglês: tema, nicho, formato, elementos visuais)\n"
+                "- 'categories' (lista de 5 categorias mainstream)\n"
+                "- 'confidence' (0.0-1.0)"
             )
         },
         {

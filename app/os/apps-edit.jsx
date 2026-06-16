@@ -1,4 +1,4 @@
-/* MetaPorn OS — Edição & Conteúdo: Legenda, Logo, Teaser, Thumbnail */
+/* Caripost OS — Edição & Conteúdo: Legenda, Logo, Teaser, Thumbnail */
 
 /* Barra "arquivo selecionado" comum aos apps de edição */
 function CtxFileBar({ file, onPick }) {
@@ -768,4 +768,116 @@ function ThumbnailApp() {
   </div>;
 }
 
-Object.assign(window, { CtxFileBar, FilePicker, LegendaApp, LogoApp, TeaserApp, ThumbnailApp });
+/* ── CORTES — clipes verticais p/ redes sociais (Shorts/Reels) ── */
+function CortesApp() {
+  const [file, setFile] = React.useState(window.mpCtx?.file || null);
+  const [picking, setPicking] = React.useState(false);
+  const [aspect, setAspect] = React.useState('9:16');
+  const [crf, setCrf] = React.useState(23);
+  const [busy, setBusy] = React.useState(false);
+  const [pct, setPct] = React.useState(0);
+  const [detail, setDetail] = React.useState('');
+  const [clips, setClips] = React.useState([]);
+  const [err, setErr] = React.useState('');
+  const [aiPhase, setAiPhase] = React.useState(''); // '' | 'analyzing' | 'fallback' | 'done'
+  const pollRef = React.useRef(null);
+
+  React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  async function generate() {
+    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    setBusy(true); setErr(''); setClips([]); setPct(2); setDetail('Enviando…'); setAiPhase('');
+    try {
+      const r = await window.mpApi.cortesGenerate({
+        video_object_key: file.object_key,
+        aspect,
+        output_crf: crf,
+      });
+      if (!r.job_id) throw new Error(r.error || r.detail || 'Falha ao iniciar');
+      setAiPhase('analyzing');
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await window.mpApi.cortesStatus(r.job_id);
+          setPct(st.progress_pct || 0); setDetail(st.detail || '');
+          if (st.detail && st.detail.includes('IA indisponível')) setAiPhase('fallback');
+          if (st.status === 'done') {
+            clearInterval(pollRef.current); pollRef.current = null;
+            setClips(st.clips || []); setBusy(false); setAiPhase('done');
+          } else if (st.status === 'error') {
+            clearInterval(pollRef.current); pollRef.current = null;
+            setErr(st.detail || 'Erro ao gerar cortes'); setBusy(false); setAiPhase('');
+          }
+        } catch (e) { /* mantém polling */ }
+      }, 2000);
+    } catch (e) {
+      setErr(e.message); setBusy(false);
+    }
+  }
+
+  const ASPECTS = [['9:16', 'Vertical 9:16'], ['1:1', 'Quadrado 1:1'], ['4:5', 'Retrato 4:5']];
+  const phasePill = !aiPhase ? <Pill dot>{aspect}</Pill>
+    : aiPhase === 'analyzing' ? <Pill kind="cy" dot>IA analisando</Pill>
+    : aiPhase === 'fallback' ? <Pill kind="warn" dot>detecção automática</Pill>
+    : <Pill kind="good" dot>IA concluída</Pill>;
+
+  return <div className="app">
+    <AppHead icon="scissors" title="Cortes p/ Redes Sociais" desc="IA detecta e extrai os melhores momentos do vídeo para Shorts/Reels — sem configuração manual."
+      right={phasePill} />
+    <CtxFileBar file={file} onPick={() => setPicking(p => !p)} />
+    {picking && <FilePicker onClose={() => setPicking(false)} onSelect={f => { setFile(f); window.mpCtx.file = f; setPicking(false); setClips([]); }} />}
+
+    <div className="split">
+      <div className="stack">
+        <div className="panel stack">
+          <Field label="Formato do corte">
+            <div className="checks">
+              {ASPECTS.map(([k, l]) => <Check key={k} on={aspect === k} onClick={() => setAspect(k)}>{l}</Check>)}
+            </div>
+          </Field>
+          <Field label="Qualidade">
+            <select className="inp" value={crf} onChange={e => setCrf(+e.target.value)}>
+              <option value="20">Alta (CRF 20)</option>
+              <option value="23">Média (CRF 23)</option>
+              <option value="28">Econômica (CRF 28)</option>
+            </select>
+          </Field>
+        </div>
+        {file && <RealPlayer objectKey={file.object_key} style={{ maxHeight: 240 }} />}
+        <button className="btn pri block" disabled={!file || busy} onClick={generate}>
+          <Icon name="sparkles" />{busy ? 'Processando…' : 'Detectar e extrair melhores cortes'}
+        </button>
+        {!busy && !clips.length && <div className="panel" style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+          A IA analisa o vídeo, identifica os momentos de maior impacto e extrai os cortes verticais prontos para publicação. Nenhum slider de minutagem — só clique e pronto.
+        </div>}
+        {busy && <div className="panel"><ProgressBar pct={pct} tone="cy" label={detail || 'IA analisando vídeo…'} /></div>}
+        {err && <div className="hint" style={{ color: 'var(--pri)' }}>✗ {err}</div>}
+      </div>
+
+      <div className="stack">
+        <div className="sec cy"><Icon name="scissors" />Cortes gerados por IA</div>
+        {!clips.length && !busy && <div className="hint">Os cortes verticais aparecerão aqui após a geração.</div>}
+        {clips.map((c, i) => <div key={i} className="panel stack" style={{ borderColor: 'rgba(0,230,118,.3)' }}>
+          <div className="rowx" style={{ justifyContent: 'space-between' }}>
+            <div className="stack" style={{ gap: 2 }}>
+              <b style={{ fontSize: 13, fontFamily: 'var(--fh)' }}>Corte {c.index || i + 1} · {aspect}</b>
+              {c.reason && c.reason !== 'Cena detectada automaticamente' && <small style={{ color: 'var(--muted)', fontSize: 11.5 }}>🎯 {c.reason}</small>}
+            </div>
+            <div className="rowx" style={{ gap: 6 }}>
+              {c.quality_score != null && <Pill kind="violet" icon="sparkles">{(c.quality_score * 100).toFixed(0)}%</Pill>}
+              <Pill kind="good" dot>pronto</Pill>
+            </div>
+          </div>
+          <RealPlayer objectKey={c.object_key} style={{ maxHeight: 320 }} />
+          <div className="rowx" style={{ flexWrap: 'wrap' }}>
+            <button className="btn pri sm" onClick={() => window.mpApi.download(c.object_key, `corte_${i + 1}.mp4`)}><Icon name="download" />Baixar</button>
+            <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: c.object_key, n: 'corte', s: 'corte' }; window.__mpOpen && window.__mpOpen('media'); }}><Icon name="media" />Ver em Arquivos</button>
+            <button className="btn sm" onClick={() => { window.mpCtx.file = { object_key: c.object_key, n: 'corte', s: 'corte' }; window.__mpOpen && window.__mpOpen('telegram'); }}><Icon name="telegram" />Telegram</button>
+          </div>
+        </div>)}
+      </div>
+    </div>
+  </div>;
+}
+
+Object.assign(window, { CtxFileBar, FilePicker, LegendaApp, LogoApp, TeaserApp, ThumbnailApp, CortesApp });

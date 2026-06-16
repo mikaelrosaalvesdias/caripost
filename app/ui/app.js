@@ -530,6 +530,76 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.21.0', date: '2026-06-15',
+    items: [
+      { type: 'feat', text: 'Cortes com IA: Vision analisa frames e seleciona os melhores momentos automaticamente — sem sliders de minutagem.' },
+      { type: 'feat', text: 'Extração paralela de clips com semáforo: até 3 ffmpeg simultâneos, speedup de 3x.' },
+      { type: 'feat', text: 'Cache de análise por vídeo: mesma mídia não reanalisada pela IA.' },
+      { type: 'design', text: 'UI redesenhadada do Cortes: limpa, sem inputs de quantidade/duração, foco em 1 clique.' },
+      { type: 'feat', text: 'Fallback automático para detecção clássica de cenas quando IA está indisponível.' },
+    ],
+  },
+  {
+    version: 'v1.20.27', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Analyze passa a pular transcrição por padrão e roda somente referências, Vision e JSON para evitar travas longas em vídeos grandes.' },
+    ],
+  },
+  {
+    version: 'v1.20.24', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Upload em partes agora tem timeout por request e retry tambem para partes que ficam penduradas sem erro do navegador.' },
+    ],
+  },
+  {
+    version: 'v1.20.23', date: '2026-06-15',
+    items: [
+      { type: 'feat', text: 'Uploads agora exibem modal de tela inteira com circulo de progresso, percentual, tempo restante e etapa atual do envio.' },
+    ],
+  },
+  {
+    version: 'v1.20.22', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Uploads pequenos via local-stream tambem passam a repetir automaticamente em falhas transitorias de rede.' },
+    ],
+  },
+  {
+    version: 'v1.20.21', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Complete idempotente do upload em partes deixa de falhar se o registro auxiliar nao puder ser salvo, preservando a resposta de sucesso do upload.' },
+    ],
+  },
+  {
+    version: 'v1.20.20', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Finalizacao do upload em partes passa a usar XHR, igual ao envio das partes, evitando falhas de fetch no navegador apos uploads grandes.' },
+    ],
+  },
+  {
+    version: 'v1.20.19', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Finalizacao de upload em partes ganhou lock por upload, evitando corrida entre retries de complete e abort durante a montagem do arquivo grande.' },
+    ],
+  },
+  {
+    version: 'v1.20.18', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Upload em partes agora repete tambem a inicializacao e finalizacao, e o backend devolve o mesmo resultado se a resposta do complete se perder na rede.' },
+    ],
+  },
+  {
+    version: 'v1.20.17', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Uploads grandes passam a usar envio local em partes, com montagem e validação no backend antes de salvar o arquivo final.' },
+    ],
+  },
+  {
+    version: 'v1.20.16', date: '2026-06-15',
+    items: [
+      { type: 'fix', text: 'Alinha as versoes publicas do Caripost OS e do painel ao backend em producao, removendo indicadores antigos e forçando novo cache bust dos assets.' },
+    ],
+  },
+  {
     version: 'v1.19.13', date: '2026-06-15',
     items: [
       { type: 'fix', text: 'MetaPorn OS: o tour automatico deixa de bloquear cliques nas areas de upload, permitindo selecionar videos no Analyzer e nos fluxos com upload mesmo com o tutorial visivel.' },
@@ -3640,31 +3710,150 @@ function _resetAnalyzeUploadProgress() {
   if (hist) hist.innerHTML = '';
 }
 
-// Upload direto ao backend em uma única requisição binária.
-// O servidor grava a mídia em storage local e valida antes de aceitar quando necessário.
-async function _uploadViaProxy(file, opts = {}) {
-  const prefix = String(opts.prefix || 'uploads').trim() || 'uploads';
-  const validateVideo = !!opts.validateVideo;
-  const deleteIfInvalid = !!opts.deleteIfInvalid;
-  return await new Promise((resolve, reject) => {
+const UI_LARGE_UPLOAD_THRESHOLD = 128 * 1024 * 1024;
+const UI_LARGE_UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024;
+
+function _uploadSleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function _isTransientUploadError(err) {
+  const msg = String(err?.message || '');
+  return /failed to fetch|network|falha de rede|err_network_changed|load failed|temporar|timeout|time.?out|tempo esgotado|\\b5\\d\\d\\b|502|503|504/i.test(msg);
+}
+
+function _uploadTimeoutMs(bytes, minMs = 120000) {
+  const size = Math.max(0, Number(bytes) || 0);
+  const slowLinkMs = Math.ceil(size / (128 * 1024) * 1000) + minMs;
+  return Math.max(minMs, Math.min(30 * 60 * 1000, slowLinkMs));
+}
+
+async function _retryUploadStep(fn, attempts = 8) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!_isTransientUploadError(err) || attempt >= attempts) throw err;
+      await _uploadSleep(Math.min(10000, 600 * Math.pow(1.65, attempt - 1)));
+    }
+  }
+  throw lastErr || new Error('Falha temporária no upload');
+}
+
+let _uiUploadModalState = null;
+let _uiUploadModalSeq = 0;
+
+function _formatUiUploadEta(ms) {
+  const sec = Math.max(0, Math.ceil((ms || 0) / 1000));
+  if (sec <= 0) return 'menos de 1s restante';
+  if (sec < 60) return `${sec}s restantes`;
+  const min = Math.floor(sec / 60);
+  const rest = sec % 60;
+  if (min < 60) return rest ? `${min}min ${rest}s restantes` : `${min}min restantes`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}h ${m}min restantes` : `${h}h restantes`;
+}
+
+function _ensureUiUploadModalStyle() {
+  if (document.getElementById('ui-upload-modal-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ui-upload-modal-style';
+  style.textContent = `
+    #ui-upload-modal{--pct:0;position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:rgba(255,255,255,.94);backdrop-filter:blur(18px);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1b2231}
+    #ui-upload-modal .ui-up-wrap{width:min(440px,88vw);display:flex;flex-direction:column;align-items:center;text-align:center;gap:18px}
+    #ui-upload-modal .ui-up-ring{position:relative;width:188px;height:188px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#ff7a18 calc(var(--pct) * 1%),rgba(255,122,24,.14) 0);box-shadow:0 22px 70px rgba(255,122,24,.24),0 0 0 1px rgba(255,122,24,.18)}
+    #ui-upload-modal .ui-up-ring::before{content:"";position:absolute;width:142px;height:142px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1px rgba(20,28,45,.08)}
+    #ui-upload-modal .ui-up-pct{position:relative;z-index:1;font-size:36px;font-weight:800;color:#ff7a18;letter-spacing:0}
+    #ui-upload-modal .ui-up-title{font-size:22px;font-weight:800;color:#1b2231}
+    #ui-upload-modal .ui-up-detail{font-size:14px;font-weight:600;color:#4b5568;min-height:22px}
+    #ui-upload-modal .ui-up-eta{font-size:13px;color:#8b95a6;min-height:20px}
+    #ui-upload-modal .ui-up-file{max-width:100%;font-family:"JetBrains Mono","Courier New",monospace;font-size:11px;color:#8b95a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #ui-upload-modal.is-error .ui-up-ring{background:conic-gradient(#fb2f68 calc(var(--pct) * 1%),rgba(251,47,104,.14) 0);box-shadow:0 22px 70px rgba(251,47,104,.22)}
+    #ui-upload-modal.is-error .ui-up-pct{color:#fb2f68}
+    #ui-upload-modal.is-done .ui-up-ring{background:conic-gradient(#1faa5a calc(var(--pct) * 1%),rgba(31,170,90,.14) 0);box-shadow:0 22px 70px rgba(31,170,90,.20)}
+    #ui-upload-modal.is-done .ui-up-pct{color:#1faa5a}
+  `;
+  document.head.appendChild(style);
+}
+
+function _showUiUploadModal(file) {
+  _ensureUiUploadModalStyle();
+  const token = ++_uiUploadModalSeq;
+  const existing = document.getElementById('ui-upload-modal');
+  if (existing && _uiUploadModalState) {
+    _uiUploadModalState.active = (_uiUploadModalState.active || 1) + 1;
+    existing.querySelector('.ui-up-file').textContent = `${_uiUploadModalState.active} uploads em andamento`;
+    _updateUiUploadModal(_uiUploadModalState.pct || 0, `Preparando ${_uiUploadModalState.active} uploads...`);
+    return token;
+  }
+
+  const el = document.createElement('div');
+  el.id = 'ui-upload-modal';
+  el.innerHTML = `
+    <div class="ui-up-wrap" role="status" aria-live="polite">
+      <div class="ui-up-ring"><div class="ui-up-pct">0%</div></div>
+      <div class="ui-up-title">Enviando arquivo</div>
+      <div class="ui-up-detail">Preparando arquivo...</div>
+      <div class="ui-up-eta">calculando tempo restante</div>
+      <div class="ui-up-file"></div>
+    </div>`;
+  document.body.appendChild(el);
+  _uiUploadModalState = { el, start: Date.now(), pct: 0, active: 1, token };
+  el.querySelector('.ui-up-file').textContent = file?.name || 'upload.bin';
+  _updateUiUploadModal(0, 'Preparando arquivo...');
+  return token;
+}
+
+function _updateUiUploadModal(pct, detail) {
+  const state = _uiUploadModalState;
+  if (!state?.el) return;
+  const safePct = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
+  state.pct = Math.max(state.pct || 0, safePct);
+  const rounded = Math.round(state.pct);
+  state.el.style.setProperty('--pct', String(rounded));
+  state.el.querySelector('.ui-up-pct').textContent = `${rounded}%`;
+  if (detail) state.el.querySelector('.ui-up-detail').textContent = detail;
+  const etaEl = state.el.querySelector('.ui-up-eta');
+  if (rounded <= 1) etaEl.textContent = 'calculando tempo restante';
+  else if (rounded >= 99) etaEl.textContent = 'finalizando...';
+  else etaEl.textContent = _formatUiUploadEta((Date.now() - state.start) * (100 - rounded) / rounded);
+}
+
+async function _finishUiUploadModal(token, kind, detail) {
+  const state = _uiUploadModalState;
+  if (!state?.el) return;
+  state.active = Math.max(0, (state.active || 1) - 1);
+  if (kind === 'done' && state.active > 0) {
+    _updateUiUploadModal(state.pct || 0, `${detail || 'Upload concluído.'} ${state.active} upload${state.active === 1 ? '' : 's'} em andamento...`);
+    return;
+  }
+  if (kind === 'error') state.active = 0;
+  state.el.classList.toggle('is-done', kind === 'done');
+  state.el.classList.toggle('is-error', kind === 'error');
+  _updateUiUploadModal(kind === 'done' ? 100 : state.pct || 0, detail);
+  await _uploadSleep(kind === 'done' ? 650 : 1600);
+  if (_uiUploadModalState === state) {
+    state.el.remove();
+    _uiUploadModalState = null;
+  }
+}
+
+function _uploadXhrJson({ method = 'POST', url, body, headers = {}, onProgress, onStart, timeoutMs = 0 }) {
+  return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const url = `/uploads/local-stream?prefix=${encodeURIComponent(prefix)}`
-      + (validateVideo ? '&validate=1' : '')
-      + (deleteIfInvalid ? '&delete_if_invalid=1' : '');
-    xhr.open('POST', url, true);
+    xhr.open(method, url, true);
+    if (timeoutMs) xhr.timeout = timeoutMs;
     if (state.apiKey) xhr.setRequestHeader('X-API-Key', state.apiKey);
-    xhr.setRequestHeader('X-Filename', file.name || 'upload.bin');
-    xhr.setRequestHeader('X-File-Size', String(file.size || 0));
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    Object.keys(headers || {}).forEach(name => xhr.setRequestHeader(name, headers[name]));
     xhr.upload.onloadstart = () => {
-      if (opts.onStart) opts.onStart(file.size || 0);
+      if (onStart) onStart();
     };
     xhr.upload.onprogress = (evt) => {
-      if (!opts.onProgress || !evt.lengthComputable) return;
-      opts.onProgress(evt.loaded, evt.total || file.size || 0);
-    };
-    xhr.upload.onload = () => {
-      if (opts.onProgress) opts.onProgress(file.size || 0, file.size || 0);
+      if (!onProgress || !evt.lengthComputable) return;
+      onProgress(evt.loaded, evt.total);
     };
     xhr.onload = () => {
       let data = {};
@@ -3681,8 +3870,160 @@ async function _uploadViaProxy(file, opts = {}) {
     };
     xhr.onerror = () => reject(new Error('Falha de rede no upload'));
     xhr.onabort = () => reject(new Error('Upload cancelado pelo navegador'));
-    xhr.send(file);
+    xhr.ontimeout = () => reject(new Error('Tempo esgotado no upload'));
+    xhr.send(body);
   });
+}
+
+async function _uploadViaLocalStream(file, opts, prefix, validateVideo, deleteIfInvalid) {
+  const url = `/uploads/local-stream?prefix=${encodeURIComponent(prefix)}`
+    + (validateVideo ? '&validate=1' : '')
+    + (deleteIfInvalid ? '&delete_if_invalid=1' : '');
+  if (opts.onDetail) opts.onDetail('Enviando arquivo para o servidor...');
+  return _uploadXhrJson({
+    method: 'POST',
+    url,
+    body: file,
+    headers: {
+      'X-Filename': file.name || 'upload.bin',
+      'X-File-Size': String(file.size || 0),
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    onStart: () => {
+      if (opts.onStart) opts.onStart(file.size || 0);
+    },
+    onProgress: (loaded, total) => {
+      if (!opts.onProgress) return;
+      opts.onProgress(loaded, total || file.size || 0);
+    },
+    timeoutMs: _uploadTimeoutMs(file.size || 0, 180000),
+  });
+}
+
+async function _abortChunkUpload(uploadId) {
+  if (!uploadId) return;
+  try {
+    await apiFetch('/uploads/chunk/abort', {
+      method: 'POST',
+      body: JSON.stringify({ upload_id: uploadId }),
+    });
+  } catch (_) {}
+}
+
+async function _uploadChunkPartWithRetry(args) {
+  return _retryUploadStep(async () => {
+      const form = new FormData();
+      form.append('upload_id', args.uploadId);
+      form.append('part_number', String(args.partNumber));
+      form.append('chunk', args.blob, args.filename || 'chunk.bin');
+      return await _uploadXhrJson({
+        method: 'POST',
+        url: '/uploads/chunk/part',
+        body: form,
+        timeoutMs: _uploadTimeoutMs(args.blob?.size || 0),
+        onProgress: (loaded) => {
+          if (args.onProgress) args.onProgress(args.uploadedBefore + loaded, args.totalSize);
+        },
+      });
+  }, 8);
+}
+
+async function _uploadViaChunked(file, opts, prefix, validateVideo, deleteIfInvalid) {
+  const totalSize = Math.max(0, file.size || 0);
+  const chunkSize = UI_LARGE_UPLOAD_CHUNK_SIZE;
+  const totalParts = Math.max(1, Math.ceil(totalSize / chunkSize));
+  if (opts.onStart) opts.onStart(totalSize);
+  if (opts.onDetail) opts.onDetail('Preparando upload em partes...');
+  const init = await _retryUploadStep(() => apiFetch('/uploads/chunk/init', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: file.name || 'upload.bin',
+      content_type: file.type || 'application/octet-stream',
+      prefix,
+      size: totalSize,
+      chunk_size: chunkSize,
+      total_parts: totalParts,
+      validate: validateVideo,
+      delete_if_invalid: deleteIfInvalid,
+    }),
+  }), 5);
+  if (!init?.ok || !init.upload_id) {
+    throw new Error(init?.detail || init?.error || 'Falha ao iniciar upload em partes');
+  }
+
+  const uploadId = init.upload_id;
+  try {
+    for (let index = 0; index < totalParts; index++) {
+      const start = index * chunkSize;
+      const end = Math.min(totalSize, start + chunkSize);
+      if (opts.onDetail) opts.onDetail(`Enviando parte ${index + 1} de ${totalParts}...`);
+      await _uploadChunkPartWithRetry({
+        uploadId,
+        partNumber: index + 1,
+        blob: file.slice(start, end),
+        filename: file.name || 'upload.bin',
+        uploadedBefore: start,
+        totalSize,
+        onProgress: opts.onProgress,
+      });
+      if (opts.onProgress) opts.onProgress(end, totalSize);
+    }
+    if (opts.onDetail) opts.onDetail('Finalizando envio e validando mídia...');
+    const done = await _retryUploadStep(() => _uploadXhrJson({
+      method: 'POST',
+      url: '/uploads/chunk/complete',
+      body: JSON.stringify({ upload_id: uploadId }),
+      headers: { 'Content-Type': 'application/json' },
+      timeoutMs: 10 * 60 * 1000,
+    }), 8);
+    if (!done?.ok || !done.object_key) {
+      throw new Error(done?.detail || done?.error || 'Falha ao concluir upload em partes');
+    }
+    if (opts.onProgress) opts.onProgress(totalSize, totalSize);
+    return done;
+  } catch (err) {
+    await _abortChunkUpload(uploadId);
+    throw err;
+  }
+}
+
+// Upload direto ao backend. Arquivos grandes usam partes menores para evitar 502/timeouts.
+async function _uploadViaProxy(file, opts = {}) {
+  const prefix = String(opts.prefix || 'uploads').trim() || 'uploads';
+  const validateVideo = !!opts.validateVideo;
+  const deleteIfInvalid = !!opts.deleteIfInvalid;
+  const modalToken = _showUiUploadModal(file);
+  const modalOpts = {
+    ...opts,
+    onDetail: (detail) => {
+      _updateUiUploadModal(_uiUploadModalState?.pct || 0, detail);
+      if (opts.onDetail) opts.onDetail(detail);
+    },
+    onStart: (total) => {
+      _updateUiUploadModal(0, 'Conexão aberta para upload...');
+      if (opts.onStart) opts.onStart(total);
+    },
+    onProgress: (loaded, total) => {
+      const safeTotal = total || file.size || 0;
+      if (safeTotal > 0) {
+        _updateUiUploadModal(Math.round(Math.max(0, Math.min(loaded || 0, safeTotal)) / safeTotal * 100));
+      }
+      if (opts.onProgress) opts.onProgress(loaded, total);
+    },
+  };
+  try {
+    let result;
+    if ((file.size || 0) >= UI_LARGE_UPLOAD_THRESHOLD) {
+      result = await _uploadViaChunked(file, modalOpts, prefix, validateVideo, deleteIfInvalid);
+    } else {
+      result = await _retryUploadStep(() => _uploadViaLocalStream(file, modalOpts, prefix, validateVideo, deleteIfInvalid), 5);
+    }
+    await _finishUiUploadModal(modalToken, 'done', 'Upload concluído.');
+    return result;
+  } catch (err) {
+    await _finishUiUploadModal(modalToken, 'error', `Upload falhou: ${err?.message || err}`);
+    throw err;
+  }
 }
 
 function _selectAnalyzeUploadedVideo(proxy, file) {
@@ -3919,6 +4260,7 @@ async function doAnalyze() {
       }
     },
     transcript: text ? { provider: 'local', lang, text, segments: state.transcriptSegments || [], srt: state.transcriptSrt || qs('anSrt')?.textContent || '' } : null,
+    stt_provider: 'none',
 
     // Filtros de Referência
     ref_sites: refSites,
@@ -3950,6 +4292,7 @@ async function doAnalyze() {
     { pct: 10, label: 'Baixando vídeo do storage…',       minMs: 5000  },
     { pct: 25, label: 'Extraindo frames por cena…',       minMs: 10000 },
     { pct: 45, label: 'Analisando frames com Vision AI…', minMs: 20000 },
+    { pct: 65, label: 'Carregando referências…',          minMs: 8000  },
     { pct: 80, label: 'LLM gerando metadados…',           minMs: 99999 },
   ]);
   let _analyzePollTimer = null;
