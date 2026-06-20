@@ -391,6 +391,39 @@ def competitor_delete(competitor_id: str) -> bool:
         return cur.rowcount > 0
 
 
+@_sqlite_retry
+def competitor_update(competitor_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields = []
+    values: List[Any] = []
+    if "name" in data:
+        fields.append("name = ?")
+        values.append(data["name"])
+    if "handles" in data:
+        fields.append("handles = ?")
+        values.append(json.dumps(data.get("handles") or {}))
+    if "metrics" in data:
+        fields.append("metrics = ?")
+        values.append(json.dumps(data.get("metrics") or {}))
+    if "dossier" in data:
+        fields.append("dossier = ?")
+        values.append(data.get("dossier"))
+    if "last_analyzed_at" in data:
+        fields.append("last_analyzed_at = ?")
+        values.append(data.get("last_analyzed_at"))
+    if not fields:
+        return None
+    values.append(competitor_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE competitors SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM competitors WHERE id = ?", (competitor_id,)).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["handles"] = json.loads(result.get("handles") or "{}")
+        result["metrics"] = json.loads(result.get("metrics") or "{}")
+        return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Posts (approval workflow)
 # ─────────────────────────────────────────────────────────────────────────────

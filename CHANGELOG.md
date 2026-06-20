@@ -2,6 +2,16 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.22.1 - 2026-06-20
+
+- Social Integration Layer via Composio/provider isolado para conectar contas, criar posts, publicar/agendar, consultar status e métricas.
+- Rotas novas em `/api/social` para contas, posts, worker, concorrentes e referências.
+- Banco: tabelas novas `social_connections`, `social_posts`, `social_post_channels`, `social_post_assets` e `social_post_logs`.
+- Worker APScheduler separado para posts sociais agendados, com logs por canal e bloqueio de conteúdo não aprovado.
+- Publicar OS ganhou canais conectados, publicação social, concorrentes e referências sem mexer em upload, storage ou processamento de vídeo.
+- Docs e smoke test mock em `docs/composio-social-integration.md` e `scripts/social_smoke.py`.
+- Versão: main.py 1.22.1, OS/UI cache bust v=12210.
+
 ## v1.22.0 - 2026-06-20
 
 - Módulo de Clientes: CRUD de empresas, brand kit (logo, cores, voz, persona), mood board e concorrentes.

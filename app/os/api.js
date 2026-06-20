@@ -799,6 +799,50 @@
     async publishStatus(jobId) {
       return mpFetch('/api/publisher/status/' + _enc(jobId));
     },
+    async socialConfig() {
+      return mpFetch('/api/social/config').catch(() => ({ platforms: [] }));
+    },
+    async socialAccounts(brandId, platform) {
+      const qs = new URLSearchParams({ brandId: brandId || '' });
+      if (platform) qs.set('platform', platform);
+      const r = await mpFetch('/api/social/accounts?' + qs.toString()).catch(() => ({ accounts: [] }));
+      return r.accounts || [];
+    },
+    async socialConnect(payload) {
+      return mpFetch('/api/social/connect', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async socialDisconnect(id) {
+      return mpFetch('/api/social/accounts/' + _enc(id), { method: 'DELETE' });
+    },
+    async socialCreatePost(payload) {
+      return mpFetch('/api/social/posts', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async socialPublish(postId) {
+      return mpFetch('/api/social/posts/' + _enc(postId) + '/publish', { method: 'POST', body: JSON.stringify({}) });
+    },
+    async socialPostStatus(postId) {
+      return mpFetch('/api/social/posts/' + _enc(postId) + '/status');
+    },
+    async socialPostMetrics(postId) {
+      return mpFetch('/api/social/posts/' + _enc(postId) + '/metrics');
+    },
+    async socialCompetitors(brandId) {
+      const r = await mpFetch('/api/social/competitors?brandId=' + _enc(brandId || '')).catch(() => ({ competitors: [] }));
+      return r.competitors || [];
+    },
+    async socialAddCompetitor(payload) {
+      return mpFetch('/api/social/competitors', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async socialAnalyzeCompetitor(id) {
+      return mpFetch('/api/social/competitors/' + _enc(id) + '/analyze', { method: 'POST', body: JSON.stringify({}) });
+    },
+    async socialReferences(brandId) {
+      const r = await mpFetch('/api/social/references?brandId=' + _enc(brandId || '')).catch(() => ({ references: [] }));
+      return r.references || [];
+    },
+    async socialAddReference(payload) {
+      return mpFetch('/api/social/references', { method: 'POST', body: JSON.stringify(payload) });
+    },
 
     /* ════════ AGÊNCIA ════════ */
 

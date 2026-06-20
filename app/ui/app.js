@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.22.1', date: '2026-06-20',
+    items: [
+      { type: 'feat', text: 'Social Integration Layer: conexões, posts, agendamento, status e métricas via Composio/provider isolado.' },
+      { type: 'feat', text: 'Publicar OS: canais conectados, post social aprovado, concorrentes e referências sem tocar em upload ou processamento de vídeo.' },
+      { type: 'chore', text: 'Worker social agendado com logs por canal, retry controlado e bloqueio para conteúdo não aprovado.' },
+    ],
+  },
+  {
     version: 'v1.22.0', date: '2026-06-20',
     items: [
       { type: 'feat', text: 'Módulo de Clientes: CRUD de empresas, brand kit (logo, cores, voz, persona), mood board e concorrentes.' },

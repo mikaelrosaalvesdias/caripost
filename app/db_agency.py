@@ -16,6 +16,7 @@ import json
 import re
 import time
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Dict, List, Optional
@@ -140,6 +141,103 @@ def init_agency_db() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_publications_job ON publications(job_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_publications_creator ON publications(creator_id)")
+
+        # ── Social Integration Layer ────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS social_connections (
+                id                     TEXT PRIMARY KEY,
+                user_id                TEXT NOT NULL DEFAULT 'api',
+                brand_id               TEXT NOT NULL,
+                provider               TEXT NOT NULL DEFAULT 'composio',
+                platform               TEXT NOT NULL,
+                external_account_id    TEXT,
+                external_account_name  TEXT,
+                composio_entity_id     TEXT,
+                composio_connection_id TEXT,
+                status                 TEXT NOT NULL DEFAULT 'connected',
+                scopes                 TEXT NOT NULL DEFAULT '[]',
+                metadata_json          TEXT NOT NULL DEFAULT '{}',
+                created_at             TEXT NOT NULL,
+                updated_at             TEXT NOT NULL,
+                last_sync_at           TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_connections_brand ON social_connections(brand_id, platform, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_connections_composio ON social_connections(composio_connection_id)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS social_posts (
+                id            TEXT PRIMARY KEY,
+                user_id       TEXT NOT NULL DEFAULT 'api',
+                brand_id      TEXT NOT NULL,
+                source_post_id TEXT,
+                title         TEXT,
+                caption       TEXT NOT NULL DEFAULT '',
+                content_type  TEXT NOT NULL DEFAULT 'text',
+                status        TEXT NOT NULL DEFAULT 'draft',
+                scheduled_at  TEXT,
+                published_at  TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_posts_brand ON social_posts(brand_id, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_posts_due ON social_posts(status, scheduled_at)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS social_post_channels (
+                id                   TEXT PRIMARY KEY,
+                post_id              TEXT NOT NULL,
+                social_connection_id TEXT NOT NULL,
+                platform             TEXT NOT NULL,
+                status               TEXT NOT NULL DEFAULT 'pending',
+                external_post_id     TEXT,
+                external_post_url    TEXT,
+                error_message        TEXT,
+                retry_count          INTEGER NOT NULL DEFAULT 0,
+                metadata_json        TEXT NOT NULL DEFAULT '{}',
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL,
+                FOREIGN KEY (post_id) REFERENCES social_posts(id),
+                FOREIGN KEY (social_connection_id) REFERENCES social_connections(id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_channels_post ON social_post_channels(post_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_channels_status ON social_post_channels(status, platform)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS social_post_assets (
+                id               TEXT PRIMARY KEY,
+                post_id          TEXT NOT NULL,
+                asset_type       TEXT NOT NULL DEFAULT 'image',
+                asset_url        TEXT NOT NULL,
+                storage_provider TEXT,
+                mime_type        TEXT,
+                size_bytes       INTEGER,
+                width            INTEGER,
+                height           INTEGER,
+                duration_seconds REAL,
+                created_at       TEXT NOT NULL,
+                FOREIGN KEY (post_id) REFERENCES social_posts(id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_assets_post ON social_post_assets(post_id)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS social_post_logs (
+                id                     TEXT PRIMARY KEY,
+                post_id                TEXT NOT NULL,
+                social_post_channel_id TEXT,
+                level                  TEXT NOT NULL DEFAULT 'info',
+                message                TEXT NOT NULL,
+                payload_json           TEXT NOT NULL DEFAULT '{}',
+                created_at             TEXT NOT NULL,
+                FOREIGN KEY (post_id) REFERENCES social_posts(id),
+                FOREIGN KEY (social_post_channel_id) REFERENCES social_post_channels(id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_logs_post ON social_post_logs(post_id, created_at)")
 
         # ── Selector maps (stored per-platform, editable via API) ─────────────
         conn.execute("""
@@ -842,6 +940,410 @@ def publications_by_creator(creator_id: str, limit: int = 100) -> List[Dict]:
             (creator_id, limit)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Social Integration Layer
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _social_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _social_uuid() -> str:
+    return str(uuid.uuid4())
+
+
+def _json_or(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value or "")
+    except Exception:
+        return default
+
+
+def _social_connection_row(row) -> Dict:
+    d = dict(row)
+    d["scopes"] = _json_or(d.get("scopes"), [])
+    d["metadata"] = _json_or(d.get("metadata_json"), {})
+    d.pop("metadata_json", None)
+    return d
+
+
+def _social_channel_row(row) -> Dict:
+    d = dict(row)
+    d["metadata"] = _json_or(d.get("metadata_json"), {})
+    d.pop("metadata_json", None)
+    return d
+
+
+def _social_asset_row(row) -> Dict:
+    return dict(row)
+
+
+def _social_post_row(row) -> Dict:
+    d = dict(row)
+    d["metadata"] = _json_or(d.get("metadata_json"), {})
+    d.pop("metadata_json", None)
+    return d
+
+
+@_sqlite_retry
+def social_connection_create(data: Dict[str, Any]) -> Dict:
+    now = _social_now()
+    conn_id = data.get("id") or _social_uuid()
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO social_connections
+              (id, user_id, brand_id, provider, platform,
+               external_account_id, external_account_name,
+               composio_entity_id, composio_connection_id,
+               status, scopes, metadata_json, created_at, updated_at, last_sync_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            conn_id,
+            data.get("user_id") or "api",
+            data["brand_id"],
+            data.get("provider") or "composio",
+            data["platform"],
+            data.get("external_account_id"),
+            data.get("external_account_name"),
+            data.get("composio_entity_id"),
+            data.get("composio_connection_id"),
+            data.get("status") or "connected",
+            json.dumps(data.get("scopes") or [], ensure_ascii=False),
+            json.dumps(data.get("metadata") or {}, ensure_ascii=False),
+            data.get("created_at") or now,
+            data.get("updated_at") or now,
+            data.get("last_sync_at"),
+        ))
+    return social_connection_get(conn_id) or {"id": conn_id}
+
+
+@_sqlite_retry
+def social_connection_upsert(data: Dict[str, Any]) -> Dict:
+    comp_id = data.get("composio_connection_id")
+    existing = None
+    with get_conn() as conn:
+        if comp_id:
+            existing = conn.execute(
+                "SELECT id FROM social_connections WHERE composio_connection_id=?",
+                (comp_id,),
+            ).fetchone()
+    if existing:
+        social_connection_update(existing["id"], data)
+        return social_connection_get(existing["id"]) or {"id": existing["id"]}
+    return social_connection_create(data)
+
+
+@_sqlite_retry
+def social_connection_get(connection_id: str) -> Optional[Dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM social_connections WHERE id=?", (connection_id,)).fetchone()
+        return _social_connection_row(row) if row else None
+
+
+@_sqlite_retry
+def social_connection_get_by_composio(composio_connection_id: str) -> Optional[Dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM social_connections WHERE composio_connection_id=?",
+            (composio_connection_id,),
+        ).fetchone()
+        return _social_connection_row(row) if row else None
+
+
+@_sqlite_retry
+def social_connection_list(
+    brand_id: Optional[str] = None,
+    platform: Optional[str] = None,
+    include_revoked: bool = False,
+    limit: int = 200,
+) -> List[Dict]:
+    clauses, params = [], []
+    if brand_id:
+        clauses.append("brand_id=?")
+        params.append(brand_id)
+    if platform:
+        clauses.append("platform=?")
+        params.append(platform)
+    if not include_revoked:
+        clauses.append("status!='revoked'")
+    q = "SELECT * FROM social_connections"
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
+    q += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    with get_conn() as conn:
+        rows = conn.execute(q, params).fetchall()
+        return [_social_connection_row(r) for r in rows]
+
+
+@_sqlite_retry
+def social_connection_update(connection_id: str, updates: Dict[str, Any]) -> bool:
+    allowed = {
+        "user_id", "brand_id", "provider", "platform", "external_account_id",
+        "external_account_name", "composio_entity_id", "composio_connection_id",
+        "status", "scopes", "metadata", "last_sync_at",
+    }
+    fields, values = [], []
+    for key, value in updates.items():
+        if key not in allowed:
+            continue
+        col = "metadata_json" if key == "metadata" else key
+        fields.append(f"{col}=?")
+        if key in {"scopes", "metadata"}:
+            values.append(json.dumps(value or ([] if key == "scopes" else {}), ensure_ascii=False))
+        else:
+            values.append(value)
+    if not fields:
+        return False
+    fields.append("updated_at=?")
+    values.extend([_social_now(), connection_id])
+    with get_conn() as conn:
+        cur = conn.execute(f"UPDATE social_connections SET {', '.join(fields)} WHERE id=?", values)
+        return cur.rowcount > 0
+
+
+@_sqlite_retry
+def social_connection_revoke(connection_id: str) -> bool:
+    return social_connection_update(connection_id, {"status": "revoked", "last_sync_at": _social_now()})
+
+
+@_sqlite_retry
+def social_post_create(data: Dict[str, Any]) -> Dict:
+    now = _social_now()
+    post_id = data.get("id") or _social_uuid()
+    assets = data.get("assets") or []
+    channels = data.get("channels") or []
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO social_posts
+              (id, user_id, brand_id, source_post_id, title, caption, content_type,
+               status, scheduled_at, published_at, metadata_json, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            post_id,
+            data.get("user_id") or "api",
+            data["brand_id"],
+            data.get("source_post_id"),
+            data.get("title"),
+            data.get("caption") or "",
+            data.get("content_type") or "text",
+            data.get("status") or "draft",
+            data.get("scheduled_at"),
+            data.get("published_at"),
+            json.dumps(data.get("metadata") or {}, ensure_ascii=False),
+            data.get("created_at") or now,
+            data.get("updated_at") or now,
+        ))
+        for asset in assets:
+            conn.execute("""
+                INSERT INTO social_post_assets
+                  (id, post_id, asset_type, asset_url, storage_provider,
+                   mime_type, size_bytes, width, height, duration_seconds, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                asset.get("id") or _social_uuid(),
+                post_id,
+                asset.get("asset_type") or asset.get("type") or "image",
+                asset.get("asset_url") or asset.get("url") or "",
+                asset.get("storage_provider"),
+                asset.get("mime_type"),
+                asset.get("size_bytes"),
+                asset.get("width"),
+                asset.get("height"),
+                asset.get("duration_seconds"),
+                now,
+            ))
+        for channel in channels:
+            conn.execute("""
+                INSERT INTO social_post_channels
+                  (id, post_id, social_connection_id, platform, status,
+                   external_post_id, external_post_url, error_message,
+                   retry_count, metadata_json, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                channel.get("id") or _social_uuid(),
+                post_id,
+                channel["social_connection_id"],
+                channel["platform"],
+                channel.get("status") or "pending",
+                channel.get("external_post_id"),
+                channel.get("external_post_url"),
+                channel.get("error_message"),
+                int(channel.get("retry_count") or 0),
+                json.dumps(channel.get("metadata") or {}, ensure_ascii=False),
+                now,
+                now,
+            ))
+    return social_post_get(post_id) or {"id": post_id}
+
+
+@_sqlite_retry
+def social_post_get(post_id: str, include_logs: bool = True) -> Optional[Dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM social_posts WHERE id=?", (post_id,)).fetchone()
+        if not row:
+            return None
+        post = _social_post_row(row)
+        assets = conn.execute(
+            "SELECT * FROM social_post_assets WHERE post_id=? ORDER BY created_at ASC",
+            (post_id,),
+        ).fetchall()
+        channels = conn.execute("""
+            SELECT ch.*, sc.external_account_name, sc.status AS connection_status,
+                   sc.composio_connection_id
+            FROM social_post_channels ch
+            LEFT JOIN social_connections sc ON sc.id = ch.social_connection_id
+            WHERE ch.post_id=?
+            ORDER BY ch.created_at ASC
+        """, (post_id,)).fetchall()
+        post["assets"] = [_social_asset_row(a) for a in assets]
+        post["channels"] = [_social_channel_row(c) for c in channels]
+        if include_logs:
+            logs = conn.execute(
+                "SELECT * FROM social_post_logs WHERE post_id=? ORDER BY created_at ASC LIMIT 300",
+                (post_id,),
+            ).fetchall()
+            post["logs"] = [dict(r) | {"payload": _json_or(dict(r).get("payload_json"), {})} for r in logs]
+        return post
+
+
+@_sqlite_retry
+def social_post_list(
+    brand_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict]:
+    clauses, params = [], []
+    if brand_id:
+        clauses.append("brand_id=?")
+        params.append(brand_id)
+    if status:
+        clauses.append("status=?")
+        params.append(status)
+    q = "SELECT * FROM social_posts"
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
+    q += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    with get_conn() as conn:
+        rows = conn.execute(q, params).fetchall()
+    return [social_post_get(r["id"], include_logs=False) for r in rows]
+
+
+@_sqlite_retry
+def social_post_due(now_iso: str, limit: int = 25) -> List[Dict]:
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT * FROM social_posts
+            WHERE status='scheduled' AND scheduled_at IS NOT NULL AND scheduled_at<=?
+            ORDER BY scheduled_at ASC LIMIT ?
+        """, (now_iso, limit)).fetchall()
+    return [_social_post_row(r) for r in rows]
+
+
+@_sqlite_retry
+def social_post_update(post_id: str, updates: Dict[str, Any]) -> bool:
+    allowed = {"title", "caption", "content_type", "status", "scheduled_at", "published_at", "metadata"}
+    fields, values = [], []
+    for key, value in updates.items():
+        if key not in allowed:
+            continue
+        col = "metadata_json" if key == "metadata" else key
+        fields.append(f"{col}=?")
+        values.append(json.dumps(value or {}, ensure_ascii=False) if key == "metadata" else value)
+    if not fields:
+        return False
+    fields.append("updated_at=?")
+    values.extend([_social_now(), post_id])
+    with get_conn() as conn:
+        cur = conn.execute(f"UPDATE social_posts SET {', '.join(fields)} WHERE id=?", values)
+        return cur.rowcount > 0
+
+
+@_sqlite_retry
+def social_post_acquire_for_publish(post_id: str, from_statuses: Optional[List[str]] = None) -> bool:
+    statuses = from_statuses or ["approved", "scheduled"]
+    placeholders = ",".join("?" * len(statuses))
+    now = _social_now()
+    with get_conn() as conn:
+        cur = conn.execute(
+            f"UPDATE social_posts SET status='publishing', updated_at=? WHERE id=? AND status IN ({placeholders})",
+            [now, post_id] + statuses,
+        )
+        return cur.rowcount == 1
+
+
+@_sqlite_retry
+def social_channel_update(channel_id: str, updates: Dict[str, Any]) -> bool:
+    allowed = {
+        "status", "external_post_id", "external_post_url", "error_message",
+        "retry_count", "metadata",
+    }
+    fields, values = [], []
+    for key, value in updates.items():
+        if key not in allowed:
+            continue
+        col = "metadata_json" if key == "metadata" else key
+        fields.append(f"{col}=?")
+        values.append(json.dumps(value or {}, ensure_ascii=False) if key == "metadata" else value)
+    if not fields:
+        return False
+    fields.append("updated_at=?")
+    values.extend([_social_now(), channel_id])
+    with get_conn() as conn:
+        cur = conn.execute(f"UPDATE social_post_channels SET {', '.join(fields)} WHERE id=?", values)
+        return cur.rowcount > 0
+
+
+@_sqlite_retry
+def social_post_log_create(
+    post_id: str,
+    message: str,
+    *,
+    channel_id: Optional[str] = None,
+    level: str = "info",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict:
+    log_id = _social_uuid()
+    now = _social_now()
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO social_post_logs
+              (id, post_id, social_post_channel_id, level, message, payload_json, created_at)
+            VALUES (?,?,?,?,?,?,?)
+        """, (
+            log_id,
+            post_id,
+            channel_id,
+            level,
+            message,
+            json.dumps(payload or {}, ensure_ascii=False),
+            now,
+        ))
+    return {"id": log_id, "post_id": post_id, "channel_id": channel_id, "level": level, "message": message, "created_at": now}
+
+
+@_sqlite_retry
+def social_post_finalize(post_id: str) -> Optional[Dict]:
+    post = social_post_get(post_id, include_logs=False)
+    if not post:
+        return None
+    channels = post.get("channels") or []
+    statuses = [c.get("status") for c in channels]
+    now = _social_now()
+    if statuses and all(s == "published" for s in statuses):
+        social_post_update(post_id, {"status": "published", "published_at": now})
+    elif statuses and any(s == "published" for s in statuses):
+        social_post_update(post_id, {"status": "partial_failed"})
+    else:
+        social_post_update(post_id, {"status": "failed"})
+    return social_post_get(post_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

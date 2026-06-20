@@ -123,6 +123,17 @@ async def task_process_scheduled_publications():
         logger.error("[CRON] Scheduled publications check failed: %s", exc)
 
 
+async def task_process_scheduled_social_posts():
+    """Cron: publish due social posts through the Social Integration Layer."""
+    try:
+        from ..social.service import process_due_social_posts
+        result = await process_due_social_posts()
+        if result.get("triggered", 0) > 0:
+            logger.info("[CRON] Triggered %d scheduled social posts", result["triggered"])
+    except Exception as exc:
+        logger.error("[CRON] Scheduled social posts check failed: %s", exc)
+
+
 async def task_process_cross_promotions():
     """Cron: post cross-promotions for published entries (every 10 minutes)."""
     try:
@@ -254,6 +265,13 @@ def setup_scheduler() -> None:
         trigger="interval",
         minutes=5,
         id="publish_scheduled",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        task_process_scheduled_social_posts,
+        trigger="interval",
+        minutes=3,
+        id="social_publish_scheduled",
         replace_existing=True,
     )
     scheduler.add_job(
