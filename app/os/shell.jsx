@@ -21,11 +21,14 @@ const APPS = {
   publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'PublisherApp',  w: 980,  h: 690, grp: 'op' },
   calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'CalendarApp',   w: 1000, h: 680, grp: 'op' },
   // Gestão de Agência
-  creators:   { title: 'Criadores',       icon: 'users',      C: 'CreatorsApp',   w: 920,  h: 680, grp: 'ges' },
-  trends:     { title: 'Tendências',      icon: 'trending',   C: 'TrendsApp',     w: 980,  h: 680, grp: 'ges' },
-  financial:  { title: 'Financeiro',      icon: 'dollar',     C: 'FinancialApp',  w: 960,  h: 680, grp: 'ges' },
-  dmca:       { title: 'DMCA',            icon: 'shield',     C: 'DmcaApp',       w: 940,  h: 680, grp: 'ges' },
-  settings:   { title: 'Settings',        icon: 'settings',   C: 'SettingsApp',   w: 840,  h: 660, grp: 'ges' },
+  clientes:    { title: 'Clientes',        icon: 'building',   C: 'ClientesApp',    w: 980,  h: 720, grp: 'ges' },
+  creators:    { title: 'Criadores',       icon: 'users',      C: 'CreatorsApp',   w: 920,  h: 680, grp: 'ges' },
+  trends:      { title: 'Tendências',      icon: 'trending',   C: 'TrendsApp',     w: 980,  h: 680, grp: 'ges' },
+  aprovacao:   { title: 'Aprovação',       icon: 'shield',     C: 'AprovacaoApp',  w: 980,  h: 700, grp: 'ges' },
+  concorrentes:{ title: 'Concorrentes',    icon: 'radar',      C: 'ConcorrentesApp', w: 960, h: 660, grp: 'ges' },
+  financial:   { title: 'Financeiro',      icon: 'dollar',     C: 'FinancialApp',  w: 960,  h: 680, grp: 'ges' },
+  dmca:        { title: 'DMCA',            icon: 'shield',     C: 'DmcaApp',       w: 940,  h: 680, grp: 'ges' },
+  settings:    { title: 'Settings',        icon: 'settings',   C: 'SettingsApp',   w: 840,  h: 660, grp: 'ges' },
   wizard:     { title: 'Assistente',      icon: 'flow',       C: 'WizardApp',     w: 960,  h: 720, grp: null },
 };
 const GROUPS = [
@@ -195,7 +198,7 @@ function Boot({ pct, msg, onSkip }) {
     <div className="boot-logo">Cari<em>post</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
     <div className="boot-bar"><i style={{ width: pct + '%' }} /></div>
     <div className="boot-status">{msg} {pct < 100 && pct + '%'}</div>
-    <div className="boot-ver">v1.21.0 · cortes com IA</div>
+    <div className="boot-ver">v1.22.0 · clientes + IA</div>
   </div>;
 }
 

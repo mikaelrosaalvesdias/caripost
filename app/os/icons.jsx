@@ -1,4 +1,4 @@
-/* MetaPorn OS — icon set + shared UI components */
+/* Caripost OS — icon set + shared UI components */
 
 const ICONS = {
   upload:'<path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>',
@@ -72,6 +72,9 @@ const ICONS = {
   image:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m3.5 17 5.5-5 4 3.5 3-2.5 5 4"/>',
   type:'<path d="M5 6h14M12 6v13M9 19h6"/>',
   burn:'<path d="M12 3c1.5 3-1.5 4 0 7 .8 1.6 3 1.5 3 4a3 3 0 0 1-6 .2C8.8 11.5 12 11 12 3z"/>',
+  cortes:'<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="m10.5 9 4 3-4 3z"/>',
+  building:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h1M14 7h1M9 11h1M14 11h1M9 15h1M14 15h1"/>',
+  radar:'<circle cx="12" cy="12" r="9"/><path d="M12 12 19 5"/><path d="M12 3v3M21 12h-3M12 21v-3M3 12h3"/><circle cx="12" cy="12" r="4"/>',
 };
 
 function Icon({ name, style }) {
