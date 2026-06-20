@@ -232,14 +232,25 @@ def _call_openai_compat(provider: str, api_key: str, model: str, system: str, us
     if provider == "openrouter":
         headers["HTTP-Referer"] = "https://caripost.n8nmikael.com.br"
         headers["X-Title"] = "Caripost"
-    body = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
+    # OpenAI newer models (gpt-5+, o1, o3, o4) require max_completion_tokens instead of max_tokens
+    if provider == "openai":
+        body = {
+            "model": model,
+            "max_completion_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+    else:
+        body = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
     with httpx.Client(timeout=120.0) as client:
         resp = client.post(f"{base_url}/chat/completions", headers=headers, json=body)
         resp.raise_for_status()
@@ -253,10 +264,17 @@ def test_ai() -> Optional[str]:
         config = get_ai_config()
         if not config:
             return "IA não configurada — adicione sua chave em Configurações."
-        result = complete_ai(config, "Responda apenas: ok", "ping", 8)
+        result = complete_ai(config, "Responda apenas: ok", "ping", 100)
         if not result:
             return "Resposta vazia do provedor."
         return None
+    except httpx.HTTPStatusError as exc:
+        try:
+            err_data = exc.response.json()
+            err_msg = err_data.get("error", {}).get("message", "") or str(err_data)
+            return f"HTTP {exc.response.status_code}: {err_msg}"
+        except Exception:
+            return f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
     except Exception as exc:
         return str(exc)
 
