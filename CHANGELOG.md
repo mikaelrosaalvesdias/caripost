@@ -2,6 +2,14 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.22.2 - 2026-06-20
+
+- Clientes ganhou aba `Fluxo` como caminho principal: Instagram da empresa, conexão Composio, concorrentes, análise, ideias, aprovação, criação de mídia e publicação.
+- Backend social ganhou workspace por empresa, análise estratégica via Composio/IA e geração de rascunhos a partir das ideias.
+- Análise social agora pode atualizar identidade de marca com posicionamento, voz, persona, visual prompt base e cores sugeridas.
+- Ideias da estratégia viram posts em `REVIEW`, preservando aprovação antes de publicar.
+- Versão: main.py 1.22.2, OS/UI cache bust v=12220.
+
 ## v1.22.1 - 2026-06-20
 
 - Social Integration Layer via Composio/provider isolado para conectar contas, criar posts, publicar/agendar, consultar status e métricas.

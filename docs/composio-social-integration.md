@@ -115,11 +115,21 @@ Esse teste cria banco temporário, conexão mock, bloqueia publicação sem apro
 1. Configure `COMPOSIO_API_KEY`.
 2. Configure o auth config da plataforma.
 3. Abra `/os/`.
-4. Acesse `Publicar`.
-5. Conecte uma conta social.
-6. Crie um post aprovado com URL pública.
-7. Clique em `Publicar agora`.
-8. Consulte o status na própria tela ou em `/api/social/posts/{id}/status`.
+4. Acesse `Clientes`.
+5. Abra uma empresa e entre na aba `Fluxo`.
+6. Salve o Instagram oficial da empresa.
+7. Clique em `Conectar Instagram` para autorizar via Composio.
+8. Cadastre concorrentes pelo Instagram deles.
+9. Clique em `Analisar e gerar estratégia`.
+10. Revise identidade, pilares, ideias e prompts de arte.
+11. Clique em `Criar 4 posts para aprovação`.
+12. Abra `Aprovação`, aprove os posts e depois use `Publicar/agendar`.
+
+## Fluxo Recomendado
+
+O ponto de entrada normal é `Clientes -> empresa -> Fluxo`.
+
+Use `Publicar` apenas para operação avançada, quando já existe canal conectado e você quer publicar/agendar manualmente. O fluxo guiado evita preencher os mesmos dados em várias telas.
 
 ## Limitações Conhecidas
 

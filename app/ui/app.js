@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.22.2', date: '2026-06-20',
+    items: [
+      { type: 'feat', text: 'Clientes: nova aba Fluxo guia o caminho completo da empresa, do Instagram e concorrentes até estratégia, ideias, aprovação e publicação.' },
+      { type: 'feat', text: 'Social Strategy: análise por empresa cruza perfil, concorrentes e referências via Composio/IA e gera identidade, pilares, ideias e prompts de arte.' },
+      { type: 'feat', text: 'Geração de rascunhos: ideias da estratégia podem virar posts em revisão sem preencher dados duplicados.' },
+    ],
+  },
+  {
     version: 'v1.22.1', date: '2026-06-20',
     items: [
       { type: 'feat', text: 'Social Integration Layer: conexões, posts, agendamento, status e métricas via Composio/provider isolado.' },

@@ -843,6 +843,15 @@
     async socialAddReference(payload) {
       return mpFetch('/api/social/references', { method: 'POST', body: JSON.stringify(payload) });
     },
+    async socialWorkspace(brandId) {
+      return mpFetch('/api/social/workspace?brandId=' + _enc(brandId || ''));
+    },
+    async socialAnalyzeBrand(brandId, payload) {
+      return mpFetch('/api/social/brands/' + _enc(brandId) + '/analyze', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
+    async socialGenerateDrafts(brandId, payload) {
+      return mpFetch('/api/social/brands/' + _enc(brandId) + '/generate-drafts', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
 
     /* ════════ AGÊNCIA ════════ */
 

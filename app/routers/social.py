@@ -78,6 +78,180 @@ def social_config(request: Request):
     }
 
 
+@router.get("/workspace")
+def workspace(request: Request, brandId: str):
+    err = _auth(request)
+    if err:
+        return err
+    try:
+        ensure_brand_exists(brandId)
+        from ..db_agency import social_connection_list, social_post_list
+        from ..db_companies import (
+            asset_list,
+            company_get,
+            competitor_list,
+            post_list,
+            report_get_latest,
+        )
+        company = company_get(brandId)
+        if not company:
+            return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+        return {
+            "company": company,
+            "accounts": social_connection_list(brand_id=brandId),
+            "competitors": competitor_list(brandId),
+            "references": asset_list(brandId),
+            "strategy": report_get_latest(brandId, "SOCIAL_STRATEGY"),
+            "posts": post_list(company_id=brandId, limit=50),
+            "social_posts": social_post_list(brand_id=brandId, limit=50),
+        }
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.post("/brands/{brand_id}/analyze")
+async def analyze_brand(brand_id: str, request: Request):
+    err = _auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        from ..db_companies import (
+            asset_list,
+            brand_kit_upsert,
+            company_get,
+            company_update,
+            competitor_list,
+            competitor_update,
+            report_create,
+        )
+        from ..services.ai import generate_social_strategy
+
+        company = company_get(brand_id)
+        if not company:
+            return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+
+        instagram = (body.get("instagram") or body.get("social_instagram") or "").strip()
+        if instagram:
+            socials = dict(company.get("socials") or {})
+            socials["instagram"] = instagram
+            company = company_update(brand_id, {"socials": socials}) or company
+
+        provider = get_social_provider()
+        socials = company.get("socials") or {}
+        own_profile = {"handle": socials.get("instagram") or instagram, "platform": "instagram"}
+        if own_profile.get("handle"):
+            try:
+                own_profile["analysis"] = await provider.analyze_profile(platform="instagram", handle=str(own_profile["handle"]))
+            except Exception as exc:
+                own_profile["error"] = str(getattr(exc, "message", exc))
+
+        competitor_profiles = []
+        for comp in competitor_list(brand_id):
+            handles = comp.get("handles") or {}
+            item = {"id": comp.get("id"), "name": comp.get("name"), "handles": handles, "results": {}}
+            for platform, handle in handles.items():
+                if not handle:
+                    continue
+                try:
+                    platform_norm = normalize_platform(platform)
+                except Exception:
+                    continue
+                try:
+                    item["results"][platform_norm] = await provider.analyze_profile(platform=platform_norm, handle=str(handle))
+                except Exception as exc:
+                    item["results"][platform_norm] = {"error": str(getattr(exc, "message", exc))}
+            if item["results"]:
+                competitor_update(comp["id"], {
+                    "metrics": item["results"],
+                    "dossier": json.dumps(item, ensure_ascii=False),
+                    "last_analyzed_at": datetime.now(timezone.utc).isoformat(),
+                })
+            competitor_profiles.append(item)
+
+        refs = asset_list(brand_id)
+        strategy_payload = generate_social_strategy(company, own_profile, competitor_profiles, refs)
+        report = report_create(brand_id, "SOCIAL_STRATEGY", {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "own_profile": own_profile,
+            "competitors": competitor_profiles,
+            "strategy": strategy_payload,
+        })
+
+        if body.get("applyBrandKit", True):
+            identity = strategy_payload.get("brand_identity") or {}
+            colors = identity.get("colors")
+            normalized_colors = {}
+            if isinstance(colors, list):
+                if len(colors) > 0:
+                    normalized_colors["primary"] = colors[0]
+                if len(colors) > 1:
+                    normalized_colors["secondary"] = colors[1]
+                if len(colors) > 2:
+                    normalized_colors["accent"] = colors[2]
+            elif isinstance(colors, dict):
+                normalized_colors = colors
+            brand_kit_upsert(brand_id, {
+                "voice": identity.get("voice") or "",
+                "persona": identity.get("persona") or identity.get("positioning") or "",
+                "visual_prompt_base": identity.get("visual_prompt_base") or "",
+                "colors": normalized_colors,
+            })
+
+        return {"report": report, "strategy": strategy_payload}
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.post("/brands/{brand_id}/generate-drafts")
+async def generate_brand_drafts(brand_id: str, request: Request):
+    err = _auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        from ..db_companies import company_get, post_create, report_get_latest
+        company = company_get(brand_id)
+        if not company:
+            return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+        report = report_get_latest(brand_id, "SOCIAL_STRATEGY")
+        if not report:
+            return JSONResponse({"detail": "Gere a análise social antes de criar os rascunhos."}, status_code=422)
+        payload = report.get("payload") or {}
+        strategy = payload.get("strategy") or {}
+        ideas = strategy.get("post_ideas") or []
+        if not ideas:
+            return JSONResponse({"detail": "A estratégia não contém ideias de posts."}, status_code=422)
+        limit = max(1, min(int(body.get("count") or 4), 12))
+        created = []
+        for idea in ideas[:limit]:
+            hashtags = idea.get("hashtags") or []
+            if isinstance(hashtags, list):
+                hashtags = " ".join(str(h) for h in hashtags)
+            networks = [idea.get("network") or "instagram"]
+            if body.get("networks"):
+                networks = body.get("networks")
+            post = post_create({
+                "company_id": brand_id,
+                "status": "REVIEW",
+                "title": idea.get("title") or "Ideia social",
+                "copy": idea.get("caption") or idea.get("copy") or "",
+                "hashtags": hashtags,
+                "networks": networks,
+                "scheduled_at": body.get("scheduledAt") or body.get("scheduled_at"),
+            })
+            created.append(post)
+        return {"created": created}
+    except Exception as exc:
+        return _error(exc)
+
+
 @router.post("/connect")
 async def connect(request: Request):
     err = _auth(request)

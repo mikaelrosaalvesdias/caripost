@@ -101,7 +101,7 @@ function CompanyForm({ onSaved, onCancel }) {
 
 function CompanyDetail({ companyId, onSaved, onDeleted }) {
   const [company, setCompany] = React.useState(null);
-  const [tab, setTab] = React.useState('geral');
+  const [tab, setTab] = React.useState('fluxo');
   const [loading, setLoading] = React.useState(true);
 
   const load = React.useCallback(() => {
@@ -114,17 +114,201 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
   if (loading) return <div className="panel"><div className="hint">Carregando…</div></div>;
   if (!company) return null;
 
-  const tabs = [['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['voz', 'Voz & Persona'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']];
+  const tabs = [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['voz', 'Voz & Persona'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']];
 
   return <div className="panel stack">
     <div className="tabbar">
       {tabs.map(([k, l]) => <button key={k} className={'tabx' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>)}
     </div>
+    {tab === 'fluxo' && <CompanyFluxo company={company} onSaved={load} />}
     {tab === 'geral' && <CompanyGeral company={company} onSaved={load} />}
     {tab === 'visual' && <CompanyVisual company={company} onSaved={load} />}
     {tab === 'voz' && <CompanyVoz company={company} onSaved={load} />}
     {tab === 'concorrentes' && <CompanyConcorrentes company={company} onSaved={load} />}
     {tab === 'gerar' && <CompanyGerar company={company} />}
+  </div>;
+}
+
+function CompanyFluxo({ company, onSaved }) {
+  const [workspace, setWorkspace] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  const [instagram, setInstagram] = React.useState((company.socials || {}).instagram || '');
+  const [compName, setCompName] = React.useState('');
+  const [compIg, setCompIg] = React.useState('');
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    window.mpApi.socialWorkspace(company.id)
+      .then(r => { setWorkspace(r); setLoading(false); })
+      .catch(e => { setMsg('Erro: ' + e.message); setLoading(false); });
+  }, [company.id]);
+
+  React.useEffect(() => { if (window.mpApi) load(); }, [load]);
+
+  const accounts = workspace?.accounts || [];
+  const competitors = workspace?.competitors || company.competitors || [];
+  const report = workspace?.strategy || null;
+  const strategy = report?.payload?.strategy || null;
+  const ideas = strategy?.post_ideas || [];
+  const identity = strategy?.brand_identity || {};
+
+  async function saveInstagram() {
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.updateCompany(company.id, { socials: { ...(company.socials || {}), instagram } });
+      setMsg('Instagram da empresa salvo.');
+      onSaved();
+      load();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function connect(platform) {
+    setBusy(true); setMsg('Abrindo conexão ' + platform + '...');
+    try {
+      const callbackUrl = window.location.origin + '/api/social/callback';
+      const r = await window.mpApi.socialConnect({ brandId: company.id, platform, callbackUrl });
+      if (r.redirect_url) window.open(r.redirect_url, '_blank', 'noopener,noreferrer');
+      setMsg(r.redirect_url ? 'Autorize na aba aberta e depois clique em Atualizar.' : 'Conexão registrada.');
+      setTimeout(load, 1200);
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function addCompetitor() {
+    if (!compName.trim()) { setMsg('Informe o nome do concorrente.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.socialAddCompetitor({ brandId: company.id, name: compName.trim(), instagram: compIg.trim() });
+      setCompName(''); setCompIg('');
+      setMsg('Concorrente adicionado.');
+      onSaved();
+      load();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function analyze() {
+    setBusy(true); setMsg('Analisando Instagram, concorrentes e referências...');
+    try {
+      await window.mpApi.socialAnalyzeBrand(company.id, { instagram, applyBrandKit: true });
+      setMsg('Análise pronta. Identidade, ideias e prompts foram atualizados.');
+      onSaved();
+      load();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function generateDrafts() {
+    setBusy(true); setMsg('Criando posts para aprovação...');
+    try {
+      const r = await window.mpApi.socialGenerateDrafts(company.id, { count: 4 });
+      setMsg(`${(r.created || []).length} posts enviados para aprovação.`);
+      load();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="stack">
+    <div className="grid3">
+      <div className="stat"><div className="sv">{instagram ? '1' : '0'}</div><div className="sl">Instagram da empresa</div></div>
+      <div className="stat"><div className="sv">{accounts.filter(a => a.status === 'connected' || a.status === 'active').length}</div><div className="sl">Canais conectados</div></div>
+      <div className="stat"><div className="sv">{competitors.length}</div><div className="sl">Concorrentes</div></div>
+    </div>
+
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    {loading && <div className="hint">Carregando fluxo...</div>}
+
+    <div className="split">
+      <div className="panel stack">
+        <div className="sec cy"><Icon name="building" />1. Perfil social da empresa</div>
+        <Field label="Instagram oficial">
+          <input className="inp" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@empresa ou URL do Instagram" />
+        </Field>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn sm pri" disabled={busy} onClick={saveInstagram}>Salvar Instagram</button>
+          <button className="btn sm" disabled={busy} onClick={() => connect('instagram')}><Icon name="link" />Conectar Instagram</button>
+          <button className="btn sm ghost" disabled={busy} onClick={load}>Atualizar</button>
+        </div>
+        {accounts.length ? accounts.map(acc => <div key={acc.id} className="litem" style={{ padding: 10 }}>
+          <span className="li-ic"><Icon name="broadcast" /></span>
+          <div className="li-main"><b style={{ textTransform: 'capitalize' }}>{acc.platform}</b><small>{acc.external_account_name || acc.external_account_id || 'Composio'}</small></div>
+          <Pill kind={acc.status === 'connected' || acc.status === 'active' ? 'good' : 'warn'} dot>{acc.status}</Pill>
+        </div>) : <div className="hint">Conecte o Instagram pela autorização oficial do Composio. Não é token manual.</div>}
+      </div>
+
+      <div className="panel stack">
+        <div className="sec mut"><Icon name="radar" />2. Concorrentes e referências</div>
+        <div className="split" style={{ gap: 8 }}>
+          <input className="inp" value={compName} onChange={e => setCompName(e.target.value)} placeholder="Nome do concorrente" />
+          <input className="inp" value={compIg} onChange={e => setCompIg(e.target.value)} placeholder="@instagram ou URL" />
+        </div>
+        <button className="btn sm" disabled={busy} onClick={addCompetitor}><Icon name="plus" />Adicionar concorrente</button>
+        {competitors.slice(0, 6).map(c => {
+          const h = c.handles || {};
+          return <div key={c.id} className="litem" style={{ padding: 10 }}>
+            <div className="li-main"><b>{c.name}</b><small>{h.instagram || h.website || 'sem perfil social'}</small></div>
+          </div>;
+        })}
+      </div>
+    </div>
+
+    <div className="panel stack">
+      <div className="row" style={{ justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+        <div>
+          <div className="sec pri" style={{ margin: 0 }}><Icon name="sparkles" />3. Análise automática</div>
+          <div className="hint" style={{ marginTop: 6 }}>A IA cruza perfil da empresa, concorrentes, referências e gera identidade, pilares, ideias e prompts de arte.</div>
+        </div>
+        <button className="btn pri" disabled={busy} onClick={analyze}>{busy ? 'Rodando...' : 'Analisar e gerar estratégia'}</button>
+      </div>
+
+      {strategy && <div className="split">
+        <div className="stack">
+          <div className="sec mut">Identidade sugerida</div>
+          <div className="hint">{strategy.summary}</div>
+          {identity.positioning && <div className="row"><span className="k">Posicionamento</span><span className="v">{identity.positioning}</span></div>}
+          {identity.voice && <div className="row"><span className="k">Voz</span><span className="v">{identity.voice}</span></div>}
+          {identity.visual_prompt_base && <div className="panel" style={{ fontSize: 12 }}>{identity.visual_prompt_base}</div>}
+        </div>
+        <div className="stack">
+          <div className="sec mut">Pilares</div>
+          {(strategy.content_pillars || []).slice(0, 5).map((p, i) => <div key={i} className="litem" style={{ padding: 10 }}>
+            <div className="li-main"><b>{p.name}</b><small>{p.angle}</small></div>
+          </div>)}
+        </div>
+      </div>}
+    </div>
+
+    {ideas.length > 0 && <div className="panel stack">
+      <div className="row" style={{ justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+        <div className="sec cy" style={{ margin: 0 }}><Icon name="image" />4. Ideias e prompts de arte</div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn sm pri" disabled={busy} onClick={generateDrafts}>Criar 4 posts para aprovação</button>
+          <button className="btn sm" onClick={() => window.__mpOpen && window.__mpOpen('aprovacao')}>Abrir aprovação</button>
+        </div>
+      </div>
+      <div className="grid2">
+        {ideas.slice(0, 8).map((idea, i) => <div key={i} className="litem" style={{ alignItems: 'flex-start' }}>
+          <span className="li-ic"><Icon name="sparkles" /></span>
+          <div className="li-main">
+            <b>{idea.title || 'Ideia de post'}</b>
+            <small>{idea.format || 'post'} · {idea.network || 'instagram'} · {idea.why || ''}</small>
+            {idea.visual_prompt && <div className="hint" style={{ marginTop: 8 }}>{idea.visual_prompt}</div>}
+          </div>
+        </div>)}
+      </div>
+    </div>}
+
+    <div className="panel stack">
+      <div className="sec mut"><Icon name="calendar" />5. Aprovar, produzir e agendar</div>
+      <div className="grid3">
+        <button className="btn" onClick={() => window.__mpOpen && window.__mpOpen('aprovacao')}><Icon name="shield" />Aprovar posts</button>
+        <button className="btn" onClick={() => window.__mpOpen && window.__mpOpen('criacao')}><Icon name="image" />Criar arte/mídia</button>
+        <button className="btn" onClick={() => window.__mpOpen && window.__mpOpen('publisher')}><Icon name="broadcast" />Publicar/agendar</button>
+      </div>
+    </div>
   </div>;
 }
 

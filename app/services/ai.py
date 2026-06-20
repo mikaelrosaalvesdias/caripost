@@ -439,3 +439,61 @@ def generate_post_copy(company: Dict[str, Any], briefing: str, networks: List[st
         "copy": parsed.get("copy", ""),
         "hashtags": hashtags,
     }
+
+
+def generate_social_strategy(
+    company: Dict[str, Any],
+    own_profile: Dict[str, Any],
+    competitor_profiles: List[Dict[str, Any]],
+    references: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Generate a practical social media strategy from profile/competitor signals."""
+    config = get_ai_config()
+    if not config:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+
+    brand_kit = company.get("brand_kit") or {}
+    system = (
+        "Você é um diretor de estratégia social media e diretor de arte brasileiro. "
+        "Transforme perfil da empresa, concorrentes e referências em um plano operacional. "
+        "Responda SOMENTE com JSON válido neste formato: "
+        '{"summary":"...","brand_identity":{"positioning":"...","voice":"...","persona":"...",'
+        '"visual_prompt_base":"...","style_keywords":["..."],"colors":["#..."],"do":["..."],"dont":["..."]},'
+        '"content_pillars":[{"name":"...","angle":"...","formats":["reels","carrossel"],"cadence":"..."}],'
+        '"competitor_insights":[{"competitor":"...","what_works":"...","gap":"...","adaptation":"..."}],'
+        '"post_ideas":[{"title":"...","caption":"...","format":"reels|carrossel|story|feed",'
+        '"network":"instagram","visual_prompt":"...","hashtags":["#..."],"why":"..."}],'
+        '"production_brief":["..."],"next_actions":["..."]} '
+        "Gere no mínimo 8 ideias de posts. Não invente números de métricas se não vierem nos dados. "
+        "Tudo em PT-BR, prático, sem markdown."
+    )
+    payload = {
+        "company": {
+            "name": company.get("name"),
+            "segment": company.get("segment"),
+            "city": company.get("city"),
+            "state": company.get("state"),
+            "website": company.get("website"),
+            "socials": company.get("socials") or {},
+        },
+        "current_brand_kit": {
+            "voice": brand_kit.get("voice"),
+            "persona": brand_kit.get("persona"),
+            "visual_prompt_base": brand_kit.get("visual_prompt_base"),
+            "colors": brand_kit.get("colors") or {},
+        },
+        "own_profile_analysis": own_profile or {},
+        "competitor_profiles": competitor_profiles or [],
+        "references": references or [],
+    }
+    result = complete_ai(config, system, json.dumps(payload, ensure_ascii=False), 4096)
+    parsed = extract_json(result)
+    if not parsed:
+        raise ValueError("IA não retornou JSON válido para a estratégia social.")
+    if not isinstance(parsed.get("post_ideas"), list):
+        parsed["post_ideas"] = []
+    if not isinstance(parsed.get("content_pillars"), list):
+        parsed["content_pillars"] = []
+    if not isinstance(parsed.get("competitor_insights"), list):
+        parsed["competitor_insights"] = []
+    return parsed
