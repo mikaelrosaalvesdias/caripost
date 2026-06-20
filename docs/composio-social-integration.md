@@ -112,8 +112,8 @@ Esse teste cria banco temporário, conexão mock, bloqueia publicação sem apro
 
 ## Teste Real
 
-1. Configure `COMPOSIO_API_KEY`.
-2. Configure o auth config da plataforma.
+1. Configure `Composio API` em `Settings -> Tokens & IA` ou via `COMPOSIO_API_KEY`.
+2. Configure o auth config da plataforma em `Settings -> Tokens & IA` (`Instagram Auth Config`, etc.) ou via env (`COMPOSIO_AUTH_CONFIG_INSTAGRAM`, etc.).
 3. Abra `/os/`.
 4. Acesse `Clientes`.
 5. Abra uma empresa e entre na aba `Fluxo`.

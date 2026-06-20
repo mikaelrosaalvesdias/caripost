@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.22.3 - 2026-06-20
+
+- Settings ganhou suporte para salvar `Composio API` e Auth Configs de Instagram/Facebook/TikTok/YouTube.
+- Provider Composio agora lê token salvo no banco (`token:composio` ou `social.apiKey.composio`) antes de depender de `COMPOSIO_API_KEY`.
+- `/api/social/config` agora reflete configuração Composio salva no app.
+- Versão: main.py 1.22.3, OS/UI cache bust v=12230.
+
 ## v1.22.2 - 2026-06-20
 
 - Clientes ganhou aba `Fluxo` como caminho principal: Instagram da empresa, conexão Composio, concorrentes, análise, ideias, aprovação, criação de mídia e publicação.

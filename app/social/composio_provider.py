@@ -16,6 +16,24 @@ PLATFORM_TOOLKITS = {
 }
 
 
+def _setting_value(key: str, *, decrypt_value: bool = False) -> str:
+    try:
+        from ..db import settings_get
+        row = settings_get(key=key)
+    except Exception:
+        return ""
+    value = str((row or {}).get("value") or "").strip()
+    if not value:
+        return ""
+    if decrypt_value:
+        try:
+            from ..security.encryption import decrypt
+            return (decrypt(value) or value).strip()
+        except Exception:
+            return value
+    return value
+
+
 @dataclass
 class ComposioConfig:
     api_key: str
@@ -28,7 +46,10 @@ class ComposioConfig:
         if not base.endswith("/api/v3.1"):
             base = base + "/api/v3.1"
         return cls(
-            api_key=(os.environ.get("COMPOSIO_API_KEY") or "").strip(),
+            api_key=(_setting_value("social.apiKey.composio", decrypt_value=True)
+                     or _setting_value("token:composio")
+                     or os.environ.get("COMPOSIO_API_KEY")
+                     or "").strip(),
             base_url=base,
             project_id=(os.environ.get("COMPOSIO_PROJECT_ID") or "").strip(),
         )
@@ -84,8 +105,18 @@ class ComposioSocialProvider:
             value = (os.environ.get(key) or "").strip()
             if value:
                 return value
+        setting_candidates = [
+            f"composio.authConfig.{platform}",
+            f"composio.auth_config.{platform}",
+            f"token:composio_auth_config_{platform}",
+            f"token:composio_{platform}_auth_config",
+        ]
+        for key in setting_candidates:
+            value = _setting_value(key)
+            if value:
+                return value
         raise SocialProviderError(
-            f"Auth config do Composio não configurado para {platform}. Defina {candidates[0]}.",
+            f"Auth config do Composio não configurado para {platform}. Defina {candidates[0]} ou salve composio_auth_config_{platform} em Settings.",
             status_code=503,
         )
 

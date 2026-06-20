@@ -70,7 +70,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.22.2")
+app = FastAPI(title="Adult Meta (internal)", version="1.22.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -13101,8 +13101,12 @@ def tokens_set(req: TokenSetRequest, request: Request):
     if auth_err:
         return auth_err
     provider = (req.provider or "").strip().lower()
-    if provider not in {"openai", "deepseek", "openrouter", "grok", "groq", "gemini", "fal", "deepgram"}:
-        return {"error": "unsupported_provider", "detail": "allowed providers: openai, deepseek, openrouter, grok, groq, gemini, fal, deepgram"}
+    if provider not in {
+        "openai", "deepseek", "openrouter", "grok", "groq", "gemini", "fal", "deepgram", "assemblyai",
+        "composio", "composio_auth_config_instagram", "composio_auth_config_facebook",
+        "composio_auth_config_tiktok", "composio_auth_config_youtube",
+    }:
+        return {"error": "unsupported_provider", "detail": "allowed providers: openai, deepseek, openrouter, grok, groq, gemini, fal, deepgram, assemblyai, composio"}
     api_key = (req.api_key or "").strip()
     if not api_key:
         return {"error": "missing_api_key"}

@@ -534,6 +534,13 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.22.3', date: '2026-06-20',
+    items: [
+      { type: 'fix', text: 'Composio: Settings agora aceita token Composio e Auth Configs sociais para conectar Instagram sem depender apenas de env no Docker.' },
+      { type: 'fix', text: 'Social: provider Composio lê token salvo no banco e mostra configuração correta em /api/social/config.' },
+    ],
+  },
+  {
     version: 'v1.22.2', date: '2026-06-20',
     items: [
       { type: 'feat', text: 'Clientes: nova aba Fluxo guia o caminho completo da empresa, do Instagram e concorrentes até estratégia, ideias, aprovação e publicação.' },

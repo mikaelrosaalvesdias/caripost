@@ -70,10 +70,12 @@ def social_config(request: Request):
     err = _auth(request)
     if err:
         return err
+    from ..social.composio_provider import ComposioConfig
+    composio_config = ComposioConfig.from_env()
     return {
         "enabled": (os.environ.get("SOCIAL_COMPOSIO_ENABLED", "1") != "0"),
         "provider": (os.environ.get("SOCIAL_PROVIDER") or "composio"),
-        "composio_configured": bool(os.environ.get("COMPOSIO_API_KEY")),
+        "composio_configured": bool(composio_config.api_key),
         "platforms": sorted(SUPPORTED_SOCIAL_PLATFORMS),
     }
 

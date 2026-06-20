@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.22.2';
+const MP_OS_VERSION = 'v1.22.3';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -665,7 +665,17 @@ function SettingsApp() {
   const [tokens, setTokens] = React.useState([]);
   const [health, setHealth] = React.useState(null);
   const [savingFor, setSavingFor] = React.useState('');
-  const PROVIDERS = ['openai', 'grok', 'gemini', 'deepseek', 'openrouter', 'groq', 'deepgram', 'assemblyai', 'fal'];
+  const PROVIDERS = [
+    'openai', 'grok', 'gemini', 'deepseek', 'openrouter', 'groq', 'deepgram', 'assemblyai', 'fal',
+    'composio', 'composio_auth_config_instagram', 'composio_auth_config_facebook', 'composio_auth_config_tiktok', 'composio_auth_config_youtube',
+  ];
+  const TOKEN_LABELS = {
+    composio: 'Composio API',
+    composio_auth_config_instagram: 'Instagram Auth Config',
+    composio_auth_config_facebook: 'Facebook Auth Config',
+    composio_auth_config_tiktok: 'TikTok Auth Config',
+    composio_auth_config_youtube: 'YouTube Auth Config',
+  };
 
   // AI settings state
   const [aiSettings, setAiSettings] = React.useState(null);
@@ -698,7 +708,8 @@ function SettingsApp() {
   }
 
   async function saveToken(p) {
-    const v = prompt('Cole a API key de ' + p + ':');
+    const label = TOKEN_LABELS[p] || p;
+    const v = prompt('Cole o valor de ' + label + ':');
     if (!v) return;
     setSavingFor(p);
     try { await window.mpApi.saveToken(p, v.trim()); _load(); }
@@ -751,7 +762,7 @@ function SettingsApp() {
         const t = _tokenFor(p);
         return <div key={p} className="litem">
           <span className="li-ic"><Icon name="key" /></span>
-          <div className="li-main"><b style={{ textTransform: 'capitalize' }}>{p}</b><small style={{ fontFamily: 'var(--fm)' }}>{t ? 'configurado · ' + (t.updated_at || '').slice(0, 10) : 'não configurado'}</small></div>
+          <div className="li-main"><b style={{ textTransform: 'capitalize' }}>{TOKEN_LABELS[p] || p}</b><small style={{ fontFamily: 'var(--fm)' }}>{t ? 'configurado · ' + (t.updated_at || '').slice(0, 10) : 'não configurado'}</small></div>
           <Pill kind={t ? 'good' : 'warn'} dot>{t ? 'conectado' : 'configurar'}</Pill>
           <button className="btn sm ghost" disabled={savingFor === p} onClick={() => saveToken(p)}><Icon name="pen" />{savingFor === p ? '…' : ''}</button>
         </div>;
