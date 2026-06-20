@@ -377,7 +377,7 @@ function routeTo(name) {
     }
   }
   // lazy loaders
-  if (name === 'settings') { reloadTokens(); renderChangelog(); }
+  if (name === 'settings') { reloadTokens(); renderChangelog(); aiLoadSettings(); }
   if (name === 'runs') reloadRuns();
   if (name === 'media') loadMediaManagerPage();
   if (name === 'criacao') { loadCriacaoRuns(); loadScheduledPosts(); }
@@ -392,6 +392,10 @@ function routeTo(name) {
   if (name === 'financial') financialLoad();
   if (name === 'dmca') dmcaLoad();
   if (name === 'videoenhancer') veLoad();
+  // Company modules
+  if (name === 'clientes') clientesLoad();
+  if (name === 'aprovacao') aprovacaoLoad();
+  if (name === 'concorrentes') concorrentesLoad();
 }
 
 function initRouting() {
@@ -530,7 +534,31 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
-    version: 'v1.21.0', date: '2026-06-15',
+    version: 'v1.22.0', date: '2026-06-20',
+    items: [
+      { type: 'feat', text: 'Módulo de Clientes: CRUD de empresas, brand kit (logo, cores, voz, persona), mood board e concorrentes.' },
+      { type: 'feat', text: 'Central de Aprovação: workflow DRAFT → REVIEW → APPROVED → SCHEDULED com transições validadas.' },
+      { type: 'feat', text: 'Inteligência de Concorrentes: benchmark cross-empresa com visão consolidada.' },
+      { type: 'feat', text: 'IA de texto (Anthropic/OpenAI/OpenRouter) integrada: geração de copy de posts e briefings de tendências.' },
+      { type: 'feat', text: 'Tendências atualizadas: briefing por empresa via IA, sem dependência de scraping de plataformas adultas.' },
+      { type: 'feat', text: 'Configurações de IA na página de Settings: provedor, modelo, API key e teste de conexão.' },
+      { type: 'chore', text: 'Limpeza de referências de plataformas adultas na view de Tendências.' },
+    ],
+  },
+  {
+    version: 'v1.21.3', date: '2026-06-16',
+    items: [
+      { type: 'fix', text: 'Cortes diferencia Vision IA real de fallback automático quando os tokens de IA não estão configurados.' },
+    ],
+  },
+  {
+    version: 'v1.21.2', date: '2026-06-16',
+    items: [
+      { type: 'fix', text: 'Cortes IA agora informa timestamps por frame à Vision, usa cache persistente por hash do vídeo e atualiza progresso durante a extração paralela.' },
+    ],
+  },
+  {
+    version: 'v1.21.1', date: '2026-06-15',
     items: [
       { type: 'feat', text: 'Cortes com IA: Vision analisa frames e seleciona os melhores momentos automaticamente — sem sliders de minutagem.' },
       { type: 'feat', text: 'Extração paralela de clips com semáforo: até 3 ffmpeg simultâneos, speedup de 3x.' },
@@ -14501,6 +14529,7 @@ const SESSION_KEY = 'mp_session';
 const ALL_TABS = [
   'analyze','runs','media','referencia','criacao','compare',
   'settings','telegram','autoeditor','videoenhancer','creators','publisher','trends','calendar','financial','dmca',
+  'clientes','aprovacao','concorrentes',
 ];
 
 const TAB_LABELS = {
@@ -14508,6 +14537,7 @@ const TAB_LABELS = {
   criacao: 'Criação', compare: 'Compare', settings: 'Settings', telegram: 'Telegram',
   autoeditor: 'AutoEditor', videoenhancer: 'Video Enhancer', creators: 'Criadores', publisher: 'Publicar', trends: 'Tendências',
   calendar: 'Agenda', financial: 'Financeiro', dmca: 'DMCA',
+  clientes: 'Clientes', aprovacao: 'Aprovação', concorrentes: 'Concorrentes',
 };
 
 const TAB_GROUPS = {
@@ -14527,6 +14557,9 @@ const TAB_GROUPS = {
   financial: 'Gestão de Agência',
   dmca: 'Gestão de Agência',
   settings: 'Gestão de Agência',
+  clientes: 'Gestão de Agência',
+  aprovacao: 'Gestão de Agência',
+  concorrentes: 'Gestão de Agência',
 };
 
 function updateTopbarContext(name) {
@@ -16283,12 +16316,105 @@ async function publisherCheckStatus() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function trendsLoad() {
+  // Load companies for AI trends selector
+  try {
+    const r = await apiFetch('/api/companies');
+    const companies = r.companies || [];
+    const sel = qs('trendsCompanySelector');
+    if (sel) {
+      _trendsCompanies = companies;
+      if (!companies.length) {
+        sel.innerHTML = '<span style="color:var(--muted)">Cadastre uma empresa primeiro. <a href="#clientes" data-route="clientes" style="color:var(--pri)">Ir para clientes →</a></span>';
+      } else {
+        sel.innerHTML = companies.map((c, i) =>
+          `<button class="btn ${i === 0 ? 'primary' : ''}" data-comp="${c.id}" onclick="trendsSelectCompany('${c.id}')">${esc(c.name)}</button>`
+        ).join('');
+        _trendsSelectedCompany = companies[0].id;
+      }
+    }
+    // load latest report for first company
+    if (_trendsSelectedCompany) trendsLoadReport(_trendsSelectedCompany);
+  } catch (e) { console.error('trendsLoad companies:', e); }
+
+  // Existing: load creators for briefing system
   if (!agencyState.creators.length) {
     const data = await agencyFetch('/api/creators').catch(() => ({ creators: [] }));
     agencyState.creators = data.creators || [];
     populateCreatorDropdowns(agencyState.creators);
   }
   trendsLoadBriefings();
+}
+
+let _trendsCompanies = [];
+let _trendsSelectedCompany = null;
+
+function trendsSelectCompany(id) {
+  _trendsSelectedCompany = id;
+  document.querySelectorAll('#trendsCompanySelector .btn').forEach(b => {
+    b.classList.toggle('primary', b.dataset.comp === id);
+  });
+  trendsLoadReport(id);
+}
+
+async function trendsLoadReport(companyId) {
+  try {
+    const r = await apiFetch(`/api/posts/trends/${companyId}`);
+    const el = qs('trendsReport');
+    if (!el) return;
+    const report = r.report;
+    const aiEnabled = r.ai_enabled;
+    const genBtn = qs('trendsGenBtn');
+    if (genBtn) genBtn.textContent = report ? 'Atualizar tendências' : 'Gerar tendências';
+    if (!aiEnabled) {
+      el.innerHTML = `<div class="card" style="color:var(--muted)">Configure a IA primeiro → <a href="#settings" data-route="settings" style="color:var(--pri)">Configurações</a></div>`;
+      return;
+    }
+    if (!report) {
+      el.innerHTML = '<div class="card" style="color:var(--muted);text-align:center;padding:24px">Nenhum briefing gerado ainda.</div>';
+      return;
+    }
+    const p = report.payload || {};
+    const themes = p.themes || [];
+    const hashtags = p.hashtags || [];
+    el.innerHTML = `<div class="card">
+      <h2>Briefing gerado em ${new Date(report.created_at).toLocaleString('pt-BR')}</h2>
+      <p style="margin-top:12px;color:var(--text2)">${esc(p.summary || '')}</p>
+      ${hashtags.length ? `<div style="margin-top:12px;color:var(--accent);font-size:13px">${esc(hashtags.join(' '))}</div>` : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px">
+      ${themes.map((t, i) => `<div class="card">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:20px;font-weight:700;color:var(--pri)">${i + 1}</span>
+          <strong>${esc(t.title || '')}</strong>
+        </div>
+        <p style="margin-top:8px;font-size:13px;color:var(--text2)">${esc(t.why || '')}</p>
+        ${t.formats && t.formats.length ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${t.formats.map(f => `<span class="badge">${esc(f.toUpperCase())}</span>`).join('')}</div>` : ''}
+        ${t.example ? `<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:8px;font-size:13px;color:var(--muted)">${esc(t.example)}</div>` : ''}
+        <button class="btn" style="margin-top:12px" onclick="clienteDetail('${_trendsSelectedCompany}','gerar')">Virar post →</button>
+      </div>`).join('')}
+    </div>`;
+  } catch (e) {
+    console.error('trendsLoadReport:', e);
+  }
+}
+
+async function trendsGenerateAI() {
+  if (!_trendsSelectedCompany) { toast('Selecione uma empresa.', 'bad'); return; }
+  const btn = qs('trendsGenBtn');
+  const status = qs('trendsAIStatus');
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = 'Gerando (até 1 min)...';
+  try {
+    await apiFetch(`/api/posts/trends/${_trendsSelectedCompany}/generate`, { method: 'POST', body: '{}' });
+    if (status) status.textContent = '';
+    await trendsLoadReport(_trendsSelectedCompany);
+    toast('Briefing gerado!', 'good');
+  } catch (e) {
+    if (status) status.textContent = '';
+    toast('Erro: ' + e.message, 'bad');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function trendsCollect() {
@@ -17144,8 +17270,654 @@ async function veLoadJobs() {
         </div>
         ${dlBtns}
       </div>`;
-    }).join('');
+     }).join('');
   } catch (e) {
     el.innerHTML = `<div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;">Erro: ${e.message}</div>`;
   }
 }
+
+// ── CLIENTES (Companies) ──────────────────────────────────────────────────
+
+let _clientesData = [];
+let _clienteCurrent = null;
+let _clienteCurrentTab = 'geral';
+
+async function clientesLoad() {
+  try {
+    const r = await apiFetch('/api/companies');
+    _clientesData = r.companies || [];
+    clientesRender();
+  } catch (e) {
+    const grid = qs('clientesGrid');
+    if (grid) grid.innerHTML = `<div style="color:var(--bad)">Erro: ${e.message}</div>`;
+  }
+}
+
+function clientesRender() {
+  const grid = qs('clientesGrid');
+  const empty = qs('clientesEmpty');
+  if (!grid) return;
+  const search = (qs('clientesSearch')?.value || '').toLowerCase();
+  const filtered = _clientesData.filter(c => c.name.toLowerCase().includes(search));
+  if (!filtered.length) {
+    grid.innerHTML = '';
+    if (empty) empty.classList.remove('hidden');
+    return;
+  }
+  if (empty) empty.classList.add('hidden');
+  grid.innerHTML = filtered.map(c => {
+    const seg = c.segment || 'Sem segmento';
+    const posts = c.post_count || 0;
+    const badge = c.active
+      ? '<span class="badge good">Ativo</span>'
+      : '<span class="badge bad">Inativo</span>';
+    return `<div class="card" style="cursor:pointer" onclick="clienteDetail('${c.id}')">
+      <div class="row" style="align-items:flex-start;gap:10px">
+        <span style="font-size:24px">🏢</span>
+        <div class="col grow">
+          <strong style="font-size:15px">${esc(c.name)}</strong>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">${esc(seg)} · ${posts} posts no histórico</div>
+          <div style="margin-top:8px">${badge}</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <button class="btn" onclick="event.stopPropagation();clienteDetail('${c.id}','gerar')">Gerar</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function clientesFilter() { clientesRender(); }
+
+function clientesShowAddForm() {
+  const panel = qs('clienteFormPanel');
+  const content = qs('clienteFormContent');
+  if (!panel || !content) return;
+  panel.classList.remove('hidden');
+  content.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
+      <div><label>Nome *</label><input id="clf_name" type="text" placeholder="Ex: IBIUNET" style="width:100%"/></div>
+      <div><label>Segmento</label><input id="clf_segment" type="text" placeholder="Ex: Telecom" style="width:100%"/></div>
+      <div><label>Website</label><input id="clf_website" type="text" placeholder="https://" style="width:100%"/></div>
+      <div><label>Cidade</label><input id="clf_city" type="text" placeholder="Cidade" style="width:100%"/></div>
+      <div><label>Estado</label><input id="clf_state" type="text" placeholder="UF" style="width:100%"/></div>
+      <div><label>Telefone</label><input id="clf_phone" type="text" placeholder="(11) 99999-9999" style="width:100%"/></div>
+      <div style="grid-column:1/3"><label>Email</label><input id="clf_email" type="email" placeholder="contato@empresa.com" style="width:100%"/></div>
+    </div>
+    <h3 style="margin-top:20px;font-size:14px;color:var(--muted)">Concorrentes (opcional)</h3>
+    <div id="clf_competitors" style="display:flex;flex-direction:column;gap:8px"></div>
+    <button class="btn" style="margin-top:8px" onclick="clientesAddCompetitorRow()">+ Adicionar concorrente</button>
+    <div class="row" style="margin-top:20px;gap:10px">
+      <button class="btn primary" onclick="clientesCreate()">Cadastrar empresa</button>
+      <button class="btn" onclick="clientesCloseForm()">Cancelar</button>
+    </div>
+  `;
+  clientesAddCompetitorRow();
+}
+
+function clientesAddCompetitorRow() {
+  const cont = qs('clf_competitors');
+  if (!cont) return;
+  const idx = cont.children.length;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px';
+  row.innerHTML = `
+    <input type="text" placeholder="Nome" data-comp="name" style="width:100%"/>
+    <input type="text" placeholder="@instagram" data-comp="instagram" style="width:100%"/>
+    <input type="text" placeholder="https://" data-comp="website" style="width:100%"/>
+    <button class="btn" onclick="this.parentElement.remove()" style="padding:4px 8px">✕</button>
+  `;
+  cont.appendChild(row);
+}
+
+function clientesCloseForm() {
+  qs('clienteFormPanel').classList.add('hidden');
+}
+
+async function clientesCreate() {
+  const name = qs('clf_name')?.value.trim();
+  if (!name) { alert('Nome é obrigatório'); return; }
+  const competitors = [];
+  document.querySelectorAll('#clf_competitors > div').forEach(row => {
+    const inputs = row.querySelectorAll('[data-comp]');
+    const comp = {};
+    inputs.forEach(i => comp[i.dataset.comp] = i.value.trim());
+    if (comp.name) competitors.push(comp);
+  });
+  const body = {
+    name,
+    segment: qs('clf_segment')?.value.trim() || null,
+    website: qs('clf_website')?.value.trim() || null,
+    city: qs('clf_city')?.value.trim() || null,
+    state: qs('clf_state')?.value.trim() || null,
+    phone: qs('clf_phone')?.value.trim() || null,
+    email: qs('clf_email')?.value.trim() || null,
+    competitors,
+  };
+  try {
+    await apiFetch('/api/companies', { method: 'POST', body: JSON.stringify(body) });
+    clientesCloseForm();
+    await clientesLoad();
+  } catch (e) {
+    alert('Erro: ' + e.message);
+  }
+}
+
+async function clienteDetail(id, tab) {
+  try {
+    const r = await apiFetch(`/api/companies/${id}`);
+    _clienteCurrent = r.company;
+    _clienteCurrentTab = tab || 'geral';
+    qs('clienteFormPanel').classList.add('hidden');
+    const panel = qs('clienteDetailPanel');
+    panel.classList.remove('hidden');
+    qs('clienteDetailName').textContent = _clienteCurrent.name;
+    const badge = qs('clienteDetailBadge');
+    badge.textContent = _clienteCurrent.active ? 'Ativo' : 'Inativo';
+    badge.className = 'badge ' + (_clienteCurrent.active ? 'good' : 'bad');
+    clienteTab(_clienteCurrentTab);
+    panel.scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    alert('Erro: ' + e.message);
+  }
+}
+
+function clientesCloseDetail() {
+  qs('clienteDetailPanel').classList.add('hidden');
+  _clienteCurrent = null;
+}
+
+function clienteTab(tab) {
+  _clienteCurrentTab = tab;
+  document.querySelectorAll('#clienteTabs .tab').forEach(t => t.classList.remove('active'));
+  event?.target?.classList?.add?.('active');
+  const content = qs('clienteTabContent');
+  if (!content || !_clienteCurrent) return;
+  const c = _clienteCurrent;
+  if (tab === 'geral') clienteRenderGeral(c, content);
+  else if (tab === 'visual') clienteRenderVisual(c, content);
+  else if (tab === 'voz') clienteRenderVoz(c, content);
+  else if (tab === 'concorrentes') clienteRenderConcorrentes(c, content);
+  else if (tab === 'gerar') clienteRenderGerar(c, content);
+}
+
+function clienteRenderGeral(c, el) {
+  const s = c.socials || {};
+  el.innerHTML = `<div class="card">
+    <h2>Dados Gerais</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
+      <div><label>Nome</label><input id="cg_name" type="text" value="${esc(c.name || '')}" style="width:100%"/></div>
+      <div><label>Segmento</label><input id="cg_segment" type="text" value="${esc(c.segment || '')}" placeholder="Ex: Saúde, Educação, Varejo" style="width:100%"/></div>
+      <div><label>Website</label><input id="cg_website" type="text" value="${esc(c.website || '')}" style="width:100%"/></div>
+      <div><label>Email</label><input id="cg_email" type="text" value="${esc(c.email || '')}" style="width:100%"/></div>
+      <div><label>Cidade</label><input id="cg_city" type="text" value="${esc(c.city || '')}" style="width:100%"/></div>
+      <div><label>Estado</label><input id="cg_state" type="text" value="${esc(c.state || '')}" placeholder="SP" style="width:100%"/></div>
+      <div><label>Telefone</label><input id="cg_phone" type="text" value="${esc(c.phone || '')}" placeholder="(11) 99999-9999" style="width:100%"/></div>
+    </div>
+    <h3 style="margin-top:20px;font-size:14px;color:var(--muted)">Redes sociais</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div><label>Instagram</label><input id="cg_social_instagram" type="text" value="${esc(s.instagram || '')}" placeholder="@usuario" style="width:100%"/></div>
+      <div><label>Facebook</label><input id="cg_social_facebook" type="text" value="${esc(s.facebook || '')}" style="width:100%"/></div>
+      <div><label>TikTok</label><input id="cg_social_tiktok" type="text" value="${esc(s.tiktok || '')}" style="width:100%"/></div>
+    </div>
+    <div id="cg_msg" style="margin-top:12px"></div>
+    <button class="btn primary" style="margin-top:16px" onclick="clienteSaveGeral()">Salvar</button>
+  </div>`;
+}
+
+async function clienteSaveGeral() {
+  if (!_clienteCurrent) return;
+  const body = {
+    name: qs('cg_name').value.trim(),
+    segment: qs('cg_segment').value.trim() || null,
+    website: qs('cg_website').value.trim() || null,
+    email: qs('cg_email').value.trim() || null,
+    city: qs('cg_city').value.trim() || null,
+    state: qs('cg_state').value.trim() || null,
+    phone: qs('cg_phone').value.trim() || null,
+    social_instagram: qs('cg_social_instagram').value.trim(),
+    social_facebook: qs('cg_social_facebook').value.trim(),
+    social_tiktok: qs('cg_social_tiktok').value.trim(),
+  };
+  try {
+    const r = await apiFetch(`/api/companies/${_clienteCurrent.id}`, { method: 'PUT', body: JSON.stringify(body) });
+    _clienteCurrent = r.company;
+    qs('clienteDetailName').textContent = _clienteCurrent.name;
+    qs('cg_msg').innerHTML = '<span style="color:var(--good)">✓ Salvo</span>';
+  } catch (e) {
+    qs('cg_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+function clienteRenderVisual(c, el) {
+  const bk = c.brand_kit || {};
+  const colors = bk.colors || {};
+  const refs = c.references || [];
+  el.innerHTML = `<div class="card">
+    <h2>Logo da marca</h2>
+    <div style="display:flex;align-items:center;gap:16px;margin-top:12px">
+      ${bk.logo_url ? `<img src="${esc(bk.logo_url)}" style="max-height:80px;max-width:200px;border-radius:8px;border:1px solid var(--line)"/>` : '<div style="color:var(--muted)">Sem logo</div>'}
+      <div>
+        <input id="cv_logo" type="file" accept="image/*" style="font-size:12px"/>
+        <button class="btn" onclick="clienteUploadLogo()">Upload</button>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h2>Paleta de cores</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:12px">
+      <div><label>Primária</label><div style="display:flex;align-items:center;gap:8px"><input id="cv_primary" type="color" value="${esc(colors.primary || '#123d8f')}" style="width:50px;height:40px;border:none;background:none;cursor:pointer"/><span id="cv_primary_hex" style="font-family:monospace;font-size:12px">${esc(colors.primary || '#123d8f')}</span></div></div>
+      <div><label>Secundária</label><div style="display:flex;align-items:center;gap:8px"><input id="cv_secondary" type="color" value="${esc(colors.secondary || '#fe6601')}" style="width:50px;height:40px;border:none;background:none;cursor:pointer"/><span id="cv_secondary_hex" style="font-family:monospace;font-size:12px">${esc(colors.secondary || '#fe6601')}</span></div></div>
+      <div><label>Destaque</label><div style="display:flex;align-items:center;gap:8px"><input id="cv_accent" type="color" value="${esc(colors.accent || '#14b7f0')}" style="width:50px;height:40px;border:none;background:none;cursor:pointer"/><span id="cv_accent_hex" style="font-family:monospace;font-size:12px">${esc(colors.accent || '#14b7f0')}</span></div></div>
+    </div>
+    <div id="cv_msg" style="margin-top:12px"></div>
+    <button class="btn primary" style="margin-top:16px" onclick="clienteSaveVisual()">Salvar cores</button>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h2>Mood board</h2>
+    <div style="display:flex;gap:12px;margin-top:12px;align-items:center">
+      <input id="cv_ref" type="file" accept="image/*" style="font-size:12px"/>
+      <button class="btn" onclick="clienteUploadReference()">Adicionar referência</button>
+    </div>
+    <div id="cv_refs" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-top:16px">
+      ${refs.map(r => `<div style="position:relative">
+        <img src="${esc(r.url)}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"/>
+        <button onclick="clienteDeleteReference('${r.id}')" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,.7);color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px">✕</button>
+      </div>`).join('')}
+    </div>
+  </div>`;
+  ['primary','secondary','accent'].forEach(k => {
+    const inp = qs(`cv_${k}`);
+    const hex = qs(`cv_${k}_hex`);
+    if (inp && hex) inp.oninput = () => hex.textContent = inp.value;
+  });
+}
+
+async function clienteUploadLogo() {
+  if (!_clienteCurrent) return;
+  const file = qs('cv_logo')?.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const headers = {};
+    if (state.apiKey) headers['X-API-Key'] = state.apiKey;
+    const res = await fetch(`/api/companies/${_clienteCurrent.id}/logo`, { method: 'POST', body: fd, headers });
+    if (!res.ok) throw new Error(await res.text());
+    await clienteDetail(_clienteCurrent.id, 'visual');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+async function clienteSaveVisual() {
+  if (!_clienteCurrent) return;
+  const body = {
+    primaryColor: qs('cv_primary').value,
+    secondaryColor: qs('cv_secondary').value,
+    accentColor: qs('cv_accent').value,
+  };
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/brand-kit`, { method: 'POST', body: JSON.stringify(body) });
+    qs('cv_msg').innerHTML = '<span style="color:var(--good)">✓ Cores salvas</span>';
+  } catch (e) {
+    qs('cv_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function clienteUploadReference() {
+  if (!_clienteCurrent) return;
+  const file = qs('cv_ref')?.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const headers = {};
+    if (state.apiKey) headers['X-API-Key'] = state.apiKey;
+    const res = await fetch(`/api/companies/${_clienteCurrent.id}/references`, { method: 'POST', body: fd, headers });
+    if (!res.ok) throw new Error(await res.text());
+    await clienteDetail(_clienteCurrent.id, 'visual');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+async function clienteDeleteReference(assetId) {
+  if (!_clienteCurrent) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/references/${assetId}`, { method: 'DELETE' });
+    await clienteDetail(_clienteCurrent.id, 'visual');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function clienteRenderVoz(c, el) {
+  const bk = c.brand_kit || {};
+  el.innerHTML = `<div class="card">
+    <h2>Voz &amp; Persona</h2>
+    <div style="display:flex;flex-direction:column;gap:16px;margin-top:16px">
+      <div><label>Tom de voz</label><input id="cvz_voice" type="text" value="${esc(bk.voice || '')}" placeholder="Ex: próximo, confiante, sem jargão técnico" style="width:100%"/></div>
+      <div><label>Persona da marca</label><textarea id="cvz_persona" rows="4" placeholder="Descreva a persona..." style="width:100%;resize:vertical">${esc(bk.persona || '')}</textarea></div>
+      <div><label>Base para prompt visual</label><textarea id="cvz_visual" rows="3" placeholder="Ex: fundo branco, produto em destaque, cores vibrantes" style="width:100%;resize:vertical">${esc(bk.visual_prompt_base || '')}</textarea></div>
+    </div>
+    <div id="cvz_msg" style="margin-top:12px"></div>
+    <button class="btn primary" style="margin-top:16px" onclick="clienteSaveVoz()">Salvar</button>
+  </div>`;
+}
+
+async function clienteSaveVoz() {
+  if (!_clienteCurrent) return;
+  const body = {
+    voice: qs('cvz_voice').value.trim(),
+    persona: qs('cvz_persona').value.trim(),
+    visual_prompt_base: qs('cvz_visual').value.trim(),
+  };
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/brand-kit`, { method: 'POST', body: JSON.stringify(body) });
+    qs('cvz_msg').innerHTML = '<span style="color:var(--good)">✓ Salvo</span>';
+  } catch (e) {
+    qs('cvz_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+function clienteRenderConcorrentes(c, el) {
+  const comps = c.competitors || [];
+  el.innerHTML = `<div class="card">
+    <h2>Concorrentes</h2>
+    <div id="cc_list" style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
+      ${comps.length ? comps.map(co => {
+        const h = co.handles || {};
+        return `<div class="card" style="padding:12px;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <strong>${esc(co.name)}</strong>
+            <div style="color:var(--muted);font-size:12px;margin-top:2px">
+              ${h.instagram ? esc(h.instagram) + ' · ' : ''}${h.website ? esc(h.website) : ''}
+            </div>
+          </div>
+          <button class="btn" style="padding:4px 8px" onclick="clienteRemoveCompetitor('${co.id}')">✕</button>
+        </div>`;
+      }).join('') : '<div style="color:var(--muted);text-align:center;padding:20px">Nenhum concorrente cadastrado.</div>'}
+    </div>
+    <h3 style="margin-top:20px;font-size:14px;color:var(--muted)">Adicionar concorrente</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
+      <input id="cc_name" type="text" placeholder="Nome *" style="width:100%"/>
+      <input id="cc_instagram" type="text" placeholder="@usuario" style="width:100%"/>
+      <input id="cc_website" type="text" placeholder="https://" style="width:100%"/>
+    </div>
+    <div id="cc_msg" style="margin-top:8px"></div>
+    <button class="btn primary" style="margin-top:12px" onclick="clienteAddCompetitor()">Adicionar</button>
+  </div>`;
+}
+
+async function clienteAddCompetitor() {
+  if (!_clienteCurrent) return;
+  const name = qs('cc_name').value.trim();
+  if (!name) { qs('cc_msg').innerHTML = '<span style="color:var(--bad)">Nome é obrigatório</span>'; return; }
+  const body = {
+    name,
+    instagram: qs('cc_instagram').value.trim() || null,
+    website: qs('cc_website').value.trim() || null,
+  };
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/competitors`, { method: 'POST', body: JSON.stringify(body) });
+    await clienteDetail(_clienteCurrent.id, 'concorrentes');
+  } catch (e) {
+    qs('cc_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function clienteRemoveCompetitor(compId) {
+  if (!_clienteCurrent) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/competitors/${compId}`, { method: 'DELETE' });
+    await clienteDetail(_clienteCurrent.id, 'concorrentes');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function clienteRenderGerar(c, el) {
+  el.innerHTML = `<div class="card" style="border:1px solid var(--pri);border-radius:12px">
+    <h2>Gerar com IA</h2>
+    <textarea id="cg_briefing" rows="3" placeholder="Briefing: o que esse post precisa comunicar? Ex.: promoção de plano 600MB por R$ 89,90 até sexta." style="width:100%;resize:vertical;margin-top:12px"></textarea>
+    <div id="cg_ai_msg" style="margin-top:8px"></div>
+    <button class="btn primary" style="margin-top:12px" onclick="clienteGenerateAI()">Gerar copy com IA</button>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h2>Post manual</h2>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
+      <div><label>Título interno</label><input id="cg_title" type="text" style="width:100%"/></div>
+      <div><label>Copy</label><textarea id="cg_copy" rows="6" style="width:100%;resize:vertical;min-height:120px"></textarea></div>
+      <div><label>Hashtags</label><input id="cg_hashtags" type="text" placeholder="#exemplo #marca" style="width:100%"/></div>
+      <div><label>Redes</label><div id="cg_networks" style="display:flex;gap:8px;flex-wrap:wrap"></div></div>
+      <div><label>Agendar para (opcional)</label><input id="cg_scheduled" type="datetime-local" style="width:100%"/></div>
+    </div>
+    <div id="cg_post_msg" style="margin-top:12px"></div>
+    <div class="row" style="margin-top:16px;gap:10px">
+      <button class="btn primary" onclick="clienteCreatePost('review')">Enviar para aprovação</button>
+      <button class="btn" onclick="clienteCreatePost('draft')">Salvar rascunho</button>
+    </div>
+  </div>`;
+  const nets = ['instagram','facebook','tiktok','youtube','linkedin','x'];
+  qs('cg_networks').innerHTML = nets.map((n, i) =>
+    `<button class="btn net-btn ${i === 0 ? 'primary' : ''}" data-net="${n}" onclick="this.classList.toggle('primary')">${n}</button>`
+  ).join('');
+}
+
+async function clienteGenerateAI() {
+  if (!_clienteCurrent) return;
+  const briefing = qs('cg_briefing').value.trim();
+  if (!briefing) { qs('cg_ai_msg').innerHTML = '<span style="color:var(--bad)">Digite um briefing</span>'; return; }
+  const networks = Array.from(document.querySelectorAll('.net-btn.primary')).map(b => b.dataset.net);
+  qs('cg_ai_msg').innerHTML = '<span style="color:var(--muted)">Gerando...</span>';
+  try {
+    const r = await apiFetch('/api/posts/generate-ai', { method: 'POST', body: JSON.stringify({
+      company_id: _clienteCurrent.id, briefing, networks: networks.length ? networks : ['instagram'],
+    })});
+    const g = r.generated || {};
+    if (qs('cg_title')) qs('cg_title').value = g.title || '';
+    if (qs('cg_copy')) qs('cg_copy').value = g.copy || '';
+    if (qs('cg_hashtags')) qs('cg_hashtags').value = g.hashtags || '';
+    qs('cg_ai_msg').innerHTML = '<span style="color:var(--good)">✓ Copy gerada</span>';
+  } catch (e) {
+    qs('cg_ai_msg').innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`;
+  }
+}
+
+async function clienteCreatePost(intent) {
+  if (!_clienteCurrent) return;
+  const networks = Array.from(document.querySelectorAll('.net-btn.primary')).map(b => b.dataset.net);
+  const body = {
+    company_id: _clienteCurrent.id,
+    title: qs('cg_title').value.trim(),
+    copy: qs('cg_copy').value.trim(),
+    hashtags: qs('cg_hashtags').value.trim(),
+    networks: networks.length ? networks : ['instagram'],
+    scheduled_at: qs('cg_scheduled').value || null,
+    intent,
+  };
+  if (!body.copy) { qs('cg_post_msg').innerHTML = '<span style="color:var(--bad)">Copy é obrigatória</span>'; return; }
+  try {
+    await apiFetch('/api/posts', { method: 'POST', body: JSON.stringify(body) });
+    qs('cg_post_msg').innerHTML = `<span style="color:var(--good)">✓ ${intent === 'review' ? 'Enviado para aprovação' : 'Rascunho salvo'}</span>`;
+    if (qs('cg_title')) qs('cg_title').value = '';
+    if (qs('cg_copy')) qs('cg_copy').value = '';
+    if (qs('cg_hashtags')) qs('cg_hashtags').value = '';
+  } catch (e) {
+    qs('cg_post_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+// ── APROVAÇÃO (Approval Center) ────────────────────────────────────────────
+
+async function aprovacaoLoad() {
+  try {
+    const r = await apiFetch('/api/posts?status=DRAFT,REVIEW,APPROVED,SCHEDULED');
+    const posts = r.posts || [];
+    const review = posts.filter(p => p.status === 'REVIEW');
+    const draft = posts.filter(p => p.status === 'DRAFT');
+    const approved = posts.filter(p => p.status === 'APPROVED' || p.status === 'SCHEDULED');
+    const empty = qs('aprovacaoEmpty');
+    if (!posts.length && empty) empty.classList.remove('hidden');
+    else if (empty) empty.classList.add('hidden');
+    aprovacaoRenderSection('aprovacaoReviewList', review, r.labels);
+    aprovacaoRenderSection('aprovacaoDraftList', draft, r.labels);
+    aprovacaoRenderSection('aprovacaoApprovedList', approved, r.labels);
+  } catch (e) {
+    console.error('aprovacaoLoad:', e);
+  }
+}
+
+function aprovacaoRenderSection(elId, posts, labels) {
+  const el = qs(elId);
+  if (!el) return;
+  if (!posts.length) { el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:16px;font-size:13px">Nenhum post.</div>'; return; }
+  el.innerHTML = posts.map(p => {
+    const label = (labels || {})[p.status] || p.status;
+    const badgeClass = p.status === 'REVIEW' ? 'warn' : (p.status === 'SCHEDULED' ? 'good' : '');
+    const nets = (p.networks || []).join(', ');
+    const sched = p.scheduled_at ? ` · agendado ${new Date(p.scheduled_at).toLocaleString('pt-BR')}` : '';
+    let actions = '';
+    if (p.status === 'DRAFT') actions = `<button class="btn" onclick="aprovacaoTransition('${p.id}','REVIEW')">Enviar p/ revisão</button>`;
+    else if (p.status === 'REVIEW') actions = `<button class="btn primary" onclick="aprovacaoTransition('${p.id}','APPROVED')">Aprobar</button> <button class="btn" onclick="aprovacaoTransition('${p.id}','DRAFT')">Devolver</button>`;
+    else if (p.status === 'APPROVED' && p.scheduled_at) actions = `<button class="btn primary" onclick="aprovacaoTransition('${p.id}','SCHEDULED')">Agendar</button>`;
+    actions += ` <button class="btn" style="padding:4px 8px;color:var(--bad)" onclick="aprovacaoDelete('${p.id}')">✕</button>`;
+    return `<div class="card" style="padding:16px;margin-bottom:12px">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="col grow">
+          <strong>${esc(p.title || 'Sem título')}</strong>
+          <div style="color:var(--muted);font-size:12px;margin-top:2px">${esc(p.company_name || '')}${sched} · ${esc(nets)}</div>
+        </div>
+        <span class="badge ${badgeClass}">${esc(label)}</span>
+      </div>
+      <div style="margin-top:12px;white-space:pre-wrap;font-size:14px;color:var(--text2)">${esc(p.copy || '')}</div>
+      ${p.hashtags && p.hashtags.length ? `<div style="margin-top:8px;color:var(--accent);font-size:13px">${esc(p.hashtags.join(' '))}</div>` : ''}
+      <div class="row" style="margin-top:12px;gap:8px">${actions}</div>
+    </div>`;
+  }).join('');
+}
+
+async function aprovacaoTransition(postId, to) {
+  try {
+    await apiFetch(`/api/posts/${postId}/transition`, { method: 'POST', body: JSON.stringify({ to }) });
+    await aprovacaoLoad();
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+async function aprovacaoDelete(postId) {
+  if (!confirm('Excluir este post?')) return;
+  try {
+    await apiFetch(`/api/posts/${postId}`, { method: 'DELETE' });
+    await aprovacaoLoad();
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+// ── CONCORRENTES (Cross-company benchmark) ─────────────────────────────────
+
+async function concorrentesLoad() {
+  try {
+    const r = await apiFetch('/api/companies/all/competitors');
+    const comps = r.competitors || [];
+    const grid = qs('concorrentesGrid');
+    const empty = qs('concorrentesEmpty');
+    if (!grid) return;
+    if (!comps.length) {
+      grid.innerHTML = '';
+      if (empty) empty.classList.remove('hidden');
+      return;
+    }
+    if (empty) empty.classList.add('hidden');
+    grid.innerHTML = comps.map(c => {
+      const h = c.handles || {};
+      return `<div class="card">
+        <strong style="font-size:15px">${esc(c.name)}</strong>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px">Concorrente de ${esc(c.company_name || '')}</div>
+        ${h.instagram ? `<div style="margin-top:8px;font-size:13px;color:var(--accent)">${esc(h.instagram)}</div>` : ''}
+        ${h.website ? `<div style="font-size:13px;color:var(--muted)">${esc(h.website)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('concorrentesLoad:', e);
+  }
+}
+
+// ── AI SETTINGS ────────────────────────────────────────────────────────────
+
+async function aiLoadSettings() {
+  try {
+    const r = await apiFetch('/api/ai-settings');
+    for (const section of ['ai', 'image', 'video']) {
+      const cfg = r[section];
+      if (!cfg) continue;
+      const pSel = qs(`${section}_provider`);
+      const mSel = qs(`${section}_model`);
+      const kInp = qs(`${section}_apikey`);
+      const kMask = qs(`${section}_keymask`);
+      if (pSel && cfg.provider) pSel.value = cfg.provider;
+      if (mSel && cfg.model) {
+        const opt = document.createElement('option');
+        opt.value = cfg.model; opt.textContent = cfg.model; opt.selected = true;
+        mSel.innerHTML = ''; mSel.appendChild(opt);
+      }
+      if (kInp) kInp.value = '';
+      if (kMask && cfg.keyMasks && cfg.keyMasks[cfg.provider]) {
+        kMask.textContent = `Chave salva: ${cfg.keyMasks[cfg.provider]}. Em branco mantém; cole outra para substituir.`;
+      } else if (kMask) {
+        kMask.textContent = '';
+      }
+    }
+  } catch (e) {
+    console.error('aiLoadSettings:', e);
+  }
+}
+
+async function aiLoadModels(section) {
+  const provider = qs(`${section}_provider`)?.value;
+  const apiKey = qs(`${section}_apikey`)?.value.trim();
+  if (!provider) return;
+  const mSel = qs(`${section}_model`);
+  if (mSel) mSel.innerHTML = '<option>Carregando...</option>';
+  try {
+    const r = await apiFetch('/api/ai-settings/models', { method: 'POST', body: JSON.stringify({ section, provider, api_key: apiKey || null }) });
+    const models = r.models || [];
+    if (mSel) {
+      mSel.innerHTML = models.length
+        ? models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('')
+        : '<option value="">Nenhum modelo</option>';
+    }
+    if (r.error) toast(r.error, 'bad');
+  } catch (e) {
+    if (mSel) mSel.innerHTML = '<option value="">Erro</option>';
+    toast('Erro: ' + e.message, 'bad');
+  }
+}
+
+async function aiSaveSettings() {
+  const body = {};
+  for (const section of ['ai', 'image']) {
+    const provider = qs(`${section}_provider`)?.value;
+    const model = qs(`${section}_model`)?.value;
+    const apiKey = qs(`${section}_apikey`)?.value.trim();
+    body[`${section}.provider`] = provider;
+    if (model) body[`${section}.model`] = model;
+    if (apiKey) body[`${section}.apiKey.${provider}`] = apiKey;
+  }
+  try {
+    await apiFetch('/api/ai-settings', { method: 'POST', body: JSON.stringify(body) });
+    qs('ai_save_msg').innerHTML = '<span style="color:var(--good)">✓ Configurações salvas</span>';
+    await aiLoadSettings();
+  } catch (e) {
+    qs('ai_save_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function aiTest() {
+  const el = qs('ai_test_result');
+  if (el) el.innerHTML = '<span style="color:var(--muted)">Testando...</span>';
+  try {
+    const r = await apiFetch('/api/ai-settings/test', { method: 'POST', body: '{}' });
+    if (r.test_result === 'ok') {
+      el.innerHTML = '<div class="card" style="border:1px solid var(--good);color:var(--good)">✓ Conexão ok — IA pronta para gerar conteúdo.</div>';
+    } else {
+      el.innerHTML = `<div class="card" style="border:1px solid var(--bad);color:var(--bad)">✕ ${esc(r.message || 'Erro')}</div>`;
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="card" style="border:1px solid var(--bad);color:var(--bad)">✕ ${esc(e.message)}</div>`;
+  }
+}
+
+// ── HELPERS ────────────────────────────────────────────────────────────────
+// esc() and escAttr() already defined earlier in this file

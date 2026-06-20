@@ -6,6 +6,7 @@ import contextvars
 import hashlib
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
@@ -49,6 +50,7 @@ from .llm import ProviderSpec, merge_streams, run_providers_to_completion, _OLLA
 
 # ── Agency modules ─────────────────────────────────────────────────────────
 from .db_agency import init_agency_db, creator_get
+from .db_companies import init_companies_db
 from .routers.creators import router as creators_router
 from .routers.auto_editor import router as auto_editor_router
 from .routers.publisher import router as publisher_router
@@ -59,12 +61,15 @@ from .routers.calendar_router import router as calendar_router
 from .routers.financial import router as financial_router
 from .routers.auth import router as auth_router, verify_session_token
 from .routers.video_enhancer import router as video_enhancer_router
+from .routers.companies import router as companies_router
+from .routers.posts import router as posts_router
+from .routers.ai_settings import router as ai_settings_router
 
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.21.0")
+app = FastAPI(title="Adult Meta (internal)", version="1.22.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -114,6 +119,9 @@ app.include_router(dmca_router)
 app.include_router(calendar_router)
 app.include_router(financial_router)
 app.include_router(video_enhancer_router)
+app.include_router(companies_router)
+app.include_router(posts_router)
+app.include_router(ai_settings_router)
 
 API_KEY = os.environ.get("ADULT_META_API_KEY")
 
@@ -5334,6 +5342,11 @@ app.mount("/ui", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "
 # Serve MetaPorn OS design under /os
 app.mount("/os", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "os"), html=True), name="os")
 
+# Serve company uploads (logos, mood board references)
+_uploads_dir = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "data", "uploads"))
+os.makedirs(_uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
+
 
 @app.get("/")
 def root_redirect():
@@ -5408,6 +5421,7 @@ def _setup_s3_cors():
 def _startup():
     init_db()
     init_agency_db()
+    init_companies_db()
     os.makedirs(LOCAL_MEDIA_ROOT, exist_ok=True)
     _configure_process_tmpdir()
     tmp_root = _preferred_tmpdir_root()
@@ -8385,7 +8399,7 @@ _CORTES_ASPECTS = {
     "1:1":  (1080, 1080),
     "4:5":  (1080, 1350),
 }
-_CORTES_SEMAPHORE = asyncio.Semaphore(2)
+_CORTES_SEMAPHORE = asyncio.Semaphore(3)
 _CORTES_VISION_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
 
@@ -8401,7 +8415,88 @@ def _cortes_crop_scale_filter(aspect: str, max_h: int) -> str:
     )
 
 
-async def _analyze_frames_for_clips(frames: List[str]) -> Optional[Dict[str, Any]]:
+def _cortes_video_cache_hash(video_path: str) -> str:
+    h = hashlib.sha256()
+    size = 0
+    with open(video_path, "rb") as f:
+        chunk = f.read(1024 * 1024)
+        size = len(chunk)
+        h.update(chunk)
+    try:
+        total_size = os.path.getsize(video_path)
+    except Exception:
+        total_size = size
+    return hashlib.sha256(f"{total_size}:".encode("utf-8") + h.digest()).hexdigest()[:24]
+
+
+def _cortes_vision_cache_path(cache_hash: str) -> str:
+    safe_hash = re.sub(r"[^a-fA-F0-9]", "", str(cache_hash or ""))[:64] or "unknown"
+    return os.path.join(LOCAL_MEDIA_ROOT, "cache", "vision", f"{safe_hash}.json")
+
+
+def _load_cortes_vision_cache(cache_hash: str) -> Optional[List[Dict[str, Any]]]:
+    path = _cortes_vision_cache_path(cache_hash)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        clips = data.get("clips") if isinstance(data, dict) else None
+        if isinstance(clips, list):
+            return [c for c in clips if isinstance(c, dict)]
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        print(f"[cortes] falha ao ler cache vision {path}: {exc}", flush=True)
+    return None
+
+
+def _save_cortes_vision_cache(cache_hash: str, clips: List[Dict[str, Any]], *, video_object_key: str, duration: float) -> None:
+    path = _cortes_vision_cache_path(cache_hash)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        "kind": "cortes_vision",
+        "version": 1,
+        "video_hash": cache_hash,
+        "video_object_key": video_object_key,
+        "duration": duration,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "clips": clips,
+    }
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _extract_uniform_cortes_frames(video_path: str, duration: float, out_dir: str, target_frames: int = 100) -> List[Dict[str, Any]]:
+    safe_duration = max(0.0, float(duration or 0.0))
+    if safe_duration <= 0:
+        return []
+    count = max(1, min(int(target_frames or 100), 100))
+    if safe_duration < count:
+        count = max(1, int(math.ceil(safe_duration)))
+    fps = max(0.01, count / safe_duration)
+    pattern = os.path.join(out_dir, "ai_frame_%03d.jpg")
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-vf", f"fps={fps:.6f},scale=-2:240:flags=bilinear",
+        "-frames:v", str(count),
+        "-q:v", "6",
+        pattern,
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(60, min(600, int(safe_duration * 3))))
+    except Exception:
+        pass
+    frames: List[Dict[str, Any]] = []
+    for i in range(count):
+        ts = min(max(0.0, safe_duration * (i + 1) / (count + 1)), max(0.0, safe_duration - 0.2))
+        out_path = os.path.join(out_dir, f"ai_frame_{i + 1:03d}.jpg")
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            frames.append({"path": out_path, "timestamp": round(ts, 3)})
+    return frames
+
+
+async def _analyze_frames_for_clips(frames: List[Dict[str, Any]], duration: float, max_clips: int = 6) -> Optional[Dict[str, Any]]:
     or_saved = settings_get(key="token:openrouter")
     or_key = (or_saved or {}).get("value")
     xai_saved = settings_get(key="token:grok")
@@ -8413,7 +8508,7 @@ async def _analyze_frames_for_clips(frames: List[str]) -> Optional[Dict[str, Any
         {
             "type": "text",
             "text": (
-                f"Analise estes {len(frames)} frames extraídos de um vídeo adulto em momentos de mudança de cena. "
+                f"Analise estes {len(frames)} frames extraídos uniformemente de um vídeo adulto de {duration:.1f}s. "
                 "Identifique os MELHORES MOMENTOS para cortes verticais (Shorts/Reels). "
                 "Priorize cenas com: ação intensa, close-ups, mudanças de posição, expressões faciais marcantes, boa iluminação. "
                 "EVITE: cenas escuras, momentos de pausa/transição, takes muito longos sem variação.\n\n"
@@ -8423,15 +8518,21 @@ async def _analyze_frames_for_clips(frames: List[str]) -> Optional[Dict[str, Any
                 "- 'reason': string pt-BR explicando por que este momento é bom (ex: 'Close-up intenso com expressão marcante')\n"
                 "- 'quality_score': float 0.0-1.0 indicando qualidade do corte\n\n"
                 "REGRAS:\n"
-                "- Máximo 8 clips\n"
+                f"- Máximo {max_clips} clips\n"
                 "- Duração entre 15s e 60s cada clip (start_time e end_time devem refletir isso)\n"
                 "- Os clips NÃO devem se sobrepor (espaçamento mínimo de 2s entre eles)\n"
                 "- Distribua os clips ao longo do vídeo (não todos no mesmo minuto)\n"
-                "- Inclua pelo menos um hook/abertura forte no primeiro clip"
+                "- Use os timestamps informados antes de cada frame como referência; não invente tempos fora do vídeo\n"
+                "- Inclua pelo menos um hook/abertura forte no primeiro clip quando houver cena boa"
             ),
         }
     ]
-    for b64 in frames:
+    for item in frames:
+        ts = float(item.get("timestamp") or 0.0)
+        b64 = str(item.get("b64") or "")
+        if not b64:
+            continue
+        content.append({"type": "text", "text": f"Frame em t={ts:.2f}s"})
         content.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
@@ -8464,40 +8565,30 @@ async def _analyze_frames_for_clips(frames: List[str]) -> Optional[Dict[str, Any
     return result
 
 
-async def _ai_select_best_clips(video_path: str, duration: float, td: str) -> List[Dict[str, Any]]:
-    frame_items, _ = await asyncio.to_thread(
-        _extract_intelligent_adult_keyframes,
-        in_path=video_path,
-        out_dir=td,
-        duration=duration,
-        max_frames=20,
-        scene_threshold=0.25,
-        quick=True,
+async def _ai_select_best_clips(video_path: str, duration: float, td: str, max_clips: int = 6) -> List[Dict[str, Any]]:
+    frame_items = await asyncio.to_thread(
+        _extract_uniform_cortes_frames,
+        video_path,
+        duration,
+        td,
+        100,
     )
-    if not frame_items:
-        step = max(10.0, duration / 20)
-        for i in range(20):
-            t = step * i
-            if t >= duration:
-                break
-            out_path = os.path.join(td, f"kf_{i:03d}.jpg")
-            subprocess.run([
-                "ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", video_path,
-                "-frames:v", "1", "-vf", "scale=-2:480:flags=bilinear",
-                "-q:v", "3", out_path,
-            ], capture_output=True, timeout=30)
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-                frame_items.append({"path": out_path, "timestamp": t})
-
-    frames_b64 = [
-        _file_to_base64(str(item.get("path") or ""))
-        for item in frame_items
-        if str(item.get("path") or "").strip()
-    ]
-    if not frames_b64:
+    frames_payload: List[Dict[str, Any]] = []
+    for item in frame_items:
+        path = str(item.get("path") or "")
+        if not path:
+            continue
+        try:
+            frames_payload.append({
+                "timestamp": float(item.get("timestamp") or 0.0),
+                "b64": await asyncio.to_thread(_file_to_base64, path),
+            })
+        except Exception:
+            continue
+    if not frames_payload:
         return []
 
-    result = await _analyze_frames_for_clips(frames_b64)
+    result = await _analyze_frames_for_clips(frames_payload, duration, max_clips=max_clips)
     if not result or result.get("_api_error") or result.get("_exception") or result.get("_refused"):
         return []
 
@@ -8507,25 +8598,37 @@ async def _ai_select_best_clips(video_path: str, duration: float, td: str) -> Li
 
     valid = []
     for c in clips_raw:
-        start = float(c.get("start_time") or 0)
-        end = float(c.get("end_time") or 0)
-        score = float(c.get("quality_score") or 0)
+        try:
+            start = float(c.get("start_time") or 0)
+            end = float(c.get("end_time") or 0)
+            score = float(c.get("quality_score") or 0)
+        except Exception:
+            continue
+        start = max(0.0, min(start, max(0.0, duration - 3.0)))
+        end = max(start + 3.0, min(end, duration))
         clip_dur = end - start
         if clip_dur >= 10 and end <= duration and start >= 0 and score >= 0.3:
             valid.append({
-                "start": start,
-                "end": end,
+                "start": round(start, 3),
+                "end": round(end, 3),
                 "duration": round(clip_dur, 1),
                 "reason": (c.get("reason") or "").strip(),
                 "quality_score": round(score, 2),
             })
 
     valid.sort(key=lambda x: x["quality_score"], reverse=True)
-    return valid[:10]
+    selected: List[Dict[str, Any]] = []
+    for c in valid:
+        if any(not (float(c["end"]) + 2 <= float(prev["start"]) or float(c["start"]) >= float(prev["end"]) + 2) for prev in selected):
+            continue
+        selected.append(c)
+        if len(selected) >= max_clips:
+            break
+    return sorted(selected, key=lambda x: x["start"])
 
 
 async def _cortes_worker(job_id, video_object_key, aspect,
-                         output_max_height, output_crf, run_id=""):
+                         output_max_height, output_crf, run_id="", max_clips: int = 6):
     def _patch(p):
         cur = async_job_get(kind="cortes", job_id=job_id) or {}
         cur.update(p)
@@ -8543,33 +8646,51 @@ async def _cortes_worker(job_id, video_object_key, aspect,
                 _patch({"status": "error", "detail": "Não foi possível ler a duração do vídeo.", "progress_pct": 0})
                 return
 
-            _patch({"detail": "IA analisando frames para encontrar melhores momentos…", "progress_pct": 15})
-
-            cache_key = f"cortes_vision:{video_object_key}"
+            _patch({"detail": "Calculando hash do vídeo para cache…", "progress_pct": 10})
+            video_hash = await asyncio.to_thread(_cortes_video_cache_hash, in_path)
+            cache_key = f"cortes_vision:{video_hash}"
             cached = _CORTES_VISION_CACHE.get(cache_key)
+            if cached is None:
+                cached = await asyncio.to_thread(_load_cortes_vision_cache, video_hash)
+                if cached is not None:
+                    _CORTES_VISION_CACHE[cache_key] = cached
+
             if cached is not None:
-                ai_clips = cached
-                _patch({"detail": f"Usando análise em cache — {len(ai_clips)} cena(s) encontrada(s).", "progress_pct": 20})
+                ai_clips = cached[:max_clips]
+                selection_mode = "ai_cache"
+                _patch({"detail": f"Usando análise Vision em cache — {len(ai_clips)} cena(s) encontrada(s).", "progress_pct": 22})
             else:
-                ai_clips = await _ai_select_best_clips(in_path, duration, td)
-                if ai_clips:
-                    _CORTES_VISION_CACHE[cache_key] = ai_clips
+                _patch({"detail": "Extraindo frames 240p para Vision IA…", "progress_pct": 15})
+                ai_results = await _ai_select_best_clips(in_path, duration, td, max_clips=12)
+                if ai_results:
+                    selection_mode = "ai"
+                    _CORTES_VISION_CACHE[cache_key] = ai_results
                     if len(_CORTES_VISION_CACHE) > 500:
                         _CORTES_VISION_CACHE.clear()
+                    await asyncio.to_thread(
+                        _save_cortes_vision_cache,
+                        video_hash,
+                        ai_results,
+                        video_object_key=video_object_key,
+                        duration=duration,
+                    )
+                else:
+                    selection_mode = "fallback"
+                ai_clips = ai_results[:max_clips] if ai_results else []
 
             if not ai_clips:
+                selection_mode = "fallback"
                 _patch({"detail": "IA indisponível, usando detecção automática de cenas…", "progress_pct": 20})
                 timestamps = await asyncio.to_thread(_detect_scene_timestamps, in_path, 0.30, duration)
-                default_count = 6
-                if len(timestamps) < default_count:
-                    step = max(1.0, duration / (default_count + 1))
-                    timestamps = sorted(set([round(step * (i + 1), 2) for i in range(default_count)] + list(timestamps)))
+                if len(timestamps) < max_clips:
+                    step = max(1.0, duration / (max_clips + 1))
+                    timestamps = sorted(set([round(step * (i + 1), 2) for i in range(max_clips)] + list(timestamps)))
                 picked_ts = []
                 clip_dur = min(30.0, duration / 3)
                 for t in timestamps:
                     if t + clip_dur <= duration + 0.5 and all(abs(t - p) >= clip_dur for p in picked_ts):
                         picked_ts.append(t)
-                    if len(picked_ts) >= 6:
+                    if len(picked_ts) >= max_clips:
                         break
                 if not picked_ts:
                     picked_ts = [0.0]
@@ -8612,25 +8733,39 @@ async def _cortes_worker(job_id, video_object_key, aspect,
                         "index": i + 1,
                     }
 
-            _patch({"detail": f"Extraindo {len(ai_clips)} corte(s) em paralelo…", "progress_pct": 25})
+            _patch({"detail": f"Extraindo {len(ai_clips)} corte(s) em paralelo (máx 3)…", "progress_pct": 25})
             tasks = [_extract_one(i, c) for i, c in enumerate(ai_clips)]
-            results = await asyncio.gather(*tasks)
-            outputs = [r for r in results if r is not None]
+            outputs = []
+            done_count = 0
+            for done in asyncio.as_completed(tasks):
+                item = await done
+                done_count += 1
+                if item is not None:
+                    outputs.append(item)
+                _patch({
+                    "detail": f"Extraindo cortes em paralelo… {done_count}/{len(tasks)}",
+                    "progress_pct": 25 + int(70 * done_count / max(1, len(tasks))),
+                })
+            outputs.sort(key=lambda x: int(x.get("index") or 0))
 
             if not outputs:
                 _patch({"status": "error", "detail": "Nenhum corte foi gerado.", "progress_pct": 0})
                 return
 
-            for i, o in enumerate(outputs):
-                _patch({"progress_pct": 25 + int(70 * (i + 1) / len(outputs))})
-
             _patch({
                 "status": "done",
-                "detail": f"✓ {len(outputs)} corte(s) gerado(s) por IA ({aspect}).",
+                "detail": (
+                    f"✓ {len(outputs)} corte(s) gerado(s) por Vision IA ({aspect})."
+                    if selection_mode in {"ai", "ai_cache"}
+                    else f"✓ {len(outputs)} corte(s) gerado(s) por detecção automática ({aspect})."
+                ),
                 "progress_pct": 100,
                 "clips": outputs,
                 "object_key": outputs[0]["object_key"],
                 "aspect": aspect,
+                "vision_cache_key": video_hash,
+                "selection_mode": selection_mode,
+                "ai_used": selection_mode in {"ai", "ai_cache"},
             })
     except Exception as exc:
         import traceback
@@ -8663,9 +8798,11 @@ async def cortes_generate(request: Request):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
+    max_clips = max(1, min(int(body.get("max_clips") or 6), 12))
     asyncio.create_task(_cortes_worker(
         job_id, video_object_key, aspect,
         output_max_height, output_crf, run_id,
+        max_clips,
     ))
     return {"job_id": job_id}
 

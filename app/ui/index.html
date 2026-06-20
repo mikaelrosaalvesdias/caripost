@@ -5696,8 +5696,11 @@
 
         <div class="nav-section" data-section="gestao">
           <div class="nav-section-label">Gestão de Agência</div>
+          <a href="#clientes" data-route="clientes"><span class="nav-icon">▦</span><span class="nav-copy"><span class="nav-title">Clientes</span><span class="nav-caption">Empresas e DNA da marca</span></span></a>
           <a href="#creators" data-route="creators"><span class="nav-icon">◍</span><span class="nav-copy"><span class="nav-title">Criadores</span><span class="nav-caption">Cadastro, perfis e contas</span></span></a>
           <a href="#trends" data-route="trends"><span class="nav-icon">↗</span><span class="nav-copy"><span class="nav-title">Tendências</span><span class="nav-caption">Radar e briefings</span></span></a>
+          <a href="#aprovacao" data-route="aprovacao"><span class="nav-icon">⚁</span><span class="nav-copy"><span class="nav-title">Aprovação</span><span class="nav-caption">Central de aprovação de posts</span></span></a>
+          <a href="#concorrentes" data-route="concorrentes"><span class="nav-icon">◎</span><span class="nav-copy"><span class="nav-title">Concorrentes</span><span class="nav-caption">Benchmark cross-empresa</span></span></a>
           <a href="#financial" data-route="financial"><span class="nav-icon">◔</span><span class="nav-copy"><span class="nav-title">Financeiro</span><span class="nav-caption">Receita, payout e visão da agência</span></span></a>
           <a href="#dmca" data-route="dmca"><span class="nav-icon">⛨</span><span class="nav-copy"><span class="nav-title">DMCA</span><span class="nav-caption">Monitoramento e proteção</span></span></a>
           <a href="#settings" data-route="settings"><span class="nav-icon">⚙</span><span class="nav-copy"><span class="nav-title">Settings</span><span class="nav-caption">Tokens, usuários e sistema</span></span></a>
@@ -5711,7 +5714,7 @@
         </a>
         <div class="sidebar-version">
           <span>Build atual</span>
-          <strong>v1.21.0</strong>
+          <strong>v1.22.0</strong>
         </div>
       </div>
     </aside>
@@ -5761,6 +5764,36 @@
           </div>
         </div>
       </section>
+
+      <!-- AI Settings -->
+      <section class="card">
+        <h2>IA de texto</h2>
+        <div class="hint" style="margin-bottom:12px;">Copy de posts, planos editoriais e briefings de tendência.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label>Provedor</label><select id="ai_provider" style="width:100%;height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px"><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI</option><option value="openrouter">OpenRouter</option></select></div>
+          <div><label>Modelo</label><div style="display:flex;gap:8px"><select id="ai_model" style="width:100%;height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px"></select><button class="btn" onclick="aiLoadModels('ai')">Carregar</button></div></div>
+        </div>
+        <div style="margin-top:12px"><label>API Key</label><input id="ai_apikey" type="password" placeholder="sk-ant-... / sk-... / sk-or-..." style="width:100%"/><div id="ai_keymask" style="font-size:11px;color:var(--muted);margin-top:4px"></div></div>
+      </section>
+      <section class="card">
+        <h2>IA de imagem</h2>
+        <div class="hint" style="margin-bottom:12px;">Geração de imagens para os posts.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label>Provedor</label><select id="image_provider" style="width:100%;height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px"><option value="openai">OpenAI</option><option value="openrouter">OpenRouter</option><option value="fal">fal.ai</option></select></div>
+          <div><label>Modelo</label><div style="display:flex;gap:8px"><select id="image_model" style="width:100%;height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px"></select><button class="btn" onclick="aiLoadModels('image')">Carregar</button></div></div>
+        </div>
+        <div style="margin-top:12px"><label>API Key</label><input id="image_apikey" type="password" placeholder="sk-... / sk-or-... / fal-..." style="width:100%"/><div id="image_keymask" style="font-size:11px;color:var(--muted);margin-top:4px"></div></div>
+      </section>
+      <section class="card">
+        <h2>Testar IA</h2>
+        <button class="btn primary" onclick="aiTest()">Testar conexão da IA de texto</button>
+        <div id="ai_test_result" style="margin-top:12px"></div>
+      </section>
+      <section class="card">
+        <button class="btn primary" onclick="aiSaveSettings()" style="width:100%">Salvar configurações de IA</button>
+        <div id="ai_save_msg" style="margin-top:12px"></div>
+      </section>
+
       <section class="card">
         <h2>Tokens de API</h2>
         <div class="hint" style="margin-bottom:14px;">Tokens salvos no servidor. Nunca exibimos o valor — apenas o
@@ -6955,43 +6988,49 @@
 
     <!-- TRENDS -->
     <section id="page-trends" class="page">
-      <h1>Radar de Tendências</h1>
-      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-        <button class="btn primary" onclick="trendsCollect()">🔄 Coletar Tendências Globais</button>
-        <button class="btn" onclick="trendsLoadBriefings()">📋 Atualizar Lista</button>
+      <h1>Tendências</h1>
+      <p style="color:var(--muted);margin-bottom:16px">Briefing de temas em alta por empresa — vira pauta no gerador de conteúdo.</p>
+
+      <!-- Company-based AI trends -->
+      <div class="card" style="margin-bottom:16px">
+        <h2>Briefing por Empresa</h2>
+        <div id="trendsCompanySelector" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"></div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+          <button class="btn primary" id="trendsGenBtn" onclick="trendsGenerateAI()">Gerar tendências</button>
+          <span id="trendsAIStatus" style="font-size:12px;color:var(--muted)"></span>
+        </div>
       </div>
 
-      <!-- Painel de ação por criador -->
-      <div class="card" style="margin-bottom:16px">
-        <h2>Gerar Briefing por Criador</h2>
+      <div id="trendsReport" style="margin-top:16px"></div>
+
+      <!-- Creator briefings (legacy, cleaned) -->
+      <div class="card" style="margin-top:24px">
+        <h2>Briefings por Criador</h2>
         <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
           <select id="trends_creator" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;flex:1;min-width:200px">
             <option value="">Selecione o criador...</option>
           </select>
-          <button class="btn" onclick="trendsCollectChannels()">📡 Coletar Canais</button>
           <button class="btn primary" onclick="trendsGenerateBriefingJob()">🤖 Gerar Briefing</button>
+          <button class="btn" onclick="trendsLoadBriefings()">📋 Atualizar Lista</button>
         </div>
         <div style="margin-top:8px;font-size:11px;color:#555">
-          💡 <strong>Coletar Canais</strong> — scraping XVideos/Pornhub &nbsp;|&nbsp;
-          🤖 <strong>Gerar Briefing</strong> — envia dados ao Grok e gera sugestões
+          🤖 <strong>Gerar Briefing</strong> — usa IA para gerar sugestões de conteúdo
         </div>
       </div>
 
-      <!-- Painel de progresso em tempo real -->
       <div id="trendsJobPanel" style="display:none;margin-bottom:16px">
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
             <h2 style="margin:0" id="trendsJobTitle">Processando…</h2>
             <button class="btn" style="font-size:11px" onclick="trendsJobClear()">✕ Fechar</button>
           </div>
-          <div id="trendsJobSteps" style="space-y:8px"></div>
-          <!-- Aprovação do briefing -->
-          <div id="trendsApprovalPanel" style="display:none;margin-top:16px;border-top:1px solid #2a2a2a;padding-top:16px">
-            <div style="font-size:12px;color:#aaa;margin-bottom:12px">Briefing pronto. Revise abaixo e decida se notifica o criador.</div>
+          <div id="trendsJobSteps"></div>
+          <div id="trendsApprovalPanel" style="display:none;margin-top:16px;border-top:1px solid var(--line);padding-top:16px">
+            <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Briefing pronto. Revise abaixo e decida se notifica o criador.</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn primary" onclick="trendsApproveBriefing(true)" style="background:#2a9d5c;border-color:#2a9d5c">✅ Aprovar e Notificar Criador</button>
               <button class="btn" onclick="trendsApproveBriefing(false)">👁 Aprovar sem notificar</button>
-              <button class="btn" onclick="trendsJobClear()" style="color:#c44;border-color:#c44">🗑 Descartar</button>
+              <button class="btn" onclick="trendsJobClear()" style="color:var(--bad);border-color:var(--bad)">🗑 Descartar</button>
             </div>
           </div>
         </div>
@@ -7116,6 +7155,76 @@
       <div id="dmcaInfringements"></div>
     </section>
 
+    <!-- CLIENTES -->
+    <section id="page-clientes" class="page">
+      <h1>Clientes</h1>
+      <p style="color:var(--muted);margin-bottom:16px">Empresas com comunicação padronizada e pronta para escala.</p>
+      <div class="row" style="margin-bottom:16px;gap:10px;">
+        <button class="btn primary" onclick="clientesShowAddForm()">+ Novo Cliente</button>
+        <div class="col grow">
+          <input id="clientesSearch" type="text" placeholder="Buscar por nome..." oninput="clientesFilter()" style="width:100%;max-width:320px"/>
+        </div>
+      </div>
+      <div id="clientesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px"></div>
+      <div id="clientesEmpty" class="hidden" style="color:var(--muted);text-align:center;padding:40px">Nenhuma empresa cadastrada.</div>
+
+      <!-- Add Form -->
+      <div id="clienteFormPanel" class="hidden card" style="margin-top:24px">
+        <h2 id="clienteFormTitle">Novo Cliente</h2>
+        <div id="clienteFormContent"></div>
+      </div>
+
+      <!-- Detail Panel -->
+      <div id="clienteDetailPanel" class="hidden" style="margin-top:24px">
+        <div class="card" style="margin-bottom:16px">
+          <div class="row" style="align-items:center;gap:12px">
+            <button class="btn" onclick="clientesCloseDetail()">← Voltar</button>
+            <h2 id="clienteDetailName" style="margin:0">—</h2>
+            <span id="clienteDetailBadge" class="badge"></span>
+          </div>
+          <div class="tabs" style="margin-top:16px" id="clienteTabs">
+            <button class="tab active" onclick="clienteTab('geral')">Dados Gerais</button>
+            <button class="tab" onclick="clienteTab('visual')">Identidade Visual</button>
+            <button class="tab" onclick="clienteTab('voz')">Voz &amp; Persona</button>
+            <button class="tab" onclick="clienteTab('concorrentes')">Concorrentes</button>
+            <button class="tab" onclick="clienteTab('gerar')">Gerar Conteúdo</button>
+          </div>
+        </div>
+        <div id="clienteTabContent"></div>
+      </div>
+    </section>
+
+    <!-- APROVAÇÃO -->
+    <section id="page-aprovacao" class="page">
+      <h1>Central de Aprovação</h1>
+      <p style="color:var(--muted);margin-bottom:16px">Revise, aprove ou devolva os conteúdos antes de irem para as redes.</p>
+      <div id="aprovacaoEmpty" class="hidden" style="color:var(--muted);text-align:center;padding:40px">
+        Nenhum conteúdo na fila. <a href="#clientes" data-route="clientes" style="color:var(--pri)">Ir para clientes →</a>
+      </div>
+      <div id="aprovacaoReview" class="card" style="margin-bottom:16px">
+        <h2>Aguardando aprovação</h2>
+        <div id="aprovacaoReviewList"></div>
+      </div>
+      <div id="aprovacaoDraft" class="card" style="margin-bottom:16px">
+        <h2>Rascunhos</h2>
+        <div id="aprovacaoDraftList"></div>
+      </div>
+      <div id="aprovacaoApproved" class="card" style="margin-bottom:16px">
+        <h2>Aprovados e agendados</h2>
+        <div id="aprovacaoApprovedList"></div>
+      </div>
+    </section>
+
+    <!-- CONCORRENTES -->
+    <section id="page-concorrentes" class="page">
+      <h1>Inteligência de Concorrentes</h1>
+      <p style="color:var(--muted);margin-bottom:16px">Benchmark dos concorrentes de cada empresa: o que postam, frequência e engajamento.</p>
+      <div id="concorrentesEmpty" class="hidden" style="color:var(--muted);text-align:center;padding:40px">
+        Nenhum concorrente mapeado ainda. O mapeamento automático faz parte do módulo de Pesquisa de Marketing (em construção).
+      </div>
+      <div id="concorrentesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px"></div>
+    </section>
+
       </main>
     </div>
   </div>
@@ -7162,12 +7271,12 @@
     </div>
     <div class="os-tray" aria-hidden="true">
       <span class="os-tray-pill">OS</span>
-      <span class="os-tray-pill">v1.21.0</span>
+      <span class="os-tray-pill">v1.21.3</span>
     </div>
   </nav>
 
   <div id="toast" class="toast hidden"></div>
-  <div class="version-badge">v1.21.0</div>
+  <div class="version-badge">v1.21.3</div>
 
   <!-- MODAL: CARREGAMENTO DA PÁGINA -->
   <div id="pageLoadModal" style="
@@ -7236,7 +7345,7 @@
     </div>
   </div>
 
-  <script src="/ui/app.js?v=12100"></script>
+  <script src="/ui/app.js?v=12200"></script>
 </body>
 
 </html>

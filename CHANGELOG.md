@@ -2,6 +2,33 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.22.0 - 2026-06-20
+
+- Módulo de Clientes: CRUD de empresas, brand kit (logo, cores, voz, persona), mood board e concorrentes.
+- Central de Aprovação: workflow DRAFT -> REVIEW -> APPROVED -> SCHEDULED com transições validadas.
+- Inteligência de Concorrentes: benchmark cross-empresa com visão consolidada.
+- IA de texto (Anthropic/OpenAI/OpenRouter) integrada: geração de copy de posts e briefings de tendências.
+- Tendências atualizadas: briefing por empresa via IA, sem dependência de scraping de plataformas adultas.
+- Configurações de IA na página de Settings: provedor, modelo, API key e teste de conexão.
+- Limpeza de referências de plataformas adultas na view de Tendências.
+- Backend: 6 tabelas novas (companies, brand_kits, competitors, posts, research_reports, company_assets).
+- Backend: 3 routers novos (companies, posts, ai_settings) + módulo services/ai.py.
+- Versão: main.py 1.22.0, index.html v1.22.0, app.js cache bust v=12200.
+
+## v1.21.3 - 2026-06-16
+
+- Cortes passa a indicar corretamente quando usou Vision IA/cache e quando caiu no fallback de detecção automática por falta de token/resposta de IA.
+
+## v1.21.2 - 2026-06-16
+
+- Cortes IA passa a enviar timestamps junto dos frames para a Vision selecionar tempos reais do vídeo.
+- Cache de análise Vision agora é persistente em `cache/vision/{hash}.json`, calculado pelo hash do primeiro 1MB + tamanho do vídeo.
+- Extração paralela mantém semáforo máximo 3 e atualiza o progresso conforme cada corte termina.
+
+## v1.21.1 - 2026-06-15
+
+- Ajuste de release para o pipeline de cortes IA com seleção por Vision, cache de análise e extração paralela.
+
 ## v1.21.0 - 2026-06-15
 
 - Cortes com IA: Vision analisa frames e seleciona os melhores momentos automaticamente — sem sliders de minutagem.
