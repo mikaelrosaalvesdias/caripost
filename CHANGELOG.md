@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.23.3 - 2026-06-22
+
+- **fix: Publicação Instagram funcionando end-to-end.** Imagem é re-hosteada em tmpfiles.org (upload anônimo, sem auth), `ig_user_id` incluído no passo de publish, formato `arguments` corrigido para API v3.1 do Composio. Testado e confirmado: post publicado com sucesso no Instagram.
+- **fix: Logo intacto na imagem gerada.** Removido o `_logo_cutout` (flood-fill) que destruía o logo na sobreposição da imagem gerada por IA.
+- **fix: Erros de publicação logados.** `asyncio.create_task` agora tem `add_done_callback` que captura exceções e grava log no banco.
+- Versão: main.py 1.23.3, OS/UI cache bust v=12333.
+
 ## v1.23.2 - 2026-06-22
 
 - **fix: Composio/Instagram payload format.** API v3.1 exige que os parâmetros da tool vão dentro de `arguments`, não como campos top-level. Corrigido em todos os pontos de chamada.

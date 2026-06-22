@@ -534,13 +534,11 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
-    version: 'v1.23.2', date: '2026-06-22',
+    version: 'v1.23.3', date: '2026-06-22',
     items: [
-      { type: 'fix', text: 'Composio/Instagram: corrigido formato do payload (arguments em vez de campos soltos) — API v3.1 exige parâmetros aninhados.' },
-      { type: 'fix', text: 'Composio/Instagram: ig_user_id agora é buscado automaticamente via INSTAGRAM_GET_USER_INFO e cacheado na conexão.' },
-      { type: 'fix', text: 'Composio/Instagram: imagem é re-hosteada em URL pública (Imgur) antes de enviar ao Instagram, porque os crawlers do Meta não conseguem buscar de URLs internas/privadas.' },
-      { type: 'fix', text: 'Logo: removido o flood-fill cutout que destruía o logo na hora de sobrepor na imagem gerada — o logo agora é aplicado intacto, preservando alpha original.' },
-      { type: 'fix', text: 'Social: erros da task fire-and-forget de publicação agora são capturados e logados (antes eram silenciados).' },
+      { type: 'fix', text: 'Composio/Instagram: publicação funcionando end-to-end. Imagem re-hosteada em tmpfiles.org (sem auth), ig_user_id no passo de publish, formato arguments corrigido.' },
+      { type: 'fix', text: 'Logo: removido o flood-fill cutout que destruía o logo na imagem gerada — aplicado intacto, preservando alpha original.' },
+      { type: 'fix', text: 'Social: erros da task fire-and-forget de publicação agora são capturados e logados.' },
     ],
   },
   {

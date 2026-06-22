@@ -299,7 +299,7 @@ class ComposioSocialProvider:
             if not media_url:
                 raise SocialProviderError(
                     "Não foi possível publicar a imagem em URL pública acessível pelo Instagram. "
-                    "Configure IMGUR_CLIENT_ID ou verifique se a mídia está em URL pública.",
+                    "Verifique a conexão com tmpfiles.org ou se a mídia já está em URL pública.",
                     status_code=502,
                 )
             log.info("[composio/instagram] mídia re-hosteada: %s", media_url)
@@ -343,6 +343,7 @@ class ComposioSocialProvider:
             "user_id": user_id,
             "arguments": {
                 "creation_id": str(creation_id),
+                "ig_user_id": ig_user_id,
                 "max_wait_seconds": 120 if is_video else 30,
             },
             "allow_tracing": False,
@@ -586,6 +587,7 @@ def _is_publicly_accessible_url(url: str) -> bool:
         return False
     # Domínios conhecidamente acessíveis pelos crawlers do Meta/Instagram
     trusted = (
+        "tmpfiles.org",
         "imgur.com", "i.imgur.com",
         "amazonaws.com", "s3.amazonaws.com",
         "cloudinary.com", "res.cloudinary.com",
@@ -599,19 +601,15 @@ def _is_publicly_accessible_url(url: str) -> bool:
 
 
 async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
-    """Re-hostea mídia em URL pública (Imgur) para o Instagram poder buscar.
+    """Re-hostea mídia em URL pública (tmpfiles.org) para o Instagram poder buscar.
 
-    Usa a API anônima do Imgur (IMGUR_CLIENT_ID env).
-    Retorna a URL pública ou None se falhar.
+    Os crawlers do Meta/Instagram não conseguem buscar de URLs internas/privadas,
+    então a imagem é enviada para tmpfiles.org (upload anônimo, sem auth) e a
+    URL pública direta é retornada.
     """
     import asyncio
     import logging
     log = logging.getLogger("caripost.social")
-
-    imgur_client_id = (os.environ.get("IMGUR_CLIENT_ID") or _setting_value("imgur.clientId") or "").strip()
-    if not imgur_client_id:
-        log.error("[rehost] IMGUR_CLIENT_ID não configurado — não é possível re-hostear mídia")
-        return None
 
     # Resolver o caminho local do arquivo a partir da URL
     upload_prefix = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
@@ -627,7 +625,7 @@ async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
         log.error("[rehost] arquivo não encontrado: %s", local_path)
         return None
 
-    # Ler e converter para JPEG se for imagem (Instagram prefere JPEG)
+    # Converter para JPEG se for imagem (Instagram prefere JPEG sem query params)
     try:
         import io
         if not is_video:
@@ -647,27 +645,30 @@ async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
         log.error("[rehost] erro ao processar mídia: %s", exc)
         return None
 
-    # Upload para Imgur
+    # Upload para tmpfiles.org (anônimo, sem auth, retorna URL pública sem query params)
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, headers={"User-Agent": "Mozilla/5.0"}) as client:
             res = await client.post(
-                "https://api.imgur.com/3/image" if not is_video else "https://api.imgur.com/3/upload",
-                headers={"Authorization": f"Client-ID {imgur_client_id}"},
-                files={"image": (f"post.{ext}", file_data, mime)},
+                "https://tmpfiles.org/api/v1/upload",
+                files={"file": (f"post.{ext}", file_data, mime)},
             )
             if res.status_code >= 400:
-                log.error("[rehost] Imgur rejeitou: %d %s", res.status_code, res.text[:300])
+                log.error("[rehost] tmpfiles.org rejeitou: %d %s", res.status_code, res.text[:300])
                 return None
             data = res.json()
-            public_url = data.get("data", {}).get("link")
-            if public_url:
-                # Imgur retorna http:// — Instagram precisa de https://
-                public_url = public_url.replace("http://", "https://")
-                log.info("[rehost] mídia hospedada em: %s", public_url)
-                return public_url
+            page_url = (data.get("data") or {}).get("url")
+            if not page_url:
+                log.error("[rehost] tmpfiles.org não retornou URL: %s", res.text[:300])
+                return None
+            # Converter URL de página para URL direta de download:
+            # https://tmpfiles.org/xxx/file.jpg -> https://tmpfiles.org/dl/xxx/file.jpg
+            direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)
+            direct_url = direct_url.replace("http://", "https://")
+            log.info("[rehost] mídia hospedada em: %s", direct_url)
+            return direct_url
     except Exception as exc:
-        log.error("[rehost] erro no upload Imgur: %s", exc)
+        log.error("[rehost] erro no upload tmpfiles.org: %s", exc)
         return None
 
     return None
