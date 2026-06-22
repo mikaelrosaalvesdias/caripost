@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -325,10 +326,28 @@ async def create_post(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
     })
     social_post_log_create(post["id"], "Post social criado.", payload={"status": status, "channels": len(channels)})
     if publish_now and approved:
-        asyncio.create_task(publish_social_post(post["id"]))
+        task = asyncio.create_task(publish_social_post(post["id"]))
+        _log_publish_task_error(task, post["id"])
         social_post_log_create(post["id"], "Publicação imediata enviada para o worker social.")
         post = {**post, "publish_started": True}
     return {"post": post}
+
+
+def _log_publish_task_error(task: "asyncio.Task", post_id: str) -> None:
+    """Captura exceções da task fire-and-forget para que erros de publicação
+    não fiquem silenciosos (sem log) quando acontecem antes do try/except do worker."""
+    def _cb(t: "asyncio.Task") -> None:
+        exc = t.exception()
+        if exc:
+            logging.getLogger("caripost.social").error(
+                "[publish_task] post_id=%s falhou: %s", post_id, exc
+            )
+            try:
+                from ..db_agency import social_post_log_create
+                social_post_log_create(post_id, f"Erro na task de publicação: {exc}", level="error")
+            except Exception:
+                pass
+    task.add_done_callback(_cb)
 
 
 async def publish_social_post(post_id: str, *, already_acquired: bool = False) -> Dict[str, Any]:

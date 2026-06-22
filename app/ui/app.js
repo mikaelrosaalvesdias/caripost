@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.23.1', date: '2026-06-22',
+    items: [
+      { type: 'fix', text: 'Logo: removido o flood-fill cutout que destruía o logo na hora de sobrepor na imagem gerada — o logo agora é aplicado intacto, preservando alpha original.' },
+      { type: 'fix', text: 'Composio/Instagram: publicação reescrita com 2 passos estruturados (INSTAGRAM_POST_IG_USER_MEDIA + INSTAGRAM_POST_IG_USER_MEDIA_PUBLISH) em vez de texto livre.' },
+      { type: 'fix', text: 'Social: erros da task fire-and-forget de publicação agora são capturados e logados (antes eram silenciados).' },
+    ],
+  },
+  {
     version: 'v1.22.3', date: '2026-06-20',
     items: [
       { type: 'fix', text: 'Composio: Settings agora aceita token Composio e Auth Configs sociais para conectar Instagram sem depender apenas de env no Docker.' },

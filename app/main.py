@@ -65,12 +65,13 @@ from .routers.companies import router as companies_router
 from .routers.posts import router as posts_router
 from .routers.ai_settings import router as ai_settings_router
 from .routers.social import router as social_router
+from .routers.notify import router as notify_router
 
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.22.3")
+app = FastAPI(title="Adult Meta (internal)", version="1.23.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,6 +125,7 @@ app.include_router(companies_router)
 app.include_router(posts_router)
 app.include_router(ai_settings_router)
 app.include_router(social_router)
+app.include_router(notify_router)
 
 API_KEY = os.environ.get("ADULT_META_API_KEY")
 

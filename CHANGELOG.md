@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.23.1 - 2026-06-22
+
+- **fix: Logo intacto na imagem gerada.** Removido o `_logo_cutout` (flood-fill com thresh=70) que destruía o logo na hora de sobrepor na imagem gerada por IA. O logo agora é aplicado como-is, preservando o alpha original do PNG. PNGs com transparência continuam funcionando; logos opacos mantêm o fundo intacto em vez de ficar pixelados/quebrados.
+- **fix: Publicação Instagram via Composio reescrita.** O `publish_post` não envia mais texto livre para um tool genérico. Agora faz 2 chamadas estruturadas com parâmetros nomeados: `INSTAGRAM_POST_IG_USER_MEDIA` (cria container com `image_url`/`video_url` + `caption`) → `INSTAGRAM_POST_IG_USER_MEDIA_PUBLISH` (publica com `creation_id` + `max_wait_seconds`). Slugs podem ser sobrescritos via env `COMPOSIO_TOOL_INSTAGRAM_CREATE_MEDIA` / `COMPOSIO_TOOL_INSTAGRAM_PUBLISH_MEDIA`.
+- **fix: Erros de publicação não são mais silenciados.** `asyncio.create_task(publish_social_post(...))` agora tem `add_done_callback` que captura exceções e grava log no banco (`social_post_logs`) e no logger `caripost.social`.
+- Versão: main.py 1.23.1, OS/UI cache bust v=12331.
+
 ## v1.22.3 - 2026-06-20
 
 - Settings ganhou suporte para salvar `Composio API` e Auth Configs de Instagram/Facebook/TikTok/YouTube.
