@@ -257,6 +257,11 @@ class ComposioSocialProvider:
         """Instagram exige 2 passos estruturados via Composio:
         1) INSTAGRAM_POST_IG_USER_MEDIA — cria o container com image_url/video_url + caption
         2) INSTAGRAM_POST_IG_USER_MEDIA_PUBLISH — publica o container (creation_id)
+
+        Composio v3.1 exige que os parâmetros da tool vão dentro de 'arguments'.
+        O ig_user_id é obtido automaticamente via INSTAGRAM_GET_USER_INFO.
+        A imagem é re-hosteada em URL pública (Imgur) porque o Instagram não
+        consegue buscar de URLs internas/privadas.
         """
         import logging
         log = logging.getLogger("caripost.social")
@@ -283,18 +288,39 @@ class ComposioSocialProvider:
         if not publish_slug:
             publish_slug = "INSTAGRAM_POST_IG_USER_MEDIA_PUBLISH"
 
-        # Passo 1: criar media container
+        # Buscar ig_user_id automaticamente
+        ig_user_id = await self._get_instagram_user_id(composio_conn_id, user_id, connection)
+        log.info("[composio/instagram] ig_user_id=%s", ig_user_id)
+
+        # Re-hostear imagem em URL pública se necessário (Instagram não busca de URLs internas)
+        if not _is_publicly_accessible_url(media_url):
+            log.info("[composio/instagram] re-hosteando mídia: %s", media_url)
+            media_url = await _rehost_media(media_url, is_video)
+            if not media_url:
+                raise SocialProviderError(
+                    "Não foi possível publicar a imagem em URL pública acessível pelo Instagram. "
+                    "Configure IMGUR_CLIENT_ID ou verifique se a mídia está em URL pública.",
+                    status_code=502,
+                )
+            log.info("[composio/instagram] mídia re-hosteada: %s", media_url)
+
+        # Passo 1: criar media container (parâmetros dentro de 'arguments')
+        create_args: Dict[str, Any] = {
+            "ig_user_id": ig_user_id,
+            "caption": caption,
+        }
+        if is_video:
+            create_args["video_url"] = media_url
+            create_args["media_type"] = "REELS"
+        else:
+            create_args["image_url"] = media_url
+
         create_payload: Dict[str, Any] = {
             "connected_account_id": composio_conn_id,
             "user_id": user_id,
-            "caption": caption,
+            "arguments": create_args,
             "allow_tracing": False,
         }
-        if is_video:
-            create_payload["video_url"] = media_url
-            create_payload["media_type"] = "REELS"
-        else:
-            create_payload["image_url"] = media_url
 
         log.info("[composio/instagram] passo 1: criar container slug=%s url=%s is_video=%s", create_slug, media_url, is_video)
         create_resp = await self._request("POST", f"/tools/execute/{create_slug}", json=create_payload)
@@ -311,12 +337,14 @@ class ComposioSocialProvider:
             raise SocialProviderError(err_msg, status_code=502, detail={"step": "create_container", "composio": self._safe_payload(create_resp)})
         log.info("[composio/instagram] passo 1 ok: creation_id=%s", creation_id)
 
-        # Passo 2: publicar o container
+        # Passo 2: publicar o container (parâmetros dentro de 'arguments')
         publish_payload: Dict[str, Any] = {
             "connected_account_id": composio_conn_id,
             "user_id": user_id,
-            "creation_id": str(creation_id),
-            "max_wait_seconds": 120 if is_video else 30,
+            "arguments": {
+                "creation_id": str(creation_id),
+                "max_wait_seconds": 120 if is_video else 30,
+            },
             "allow_tracing": False,
         }
         log.info("[composio/instagram] passo 2: publicar creation_id=%s", creation_id)
@@ -338,6 +366,44 @@ class ComposioSocialProvider:
             status=str(pub_data.get("status") or "published"),
             raw=self._safe_payload(pub_resp),
         )
+
+    async def _get_instagram_user_id(self, composio_conn_id: str, user_id: str, connection: Dict[str, Any]) -> str:
+        """Obtém o IG User ID automaticamente via INSTAGRAM_GET_USER_INFO.
+
+        Cacheia no metadata da conexão para evitar chamadas repetidas.
+        """
+        import logging
+        log = logging.getLogger("caripost.social")
+
+        # Tenta do cache na conexão
+        meta = connection.get("metadata") or {}
+        cached_ig_id = meta.get("ig_user_id")
+        if cached_ig_id:
+            return str(cached_ig_id)
+
+        # Busca via Composio
+        try:
+            resp = await self._request("POST", "/tools/execute/INSTAGRAM_GET_USER_INFO", json={
+                "connected_account_id": composio_conn_id,
+                "user_id": user_id,
+                "arguments": {"ig_user_id": "me"},
+                "allow_tracing": False,
+            })
+            if resp.get("successful") is not False:
+                data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+                ig_id = self._pick(data, ["id", "ig_id", "ig_user_id"])
+                if ig_id:
+                    # Cacheia na conexão
+                    try:
+                        from ..db_agency import social_connection_update
+                        social_connection_update(connection["id"], {"metadata": {**meta, "ig_user_id": str(ig_id)}})
+                    except Exception:
+                        pass
+                    return str(ig_id)
+        except Exception as exc:
+            log.warning("[composio/instagram] não foi possível obter ig_user_id: %s", exc)
+
+        return "me"
 
     async def get_post_status(self, *, post: Dict[str, Any], channel: Dict[str, Any], connection: Dict[str, Any]) -> Dict[str, Any]:
         platform = channel.get("platform") or connection.get("platform")
@@ -500,3 +566,108 @@ class ComposioSocialProvider:
         if isinstance(value, list):
             return [self._safe_payload(v) for v in value[:100]]
         return value
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers para re-hostear mídia em URL pública (Instagram não busca de URLs internas)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_publicly_accessible_url(url: str) -> bool:
+    """Verifica se a URL é HTTPS, sem query params, e de um domínio público conhecido.
+
+    Instagram rejeita URLs com query params (signed URLs) e URLs que seus
+    crawlers não conseguem buscar (servidores locais/privados).
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme != "https":
+        return False
+    if parsed.query:
+        return False
+    # Domínios conhecidamente acessíveis pelos crawlers do Meta/Instagram
+    trusted = (
+        "imgur.com", "i.imgur.com",
+        "amazonaws.com", "s3.amazonaws.com",
+        "cloudinary.com", "res.cloudinary.com",
+        "githubusercontent.com", "raw.githubusercontent.com",
+        "googleusercontent.com", "lh3.googleusercontent.com",
+        "fbcdn.net", "cdninstagram.com",
+        "twimg.com", "pinterest.com",
+    )
+    host = (parsed.netloc or "").lower()
+    return any(host.endswith(t) or host == t for t in trusted)
+
+
+async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
+    """Re-hostea mídia em URL pública (Imgur) para o Instagram poder buscar.
+
+    Usa a API anônima do Imgur (IMGUR_CLIENT_ID env).
+    Retorna a URL pública ou None se falhar.
+    """
+    import asyncio
+    import logging
+    log = logging.getLogger("caripost.social")
+
+    imgur_client_id = (os.environ.get("IMGUR_CLIENT_ID") or _setting_value("imgur.clientId") or "").strip()
+    if not imgur_client_id:
+        log.error("[rehost] IMGUR_CLIENT_ID não configurado — não é possível re-hostear mídia")
+        return None
+
+    # Resolver o caminho local do arquivo a partir da URL
+    upload_prefix = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
+    media_root = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+    if local_url.startswith(upload_prefix):
+        local_path = os.path.join(media_root, local_url[len(upload_prefix):].lstrip("/"))
+    elif local_url.startswith("/"):
+        local_path = os.path.join(media_root, local_url.lstrip("/"))
+    else:
+        local_path = local_url  # já é um caminho
+
+    if not os.path.exists(local_path):
+        log.error("[rehost] arquivo não encontrado: %s", local_path)
+        return None
+
+    # Ler e converter para JPEG se for imagem (Instagram prefere JPEG)
+    try:
+        import io
+        if not is_video:
+            from PIL import Image
+            img = Image.open(local_path).convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=95)
+            file_data = buf.getvalue()
+            mime = "image/jpeg"
+            ext = "jpg"
+        else:
+            with open(local_path, "rb") as f:
+                file_data = f.read()
+            mime = "video/mp4"
+            ext = "mp4"
+    except Exception as exc:
+        log.error("[rehost] erro ao processar mídia: %s", exc)
+        return None
+
+    # Upload para Imgur
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=60) as client:
+            res = await client.post(
+                "https://api.imgur.com/3/image" if not is_video else "https://api.imgur.com/3/upload",
+                headers={"Authorization": f"Client-ID {imgur_client_id}"},
+                files={"image": (f"post.{ext}", file_data, mime)},
+            )
+            if res.status_code >= 400:
+                log.error("[rehost] Imgur rejeitou: %d %s", res.status_code, res.text[:300])
+                return None
+            data = res.json()
+            public_url = data.get("data", {}).get("link")
+            if public_url:
+                # Imgur retorna http:// — Instagram precisa de https://
+                public_url = public_url.replace("http://", "https://")
+                log.info("[rehost] mídia hospedada em: %s", public_url)
+                return public_url
+    except Exception as exc:
+        log.error("[rehost] erro no upload Imgur: %s", exc)
+        return None
+
+    return None

@@ -2,6 +2,15 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.23.2 - 2026-06-22
+
+- **fix: Composio/Instagram payload format.** API v3.1 exige que os parâmetros da tool vão dentro de `arguments`, não como campos top-level. Corrigido em todos os pontos de chamada.
+- **fix: ig_user_id automático.** O ID do Instagram Business/Creator é obtido via `INSTAGRAM_GET_USER_INFO` e cacheado no metadata da conexão — não precisa mais configurar manualmente.
+- **fix: Re-host de imagem em URL pública.** Imagens geradas são re-hosteadas no Imgur antes de enviar ao Instagram, porque os crawlers do Meta não conseguem buscar de URLs internas/privadas. Requer `IMGUR_CLIENT_ID` env ou setting `imgur.clientId`.
+- **fix: Logo intacto na imagem gerada.** Removido o `_logo_cutout` (flood-fill) que destruía o logo na sobreposição da imagem gerada por IA.
+- **fix: Erros de publicação logados.** `asyncio.create_task` agora tem `add_done_callback` que captura exceções e grava log no banco.
+- Versão: main.py 1.23.2, OS/UI cache bust v=12332.
+
 ## v1.23.1 - 2026-06-22
 
 - **fix: Logo intacto na imagem gerada.** Removido o `_logo_cutout` (flood-fill com thresh=70) que destruía o logo na hora de sobrepor na imagem gerada por IA. O logo agora é aplicado como-is, preservando o alpha original do PNG. PNGs com transparência continuam funcionando; logos opacos mantêm o fundo intacto em vez de ficar pixelados/quebrados.
