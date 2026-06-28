@@ -784,7 +784,51 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
             y0 = _place_y(canvas, x0, cw, bh)
             _text_bg(canvas, (x0, y0, x0 + cw, y0 + bh), style, tint, radius, ACC)
             return x0, y0
-        if t == "cover":
+        if single:
+            # ARTE ÚNICA (post fixo / story): UMA peça com TUDO JUNTO — mensagem + CTA + contato + logo.
+            # Sem "arraste", sem numeração. Cada formato tem sua particularidade.
+            cw = int(W_ * _cwf); inner = cw - 2 * pad
+            tf = _font(int(cardcfg.get("title_size", 58) * 1.28), weight="extrabold")
+            eb = (slide.get("eyebrow") or "").strip().upper()
+            sub = (slide.get("subtitle") or slide.get("body") or "").strip()
+            sf = _font(29, weight="semibold")
+            btn = (slide.get("cta") or "").strip()
+            phone = (slide.get("phone") or "").strip()
+            site_t = (site or "").replace("https://", "").replace("http://", "").strip("/")
+            tl = _wrap(d, title, tf, inner)
+            sln = _wrap(d, sub, sf, inner) if sub else []
+            bh = pad + (50 if eb else 0) + len(tl) * int(tf.size * 1.05)
+            bh += (14 + len(sln) * 40) if sln else 0
+            bh += (28 + 76) if btn else 0
+            bh += (58 if phone else 0) + (42 if site_t else 0) + pad
+            x0, y0 = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
+            if eb:
+                d.text((tx, ty), eb, font=_font(28, weight="extrabold"), fill=ACC); ty += 50
+            for k, ln in enumerate(tl):
+                if k == len(tl) - 1 and " " in ln:        # última palavra em ACC (destaque editorial)
+                    pre, last = ln.rsplit(" ", 1)
+                    d.text((tx, ty), pre + " ", font=tf, fill=WHITE)
+                    d.text((tx + d.textlength(pre + " ", font=tf), ty), last, font=tf, fill=ACC)
+                else:
+                    d.text((tx, ty), ln, font=tf, fill=WHITE)
+                ty += int(tf.size * 1.05)
+            if sln:
+                ty += 14
+                for ln in sln:
+                    d.text((tx, ty), ln, font=sf, fill=(255, 255, 255, 235)); ty += 40
+            if btn:
+                ty += 28
+                bf = _font(34, weight="extrabold")
+                while d.textlength(btn, font=bf) + 64 > inner and bf.size > 20:
+                    bf = _font(bf.size - 2, weight="extrabold")
+                bw = d.textlength(btn, font=bf); btn_w = int(min(bw + 64, inner))
+                d.rounded_rectangle([tx, ty, tx + btn_w, ty + 72], 36, fill=ACC)
+                d.text((tx + (btn_w - bw) // 2, ty + 18), btn, font=bf, fill=WHITE); ty += 76
+            if phone:
+                d.text((tx, ty), phone, font=_font(40, weight="extrabold"), fill=ACC); ty += 58
+            if site_t:
+                d.text((tx, ty), site_t, font=_font(30, weight="semibold"), fill=(255, 255, 255, 225))
+        elif t == "cover":
             cw = int(W_ * _cwf); inner = cw - 2 * pad     # ESTREITO: fica na metade vazia, não cruza o centro/sujeito
             tf = _font(int(cardcfg.get("title_size", 58) * _tf_mul), weight="extrabold")
             eb = (slide.get("eyebrow") or ("Arraste para o lado" if total > 1 else "")).strip().upper()

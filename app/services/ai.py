@@ -1873,6 +1873,23 @@ BRIEFING_GEN: Dict[str, Any] = {
     "name_rule": "NOMES EXATOS E OBRIGATÓRIOS (nunca abrevie/erre): E-Saúde, Looke (NUNCA \"Look\"), Deezer, ExitLag, CARIAP. ",
     "content_rules": ("REGRAS: sem preços; nada de 'compre/contrate/assine' nos slides de conteúdo (só no CTA); "
                       "conteúdo que EDUCA o provedor sobre o tema; frases específicas, não clichê."),
+    # ARTE ÚNICA (post fixo / story): cada formato tem sua particularidade. NÃO é carrossel — é UMA peça com tudo junto.
+    "single_addendum": (
+        " >>> FORMATO ARTE ÚNICA (post fixo / story), NÃO é carrossel: gere UMA ÚNICA peça que entrega TUDO numa tacada — "
+        "gancho + a mensagem essencial + o CTA, já juntos. NÃO existe 'próxima página': é PROIBIDO escrever 'arraste', "
+        "'veja a seguir', 'no próximo', 'continua', 'role', 'swipe'. Tenha MAIS CRIATIVIDADE e ousadia no conceito "
+        "(sem fugir da identidade da marca). Uma frase-conceito forte + no MÁXIMO 1 linha de apoio + um CTA curto e direto. "
+        "Densidade máxima numa peça só — nada de encher de texto."
+    ),
+    "single_json_format": (
+        'Formato JSON (UMA tela só, nada além disso): {"theme":"...","slides":[{'
+        '"type":"cover","eyebrow":"CATEGORIA CURTA","title":"frase-conceito forte de 3-8 palavras",'
+        '"subtitle":"no máx. 1 linha de apoio OU um dado real (data/local do evento); pode ficar vazio",'
+        '"cta":"chamada de ação curta (ex.: Fale com a gente, Visite nosso estande, Saiba mais)",'
+        '"app":"nome EXATO do app se a peça for sobre um app, senão vazio",'
+        '"visual":"cena fotográfica concreta, CRIATIVA e premium que apoie a mensagem (sem texto/logo na imagem)",'
+        '"text_area":"left","brand_logo_position":"bottom_left"}]}. '
+    ),
     "brief_system": (
         "Você é planejador de conteúdo de uma agência social de alto nível (referência g4.business / v4company). "
         "A partir de um ASSUNTO, entregue um PLANO COMPLETO, específico e forte — nada genérico nem raso. "
@@ -2084,15 +2101,16 @@ def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educ
     # POST / STORY → 1 ARTE RICA: reusa a MESMA máquina do carrossel e pega a CAPA (forte, standalone,
     # com visual concreto + app → mesma qualidade do carrossel; type=cover → influencer entra). NÃO é pauta pelada.
     if fmt in ("post", "story", "stories", "storie"):
-        cr = generate_carousel(company, theme, 3, intent=intent, event=event)
+        cr = generate_carousel(company, theme, 1, intent=intent, event=event, formato=fmt)
         slides = cr.get("slides") or []
-        cover = next((s for s in slides if (s.get("type") == "cover")), (slides[0] if slides else None))
-        tela = dict(cover) if cover else {"type": "cover", "title": theme, "eyebrow": obj}
-        tela["type"] = "cover"
-        corpo = (tela.get("body") or tela.get("subtitle") or "").strip()
+        tela = dict(slides[0]) if slides else {"type": "cover", "title": theme, "eyebrow": obj}
+        tela["type"] = "cover"   # influencer/sanitize tratam como capa; o composer detecta arte única por total==1
+        corpo = (tela.get("subtitle") or tela.get("body") or "").strip()
+        cta = (tela.get("cta") or "").strip()
         text = "\n".join([f"GRANDE IDEIA: {cr.get('theme') or theme}", "",
                           f"{'Story (9:16)' if fmt != 'post' else 'Post fixo (4:5)'} — {tela.get('title','')}",
                           (f"  • {corpo}" if corpo else ""),
+                          (f"  • CTA: {cta}" if cta else ""),
                           (f"  • Visual: {tela.get('visual')}" if tela.get('visual') else "")]).strip()
         return {"formato": fmt, "telas": [tela], "text": text}
     # VÍDEO → roteiro em prosa.
@@ -2166,7 +2184,7 @@ def sanitize_event_plan(event: Optional[Dict[str, Any]], slides: list) -> list:
     return slides
 
 
-def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, intent: str = "produtos", event: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, intent: str = "produtos", event: Optional[Dict[str, Any]] = None, formato: str = "carrossel") -> Dict[str, Any]:
     """Gera um CARROSSEL editorial (estilo g4.business / v4company): capa com gancho,
     slides de conteúdo de VALOR (sem cara de venda) e último slide com CTA de contratação.
     n_slides=0 → a IA escolhe (6–9 no total). Texto via Claude (assinatura)."""
@@ -2178,7 +2196,10 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
     audience = (bk.get("audience") or "provedores de internet (ISPs)").strip()
     rules = (bk.get("client_rules") or "").strip()
     intent = (intent or "produtos").lower()
+    single = (formato or "carrossel").lower() in ("post", "story", "stories", "storie")   # ARTE ÚNICA (post/story)
     system = G.get("carousel_system_" + intent) or G["carousel_system"]   # MODO: produtos | evento | criativo
+    if single:
+        system = system + G["single_addendum"]                            # particularidade do formato arte única
     # Apps REAIS cadastrados → a IA tagueia o campo 'app' por tela a partir DESTES (não inventa) e distribui.
     try:
         from ..db_companies import product_list as _plist
@@ -2220,15 +2241,25 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
                   f"MENOS 1 slide de conteúdo dedicado, E aparecer no CTA. NÃO pule NENHUM — nem o que parecer menos "
                   f"óbvio pro tema (ex.: E-Saúde/saúde): ache o ângulo (telemedicina no frio evita sair de casa, "
                   f"consulta sem fila, etc.). ") if themed else ""
-    user = (
-        f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
-        f"Público (fale COM ele): {audience}. "
-        f"Tema do carrossel: {theme}. {n_rule} "
-        + event_line + apps_line + cover_line
-        + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
-        + G["json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"]
-        + G.get("layout_rule", "") + G["content_rules"]
-    )
+    if single:
+        # ARTE ÚNICA: UMA peça completa (mensagem + CTA), estrutura própria, sem regras de carrossel.
+        user = (
+            f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
+            f"Público (fale COM ele): {audience}. Tema: {theme}. "
+            + event_line + apps_line
+            + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
+            + G["single_json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"] + G["content_rules"]
+        )
+    else:
+        user = (
+            f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
+            f"Público (fale COM ele): {audience}. "
+            f"Tema do carrossel: {theme}. {n_rule} "
+            + event_line + apps_line + cover_line
+            + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
+            + G["json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"]
+            + G.get("layout_rule", "") + G["content_rules"]
+        )
     # ROBUSTEZ: token alto (JSON de 6+ telas é longo → 4096 truncava e dava 502) + até 3 tentativas.
     slides, data = [], {}
     for _att in range(3):
@@ -2240,6 +2271,14 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
             break
     if not slides:
         raise ValueError("A IA não retornou as telas do carrossel (JSON inválido). Tente de novo.")
+    if single:
+        # ARTE ÚNICA: 1 peça completa. Garante CTA e tag do app (a IA às vezes omite); pula a cobertura multi-slide.
+        s0 = slides[0]; s0["type"] = "cover"
+        if not (s0.get("cta") or "").strip():
+            s0["cta"] = "Visite nosso estande" if intent == "evento" else "Fale com a gente"
+        if not (s0.get("app") or "").strip() and themed:
+            s0["app"] = themed[0]
+        return {"theme": data.get("theme") or theme, "slides": [s0]}
     # COBERTURA DETERMINÍSTICA: todo app citado TEM que aparecer. Refaz 1x; se AINDA faltar, o CÓDIGO gera
     # a tela do app que sobrou e insere À FORÇA (não depende da boa-vontade da IA).
     if themed:
