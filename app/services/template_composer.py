@@ -769,8 +769,12 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
         body = (slide.get("body") or slide.get("subheadline") or "").strip()
         pad = 40
         has_app = bool(applist)
-        # ESTILO do tratamento de texto (variedade por carrossel; configurável via design.text_style):
-        style = (slide.get("text_style") or cardcfg.get("style") or "glass").lower()
+        # ESTILO do tratamento de texto. POST FIXO e STORY (arte ÚNICA) NÃO usam a caixinha do carrossel —
+        # ganham tratamento POSTER: sem caixa (gradiente), coluna mais larga e título grande (mais criativo).
+        single = (total == 1)
+        _cwf = 0.60 if single else 0.44          # coluna de texto mais larga no post/story
+        _tf_mul = 1.42 if single else 1.0         # título bem maior (cara de poster)
+        style = "scrim" if single else (slide.get("text_style") or cardcfg.get("style") or "glass").lower()
         def _put(cw, bh):
             # CONFIÁVEL: lado VAZIO definido pelo JUIZ DE VISÃO (slide['text_side']); senão heurística de borda.
             side = (slide.get("text_side") or "").lower()
@@ -781,8 +785,8 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
             _text_bg(canvas, (x0, y0, x0 + cw, y0 + bh), style, tint, radius, ACC)
             return x0, y0
         if t == "cover":
-            cw = int(W_ * 0.44); inner = cw - 2 * pad     # ESTREITO: fica na metade vazia, não cruza o centro/sujeito
-            tf = _font(int(cardcfg.get("title_size", 58)), weight="extrabold")
+            cw = int(W_ * _cwf); inner = cw - 2 * pad     # ESTREITO: fica na metade vazia, não cruza o centro/sujeito
+            tf = _font(int(cardcfg.get("title_size", 58) * _tf_mul), weight="extrabold")
             eb = (slide.get("eyebrow") or ("Arraste para o lado" if total > 1 else "")).strip().upper()
             tl = _wrap(d, title, tf, inner)
             foot = 80 if total > 1 else 0          # espaço do "arraste" SÓ no carrossel
@@ -801,8 +805,8 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
             if total > 1:
                 _arraste(d, tx, ty + 12, ACC)
         elif t == "cta":
-            cw = int(W_ * 0.44); inner = cw - 2 * pad     # ESTREITO: dentro da metade vazia
-            hf = _font(42, weight="extrabold")
+            cw = int(W_ * _cwf); inner = cw - 2 * pad     # ESTREITO: dentro da metade vazia
+            hf = _font(int(42 * _tf_mul), weight="extrabold")
             hl = _wrap(d, title or "Fale com a gente", hf, inner)
             sub = (slide.get("subtitle") or slide.get("body") or "").strip()   # ex.: datas/stand do evento
             sf = _font(25, weight="semibold")
@@ -830,8 +834,8 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
             if site_t:
                 d.text((tx, ty), site_t, font=_font(28, weight="semibold"), fill=(255, 255, 255, 220))
         else:  # content — SEM pílula de nome (a logo do app já está no topo): número + título + corpo
-            cw = int(W_ * 0.44); inner = cw - 2 * pad     # ESTREITO: dentro da metade vazia, longe do sujeito
-            tf = _font(44, weight="extrabold"); bf = _font(28, weight="medium")
+            cw = int(W_ * _cwf); inner = cw - 2 * pad     # ESTREITO: dentro da metade vazia, longe do sujeito
+            tf = _font(int(44 * _tf_mul), weight="extrabold"); bf = _font(int(28 * (1.2 if single else 1)), weight="medium")
             tl = _wrap(d, title, tf, inner); blines = _wrap(d, body, bf, inner)
             bh = pad + 64 + len(tl) * 56 + 14 + len(blines) * 40 + pad
             x0, y0 = _put(cw, bh); tx = x0 + pad; ty = y0 + pad

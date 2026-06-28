@@ -134,6 +134,21 @@ def _logo_cutout(logo):
         return logo
 
 
+def _logo_path_cutout(path: str) -> str:
+    """Aplica _logo_cutout num ARQUIVO de logo (remove fundo branco assado → transparente) e devolve o
+    caminho do PNG recortado (cacheado). Usado nas logos de EVENTO (que vêm com fundo branco/caixa)."""
+    try:
+        cache = path + ".cut.png"
+        if os.path.exists(cache) and os.path.getmtime(cache) >= os.path.getmtime(path):
+            return cache
+        from PIL import Image
+        out = _logo_cutout(Image.open(path))
+        out.save(cache)
+        return cache
+    except Exception:
+        return path
+
+
 def _overlay_logo(image_bytes: bytes, logo_path: str, position: str = "top-right", scale: float = 0.15) -> bytes:
     """Overlay the logo as a clean white rounded badge with a soft shadow.
 
@@ -894,7 +909,14 @@ async def render_carousel(request: Request):
                     _org = organizer_get(_ev["organizer_id"])
                     if _org:
                         _eassets += list(_org.get("logos") or [])
-                event_logo_variants = _all_raster_logos(_eassets)
+                _epaths = []
+                for _a in _eassets:
+                    _u = _a.get("url") or ""
+                    if _u.startswith(UPLOAD_URL_PREFIX):
+                        _pp = os.path.join(UPLOAD_DIR, _u[len(UPLOAD_URL_PREFIX):].lstrip("/"))
+                        if os.path.exists(_pp):
+                            _epaths.append(_logo_path_cutout(_pp))   # remove o FUNDO BRANCO (a caixa) da logo do evento
+                event_logo_variants = _epaths or _all_raster_logos(_eassets)
                 if _ev:
                     event_cta_info = _format_event_info(_ev)   # REAL — substitui o que a IA tiver inventado
                     # SANEIA TODAS as telas (datas/stand inventados em qualquer campo, incl. visual) ANTES do render E da legenda.
