@@ -534,6 +534,20 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.26.58', date: '2026-06-28',
+    items: [
+      { type: 'feat', text: 'Conteúdo: motor de proteção detecta pessoa, rosto, mão e objetos para posicionar texto no maior retângulo livre, evitando texto sobre personagem.' },
+      { type: 'feat', text: 'Criativos: pacote CLI `python -m creative` com debug overlay e tratamentos visuais determinísticos por seed.' },
+    ],
+  },
+  {
+    version: 'v1.26.54', date: '2026-06-27',
+    items: [
+      { type: 'fix', text: 'Conteúdo/evento: se a composição com influencer real falhar, a arte cai para cena sem pessoa em vez de gerar uma pessoa fake.' },
+      { type: 'fix', text: 'Conteúdo/evento: CTA com influencer prioriza expressão positiva e pode reutilizar a melhor foto para evitar rosto triste ou aflito em convite de visita.' },
+    ],
+  },
+  {
     version: 'v1.23.4', date: '2026-06-22',
     items: [
       { type: 'fix', text: 'Instagram: re-host de imagem corrigido — URLs completas HTTPS agora são resolvidas para o caminho local no disco antes do upload ao tmpfiles.org.' },

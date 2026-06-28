@@ -71,7 +71,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.26.49")
+app = FastAPI(title="Adult Meta (internal)", version="1.26.58")
 
 app.add_middleware(
     CORSMiddleware,
@@ -5350,6 +5350,32 @@ app.mount("/os", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "
 _uploads_dir = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "data", "uploads"))
 os.makedirs(_uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
+
+
+@app.get("/thumb")
+def _thumb(p: str = "", w: int = 220):
+    """Miniatura PÚBLICA e CACHEADA de um upload (carrega rápido — não baixa a foto full-res)."""
+    import hashlib
+    from fastapi.responses import FileResponse, Response
+    base = os.path.normpath(_uploads_dir)
+    rel = (p.split("/uploads/", 1)[-1] if "/uploads/" in p else p).lstrip("/")
+    src = os.path.normpath(os.path.join(base, rel))
+    if not src.startswith(base) or not os.path.isfile(src):
+        return Response(status_code=404)
+    try:
+        w = max(60, min(int(w or 220), 800))
+    except Exception:
+        w = 220
+    cdir = os.path.join(base, "_thumb"); os.makedirs(cdir, exist_ok=True)
+    cache = os.path.join(cdir, f"{w}_{hashlib.md5(rel.encode()).hexdigest()}.jpg")
+    try:
+        if (not os.path.isfile(cache)) or os.path.getmtime(cache) < os.path.getmtime(src):
+            from PIL import Image
+            im = Image.open(src).convert("RGB"); im.thumbnail((w, w * 2))
+            im.save(cache, "JPEG", quality=82)
+        return FileResponse(cache, media_type="image/jpeg")
+    except Exception:
+        return FileResponse(src)
 
 
 @app.get("/")

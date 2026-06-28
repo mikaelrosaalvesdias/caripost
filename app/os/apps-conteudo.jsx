@@ -241,7 +241,7 @@ function StepBriefing({ company }) {
         setMsg(`Montando ${fmtLabel} sobre "${seed}" (objetivo: ${objetivo}, formato: ${formato})…`);
         // post/story = 1 arte RICA (capa pela máquina do carrossel, no backend); carrossel = plano completo.
         const isSingle = formato === 'post' || formato === 'story';
-        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId });
+        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, tom, cta, sources });
         const text = ((r && r.briefing) || '').trim();
         if (!text) { setMsg('Não consegui gerar agora. Tente de novo.'); return; }
         let tl = (r && r.telas) || [];
@@ -305,6 +305,21 @@ function StepBriefing({ company }) {
         </div>
         <small className="hint">Carrossel → plano de telas · Post fixo → pauta · Vídeo → roteiro em cenas.</small>
       </Field>}
+      {mode === 'auto' && <div className="card" style={{ padding: 10, fontSize: 12 }}>
+        <b style={{ fontSize: 12 }}>📋 Dados que a IA vai usar (antes de gerar)</b>
+        <div className="mut" style={{ marginTop: 4, lineHeight: 1.7 }}>
+          • Empresa: <b>{company.name}</b><br />
+          • Modo: <b>{(INTENTS.find(x => x[0] === intent) || [])[1] || intent}</b> · Formato: <b>{formato}</b> · Objetivo: <b>{objetivo}</b><br />
+          • Apps marcados (recursos reais entram): <b>{products.filter(p => sources[p.id]).map(p => p.name).join(', ') || '(nenhum marcado → usa todos)'}</b><br />
+          {intent === 'evento' && (() => {
+            const ev = events.find(e => e.id === eventId);
+            return ev
+              ? <span>• Evento: <b>{ev.name}</b> · {ev.date_start || '?'}{ev.date_end && ev.date_end !== ev.date_start ? ' a ' + ev.date_end : ''} · {ev.location || '?'} · {(ev.logos || []).length} logo(s)<br /></span>
+              : <span>• Evento: <b style={{ color: '#fb2f68' }}>nenhum selecionado</b> (escolha acima)<br /></span>;
+          })()}
+          • Tom: <b>{tom || '(padrão da marca)'}</b> · CTA: <b>{cta || '(padrão)'}</b>
+        </div>
+      </div>}
       {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto') : 'Gerar briefing com IA (apps marcados)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
       <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>

@@ -2,6 +2,19 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.26.58 - 2026-06-28
+
+- **feat: Motor de proteção para criativos.** Novo pacote `creative` com detecção de pessoa/rosto/mão/objetos, Maximal Empty Rectangle e CLI `python -m creative`.
+- **feat: Texto seguro no compositor.** `compose_card_slide` usa o mapa de proteção para posicionar cards no maior retângulo livre e encolher a largura quando o sujeito está no centro ou há dois sujeitos.
+- **fix: Barra de progresso segura.** A barra superior deixa de ser desenhada quando o detector aponta rosto/pessoa/mão naquela faixa, evitando atravessar cabeça/personagem.
+- Versão: main.py 1.26.58, OS/UI cache bust v=12658.
+
+## v1.26.54 - 2026-06-27
+
+- **fix: Influencer real em conteúdo de evento.** Se o image-to-image do influencer falhar, o render cai para uma cena sem pessoa; não transborda para uma geração com pessoa inventada.
+- **fix: Emoção do CTA.** A seleção de foto do influencer para CTA prioriza expressão positiva e pode reutilizar a melhor foto para evitar rosto triste/aflito em convite de visita.
+- Versão: main.py 1.26.54, OS/UI cache bust v=12654.
+
 ## v1.23.4 - 2026-06-22
 
 - **fix: Instagram/publicação pela plataforma.** URLs completas HTTPS (ex.: `https://caripost.n8nmikael.com.br/uploads/...`) agora são corretamente resolvidas para o caminho local no disco antes do re-host no tmpfiles.org. Antes o re-host falhava silenciosamente e o post nunca era publicado.

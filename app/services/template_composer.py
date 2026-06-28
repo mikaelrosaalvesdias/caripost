@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import io
 import os
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -723,6 +723,70 @@ def _place_y(canvas, x0, cw, bh):
     return best
 
 
+def _boxes_overlap(a, b) -> bool:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return not (ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay)
+
+
+class NoSafeTextZone(RuntimeError):
+    """Detector ran, but no text card can fit without touching protected regions."""
+
+
+def _creative_protection(canvas: Image.Image):
+    """Best-effort detector. If deps/model are missing, callers fall back to the old composer."""
+    try:
+        from creative.detect import detect
+        return detect(canvas.convert("RGB"))
+    except Exception:
+        return None
+
+
+def _protection_hits(pmap, box, kinds=("face", "person", "hand", "object")) -> bool:
+    if not pmap:
+        return False
+    return any(d.kind in kinds and _boxes_overlap(d.box, box) for d in pmap.regions)
+
+
+def _safe_card_position(canvas: Image.Image, pmap, reserved_boxes, cw: int, bh: int, margin: int):
+    """Maximal Empty Rectangle placement for the card, including logo/progress reserved zones."""
+    if not pmap:
+        return None
+    try:
+        from creative.placement import Detection, ProtectionMap, top_n_rects
+        extras = [Detection(tuple(map(int, b)), "object", 1.0) for b in reserved_boxes or []]
+        protected = ProtectionMap(canvas.width, canvas.height, list(pmap.regions), pmap.silhouette)
+        forbidden = protected.forbidden_mask(extras)
+        rects = top_n_rects(forbidden, margin, 12, min_w=max(220, int(cw * 0.78)), min_h=max(120, bh))
+        candidates = [r for r in rects if r[2] >= cw and r[3] >= bh]
+        if not candidates:
+            return None
+        # Prefer large empty regions; within one, align the card toward the nearest outside edge.
+        r = max(candidates, key=lambda z: z[2] * z[3])
+        rx, ry, rw, rh = r
+        if rx + rw / 2 <= canvas.width / 2:
+            x0 = rx
+        else:
+            x0 = rx + rw - cw
+        y0 = ry + max(0, (rh - bh) // 2)
+        return int(max(margin, min(canvas.width - margin - cw, x0))), int(max(margin, min(canvas.height - margin - bh, y0)))
+    except Exception:
+        return None
+
+
+def _safe_card_region(canvas: Image.Image, pmap, reserved_boxes, bh: int, margin: int, min_w: int):
+    if not pmap:
+        return None
+    try:
+        from creative.placement import Detection, ProtectionMap, top_n_rects
+        extras = [Detection(tuple(map(int, b)), "object", 1.0) for b in reserved_boxes or []]
+        protected = ProtectionMap(canvas.width, canvas.height, list(pmap.regions), pmap.silhouette)
+        rects = top_n_rects(protected.forbidden_mask(extras), margin, 12, min_w=min_w, min_h=max(120, bh))
+        return max(rects, key=lambda z: z[2] * z[3]) if rects else None
+    except Exception:
+        return None
+
+
 def compose_card_slide(slide: Dict, idx: int, total: int,
                        colors: Optional[Dict] = None, company_logo_path=None,
                        site: str = "", handle: str = "", bg_bytes: Optional[bytes] = None,
@@ -746,25 +810,35 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
         d = ImageDraw.Draw(canvas)
         t = (slide.get("type") or "content").lower()
         page = f"{idx}/{total}"
+        pmap = _creative_protection(canvas)
+        reserved_boxes = []
         # barra de progresso — SÓ no carrossel (1 arte avulsa não tem "telas")
-        if total > 1:
+        progress_box = (M, 40, max(1, W_ - 2 * M), 44)
+        if total > 1 and not _protection_hits(pmap, progress_box, ("face", "person", "hand")):
             seg = (W_ - 2 * M - (total - 1) * 12) / max(1, total)
             for i in range(total):
                 x = M + i * (seg + 12)
                 d.rounded_rectangle([x, 56, x + seg, 62], 3, fill=ACC if i < idx else (255, 255, 255, 70))
+            reserved_boxes.append(progress_box)
         # logo(s) de app no topo-direita (melhor variante por contraste) — ZONA RESERVADA, nunca coberta
         applist = [a for a in (app_logos or []) if a] or ([[app_logo_path]] if app_logo_path else [])
         ax = W_ - M
         for variants in applist[:3]:
             lg = _pick_logo_variant(variants, _region_lum(canvas.convert("RGB"), (max(0, ax - 210), 92, ax, 168)), 200, 56)
             if lg:
-                _stamp_app_logo(canvas, lg, ax - lg.width, 96); ax -= lg.width + 28
+                lx, ly = ax - lg.width, 96
+                _stamp_app_logo(canvas, lg, lx, ly)
+                reserved_boxes.append((lx, ly, lg.width + 36, lg.height + 36))
+                ax -= lg.width + 28
         # rodapé: logo da marca (melhor variante) embaixo-esquerda + número — ZONA RESERVADA
         bl = _pick_logo_variant(company_logo_path, _region_lum(canvas.convert("RGB"), (M, H_ - 110, M + 240, H_ - 40)), 240, 66)
         if bl:
-            _stamp_app_logo(canvas, bl, M, H_ - 40 - bl.height)
+            bly = H_ - 40 - bl.height
+            _stamp_app_logo(canvas, bl, M, bly)
+            reserved_boxes.append((M, bly, bl.width + 36, bl.height + 36))
         if total > 1:
             d.text((W_ - 150, H_ - 70), page, font=_font(30, weight="bold"), fill=(255, 255, 255, 220))
+            reserved_boxes.append((W_ - 190, H_ - 92, 150, 56))
         title = (slide.get("title") or "").strip()
         body = (slide.get("body") or slide.get("subheadline") or "").strip()
         pad = 40
@@ -772,22 +846,43 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
         # ESTILO do tratamento de texto (variedade por carrossel; configurável via design.text_style):
         style = (slide.get("text_style") or cardcfg.get("style") or "glass").lower()
         def _put(cw, bh):
-            # CONFIÁVEL: lado VAZIO definido pelo JUIZ DE VISÃO (slide['text_side']); senão heurística de borda.
+            safe = _safe_card_position(canvas, pmap, reserved_boxes, cw, bh, M)
+            if safe:
+                x0, y0 = safe
+                _text_bg(canvas, (x0, y0, x0 + cw, y0 + bh), style, tint, radius, ACC)
+                reserved_boxes.append((x0, y0, cw, bh))
+                return x0, y0, True
+            if pmap:
+                raise NoSafeTextZone("no safe text zone for detected subject/object map")
+            # Fallback legado: lado VAZIO definido pelo JUIZ DE VISÃO (slide['text_side']); senão heurística de borda.
             side = (slide.get("text_side") or "").lower()
             if side not in ("left", "right"):
                 side = _subject_side(canvas)
             x0 = M if side == "left" else W_ - M - cw
             y0 = _place_y(canvas, x0, cw, bh)
             _text_bg(canvas, (x0, y0, x0 + cw, y0 + bh), style, tint, radius, ACC)
-            return x0, y0
+            reserved_boxes.append((x0, y0, cw, bh))
+            return x0, y0, False
         if t == "cover":
-            cw = int(W_ * 0.44); inner = cw - 2 * pad     # ESTREITO: fica na metade vazia, não cruza o centro/sujeito
+            cw = int(W_ * 0.44); min_cw = int(W_ * 0.22)
             tf = _font(int(cardcfg.get("title_size", 58)), weight="extrabold")
             eb = (slide.get("eyebrow") or ("Arraste para o lado" if total > 1 else "")).strip().upper()
-            tl = _wrap(d, title, tf, inner)
-            foot = 80 if total > 1 else 0          # espaço do "arraste" SÓ no carrossel
-            bh = pad + (44 if eb else 0) + len(tl) * int(tf.size * 1.05) + foot + pad
-            x0, y0 = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
+            sub = (slide.get("subtitle") or "").strip()    # ex.: data/local REAL do evento (capa do post/story)
+            sf = _font(26, weight="semibold")
+            for _attempt in range(5):
+                inner = max(80, cw - 2 * pad)     # ESTREITO: fica no retângulo livre, não cruza sujeito
+                tl = _wrap(d, title, tf, inner)
+                sln = _wrap(d, sub, sf, inner) if sub else []
+                foot = 80 if total > 1 else 0          # espaço do "arraste" SÓ no carrossel
+                bh = pad + (44 if eb else 0) + len(tl) * int(tf.size * 1.05) + (len(sln) * 34 + 10 if sln else 0) + foot + pad
+                if _safe_card_position(canvas, pmap, reserved_boxes, cw, bh, M):
+                    break
+                reg = _safe_card_region(canvas, pmap, reserved_boxes, bh, M, min_cw)
+                nxt = int(min(cw - 12, reg[2])) if reg else int(cw * 0.86)
+                if nxt >= cw or cw <= min_cw:
+                    break
+                cw = max(min_cw, nxt)
+            x0, y0, _safe = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
             if eb:
                 d.text((tx, ty), eb, font=_font(26, weight="extrabold"), fill=ACC); ty += 44
             for k, ln in enumerate(tl):
@@ -798,20 +893,33 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
                 else:
                     d.text((tx, ty), ln, font=tf, fill=WHITE)
                 ty += int(tf.size * 1.05)
+            if sln:                                  # data/local do evento (ou sub-headline) sob o título
+                ty += 6
+                for ln in sln:
+                    d.text((tx, ty), ln, font=sf, fill=(255, 255, 255, 230)); ty += 34
             if total > 1:
                 _arraste(d, tx, ty + 12, ACC)
         elif t == "cta":
-            cw = int(W_ * 0.44); inner = cw - 2 * pad     # ESTREITO: dentro da metade vazia
+            cw = int(W_ * 0.44); min_cw = int(W_ * 0.24)
             hf = _font(42, weight="extrabold")
-            hl = _wrap(d, title or "Fale com a gente", hf, inner)
             sub = (slide.get("subtitle") or slide.get("body") or "").strip()   # ex.: datas/stand do evento
             sf = _font(25, weight="semibold")
-            sln = _wrap(d, sub, sf, inner) if sub else []
             phone = (slide.get("phone") or "").strip()
             site_t = (site or "").replace("https://", "").replace("http://", "").strip("/")
             btn = (slide.get("cta") or "Fale com a gente").strip()
-            bh = pad + len(hl) * 54 + (len(sln) * 32 + 14 if sln else 0) + 24 + 72 + 26 + (50 if phone else 0) + (38 if site_t else 0) + pad
-            x0, y0 = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
+            for _attempt in range(5):
+                inner = max(90, cw - 2 * pad)     # ESTREITO: dentro do retângulo livre
+                hl = _wrap(d, title or "Fale com a gente", hf, inner)
+                sln = _wrap(d, sub, sf, inner) if sub else []
+                bh = pad + len(hl) * 54 + (len(sln) * 32 + 14 if sln else 0) + 24 + 72 + 26 + (50 if phone else 0) + (38 if site_t else 0) + pad
+                if _safe_card_position(canvas, pmap, reserved_boxes, cw, bh, M):
+                    break
+                reg = _safe_card_region(canvas, pmap, reserved_boxes, bh, M, min_cw)
+                nxt = int(min(cw - 12, reg[2])) if reg else int(cw * 0.86)
+                if nxt >= cw or cw <= min_cw:
+                    break
+                cw = max(min_cw, nxt)
+            x0, y0, _safe = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
             for ln in hl:
                 d.text((tx, ty), ln, font=hf, fill=WHITE); ty += 54
             if sln:
@@ -830,11 +938,20 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
             if site_t:
                 d.text((tx, ty), site_t, font=_font(28, weight="semibold"), fill=(255, 255, 255, 220))
         else:  # content — SEM pílula de nome (a logo do app já está no topo): número + título + corpo
-            cw = int(W_ * 0.44); inner = cw - 2 * pad     # ESTREITO: dentro da metade vazia, longe do sujeito
+            cw = int(W_ * 0.44); min_cw = int(W_ * 0.24)
             tf = _font(44, weight="extrabold"); bf = _font(28, weight="medium")
-            tl = _wrap(d, title, tf, inner); blines = _wrap(d, body, bf, inner)
-            bh = pad + 64 + len(tl) * 56 + 14 + len(blines) * 40 + pad
-            x0, y0 = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
+            for _attempt in range(5):
+                inner = max(90, cw - 2 * pad)     # ESTREITO: dentro do retângulo livre, longe do sujeito
+                tl = _wrap(d, title, tf, inner); blines = _wrap(d, body, bf, inner)
+                bh = pad + 64 + len(tl) * 56 + 14 + len(blines) * 40 + pad
+                if _safe_card_position(canvas, pmap, reserved_boxes, cw, bh, M):
+                    break
+                reg = _safe_card_region(canvas, pmap, reserved_boxes, bh, M, min_cw)
+                nxt = int(min(cw - 12, reg[2])) if reg else int(cw * 0.86)
+                if nxt >= cw or cw <= min_cw:
+                    break
+                cw = max(min_cw, nxt)
+            x0, y0, _safe = _put(cw, bh); tx = x0 + pad; ty = y0 + pad
             d.text((tx, ty), f"{idx:02d}", font=_font(54, weight="extrabold"), fill=ACC); ty += 70
             for ln in tl:
                 d.text((tx, ty), ln, font=tf, fill=WHITE); ty += 56
@@ -842,6 +959,11 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
             for ln in blines:
                 d.text((tx, ty), ln, font=bf, fill=(255, 255, 255, 235)); ty += 40
         out = io.BytesIO(); canvas.convert("RGB").save(out, "PNG"); return out.getvalue()
+    except NoSafeTextZone:
+        # Reliability wins over aesthetics: when a photo has no safe text zone,
+        # render the editorial non-photo layout instead of covering a person/face/hand.
+        return compose_carousel_slide(slide, idx, total, colors, company_logo_path, site, handle,
+                                      None, app_logo_path, design, app_logos)
     except Exception:
         return compose_carousel_slide(slide, idx, total, colors, company_logo_path, site, handle,
                                       bg_bytes, app_logo_path, design, app_logos)
