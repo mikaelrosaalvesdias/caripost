@@ -1063,6 +1063,17 @@
     async enrichProduct(companyId, productId, payload) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/enrich', { method: 'POST', body: JSON.stringify(payload || {}) });
     },
+    async uploadProductKb(companyId, productId, file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/kb', { method: 'POST', body: fd, headers: {} });
+    },
+    async getProductKb(companyId, productId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/kb').catch(() => ({ chars: 0, preview: '' }));
+    },
+    async clearProductKb(companyId, productId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/kb', { method: 'DELETE' });
+    },
 
     /* ════════ INFLUENCERS (por empresa) — cadastro + banco de imagem ════════ */
     async listInfluencers(companyId) {

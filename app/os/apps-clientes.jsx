@@ -455,6 +455,29 @@ function ProductCard({ company, product, onChanged }) {
   const [msg, setMsg] = React.useState('');
   const solutions = product.solutions || [];
   const logos = product.logos || [];
+  const [kbChars, setKbChars] = React.useState((product.knowledge || '').length);
+  const [kbBusy, setKbBusy] = React.useState(false);
+  const [kbMsg, setKbMsg] = React.useState('');
+  React.useEffect(() => {
+    window.mpApi.getProductKb(company.id, product.id).then(r => setKbChars((r && r.chars) || 0)).catch(() => {});
+  }, [product.id]);
+  async function uploadKb(file) {
+    if (!file) return;
+    setKbBusy(true); setKbMsg('Lendo e indexando ' + file.name + '…');
+    try {
+      const r = await window.mpApi.uploadProductKb(company.id, product.id, file);
+      if (r && r.detail) { setKbMsg('Erro: ' + r.detail); }
+      else { setKbChars((r && r.total_chars) || 0); setKbMsg('✓ ' + ((r && r.file) || file.name) + ' adicionado (' + ((r && r.chars) || 0) + ' caracteres). O briefing fica mais profundo.'); onChanged(); }
+    } catch (e) { setKbMsg('Erro: ' + e.message); }
+    finally { setKbBusy(false); }
+  }
+  async function clearKb() {
+    if (!window.confirm('Limpar TODA a base de conhecimento de "' + product.name + '"?')) return;
+    setKbBusy(true);
+    try { await window.mpApi.clearProductKb(company.id, product.id); setKbChars(0); setKbMsg('Base limpa.'); onChanged(); }
+    catch (e) { setKbMsg('Erro: ' + e.message); }
+    finally { setKbBusy(false); }
+  }
 
   async function save() {
     setBusy(true); setMsg('');
@@ -534,6 +557,15 @@ function ProductCard({ company, product, onChanged }) {
     <Field label="Descrição (fonte do briefing)"><textarea className="inp" rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="O que é, diferenciais, público, claims…" style={{ resize: 'vertical' }} /></Field>
     <Field label="Objetivo / posicionamento (como a IA deve vender este app)"><textarea className="inp" rows={2} value={objective} onChange={e => setObjective(e.target.value)} placeholder="Ex.: vender para provedores revenderem como SVA aos assinantes; foco em telemedicina pro usuário final, não em clínicas." style={{ resize: 'vertical' }} /></Field>
     <Field label="Funções / recursos (uma por linha — alimenta a IA, sem preços)"><textarea className="inp" rows={3} value={functions} onChange={e => setFunctions(e.target.value)} placeholder="Catálogo de músicas offline&#10;Sem anúncios&#10;Letras sincronizadas" style={{ resize: 'vertical' }} /></Field>
+    <Field label="Base de conhecimento (PDF/TXT: manual, FAQ, lista de funções — deixa o briefing PROFUNDO)">
+      <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input type="file" accept=".pdf,.txt,.md,.csv" disabled={kbBusy} onChange={e => { const f = e.target.files[0]; e.target.value = ''; uploadKb(f); }} />
+        {kbChars > 0 && <Pill kind="good" dot>{kbChars.toLocaleString('pt-BR')} caracteres indexados</Pill>}
+        {kbChars > 0 && <button className="btn sm ghost" disabled={kbBusy} onClick={clearKb}>Limpar base</button>}
+      </div>
+      {kbMsg && <div className="hint">{kbMsg}</div>}
+      <div className="hint">Pode subir vários arquivos (vão se somando). A IA usa isto + o site + a internet pra montar o conteúdo.</div>
+    </Field>
 
     <div className="sec mut" style={{ marginTop: 4 }}>Logos do produto</div>
     <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
