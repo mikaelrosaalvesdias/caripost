@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.26.59', date: '2026-06-28',
+    items: [
+      { type: 'fix', text: 'Conteúdo: influencer cadastrado passa a ser composto por recorte determinístico sobre cena sem pessoas, preservando rosto e roupa sem image-to-image.' },
+      { type: 'fix', text: 'Criativos: logos raster são normalizadas com remoção de fundo sólido de borda, corte de sobra e escala visual consistente.' },
+      { type: 'fix', text: 'Briefing: guarda narrativa reforça evento real em capa/CTA e recursos reais dos produtos marcados quando a IA retorna texto genérico.' },
+    ],
+  },
+  {
     version: 'v1.26.58', date: '2026-06-28',
     items: [
       { type: 'feat', text: 'Conteúdo: motor de proteção detecta pessoa, rosto, mão e objetos para posicionar texto no maior retângulo livre, evitando texto sobre personagem.' },

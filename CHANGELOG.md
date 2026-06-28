@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.26.59 - 2026-06-28
+
+- **fix: Influencer por recorte determinístico.** O fluxo com influencer agora gera o fundo sem pessoas e cola a foto cadastrada por máscara/recorte em código, sem pedir para a IA redesenhar rosto ou roupa.
+- **fix: Normalização de logos.** Logos raster passam por remoção de fundo sólido conectado à borda, corte de sobra transparente e resize controlado para reduzir fundo branco e proporções inconsistentes.
+- **fix: Guarda narrativa do carrossel.** O plano final reforça evento real em capa/CTA e injeta recursos reais dos produtos marcados quando a IA devolve texto genérico.
+- Versão: main.py 1.26.59, OS/UI cache bust v=12659.
+
 ## v1.26.58 - 2026-06-28
 
 - **feat: Motor de proteção para criativos.** Novo pacote `creative` com detecção de pessoa/rosto/mão/objetos, Maximal Empty Rectangle e CLI `python -m creative`.

@@ -17,7 +17,7 @@ from ..db_companies import (
 )
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
-    generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, generate_image_with_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
+    generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
     openrouter_image_models, openrouter_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
 )
@@ -941,6 +941,7 @@ async def render_carousel(request: Request):
         carousel_style = (_ds or _styles[_seed % len(_styles)])
         for i, s in enumerate(telas, 1):
             app_name = (s.get("app") or "").strip().lower()
+            stype = (s.get("type") or "").lower()
             # MALEÁVEL: coleta TODOS os apps relevantes da tela (taguead​o + citados no título/corpo),
             # não só um. O nº de logos por tela é limitado pelo token app_logo.max_per_slide no composer.
             tl = ((s.get("app") or "") + " " + (s.get("title") or "") + " " + (s.get("body") or "")).lower()
@@ -962,10 +963,10 @@ async def render_carousel(request: Request):
             # photo_ai_composer: a IA gera SÓ a foto (_photo_only_prompt); o código desenha o resto.
             # legacy: a IA desenha a arte inteira (_full_slide_prompt) e o código só carimba logo/rodapé.
             if use_composer:
-                # INFLUENCER LIGADO: as telas de CONTEÚDO (não capa/CTA) saem SEM pessoas — o influencer é o ÚNICO rosto
-                # do carrossel (some o "quem são esses caras aleatórios"). Capa/CTA recebem a pessoa real no composite.
+                # INFLUENCER LIGADO: a IA gera TODAS as cenas sem pessoas; capa/CTA recebem a foto cadastrada
+                # por recorte determinístico em código. O modelo não redesenha rosto/roupa.
                 _inf_active = bool(influencer and inf_photos)
-                _avoid = _inf_active and (s.get("type") or "").lower() not in ("cover", "cta")
+                _avoid = _inf_active
                 prompt = _photo_only_prompt(s, company.get("name", ""), (tmpl or {}).get("variant"), brand_color, design_ov, avoid_people=_avoid)
             else:
                 prompt = _full_slide_prompt(s, brand_color, company.get("name", ""), structure, (tmpl or {}).get("variant"))
@@ -973,18 +974,20 @@ async def render_carousel(request: Request):
             img_ok, img_err, png, img, used_model = False, "", None, None, model
             used_real_influencer = False
             fallback_without_people = False
+            identity_meta = None
+            person_for_cutout = None
             # 1) GERAÇÃO da foto — do CACHE (base salva, custo 0) OU da IA com TRANSBORDO inteligente.
             reuse_url = reuse_bases[i - 1] if i - 1 < len(reuse_bases) else None
             if ai_bg and reuse_url:
                 img = _load_upload_bytes(reuse_url)            # CACHE: reusa a foto, NÃO paga IA
                 img_ok = img is not None
-            # INFLUENCER na CAPA/CTA: compõe a pessoa real na cena (nano-banana), em vez da cena vazia.
-            stype = (s.get("type") or "").lower()
+            # INFLUENCER na CAPA/CTA: escolhe a foto real, mas NÃO chama image-to-image.
+            # A pessoa é recortada e colada por código depois que a cena sem pessoas é gerada.
             if ai_bg and img is None and influencer and inf_photos and stype in ("cover", "cta"):
                 # EMOÇÃO + VARIAÇÃO: capa varia; CTA pode reutilizar a melhor foto para não usar expressão triste/aflita.
                 # EMOÇÃO POR TAG (cadastro) + SORTEIO: o briefing pede s['emotion']; busca as fotos com essa tag e sorteia
                 # (variedade — não repete a mesma). Sem tag batendo → sorteia entre não-usadas. Sem NENHUMA tag → juiz de visão (compat).
-                import random as _rnd
+                import hashlib as _id_hash
                 _req = (s.get("emotion") or "").strip().lower()
                 _cands = [j for j, e in enumerate(inf_emotions) if e and e == _req]
                 if not _cands:
@@ -993,26 +996,11 @@ async def render_carousel(request: Request):
                     else:
                         photo_exclude = set() if stype == "cta" else used_inf_idx
                         _cands = [await asyncio.to_thread(pick_influencer_photo, inf_photos, s.get("title", ""), stype, photo_exclude)]
-                _pi = _rnd.choice(_cands)
+                _pick_seed = f"{company_id}:{i}:{stype}:{s.get('title','')}:{_req}"
+                _pi = _cands[int(_id_hash.md5(_pick_seed.encode("utf-8", "ignore")).hexdigest(), 16) % len(_cands)]
                 used_inf_idx.add(_pi)
-                person = inf_photos[_pi]
-                _scene = (s.get("visual") or "").strip()
-                pprompt = ("Integre ESTA pessoa real na CENA DO BRIEFING (ela é a protagonista da cena): "
-                           + (_scene or ("cena publicitária premium da marca " + company.get("name", ""))) + ". "
-                           "Construa o AMBIENTE/FUNDO A PARTIR dessa cena (NÃO use fundo escuro genérico se a cena pede outro lugar). "
-                           "LIMPE a rebarba/borda do recorte e harmonize luz e cor da pessoa com a cena (parece fotografada ali). "
-                           "Deixe ESPAÇO NEGATIVO de um lado pro texto, com a pessoa no lado oposto. "
-                           "NÃO mude o rosto nem a expressão da pessoa. Vertical " + ("9:16" if fmt == "story" else "4:5") + ", alta produção, fotográfico premium. SEM texto, SEM logo.")
-                try:
-                    img, _pc = await asyncio.to_thread(generate_image_with_person, person, pprompt)
-                    img_ok = True; used_real_influencer = True; total_cost += (_pc or 0.0)
-                    spillovers.append((i, "influencer: " + (influencer.get("name") or "")))
-                except Exception as pe:
-                    img_err = ("influencer: " + str(pe))[:160]
-                    fallback_without_people = True
-                    prompt = _photo_only_prompt(s, company.get("name", ""), (tmpl or {}).get("variant"),
-                                                brand_color, design_ov, avoid_people=True)
-                    spillovers.append((i, "influencer falhou: cena sem pessoa"))
+                person_for_cutout = inf_photos[_pi]
+                fallback_without_people = True
             if ai_bg and img is None:
                 # TRANSBORDO: retry no mesmo modelo p/ erro transitório; se o provedor morreu (saldo/cota),
                 # pula pra um modelo EQUIVALENTE de OUTRO provedor (grátis 1º). dead_providers é compartilhado
@@ -1027,6 +1015,21 @@ async def render_carousel(request: Request):
                 except Exception as ie:
                     img_err = str(ie)[:180]
                     fails.append(img_err)
+            if img is not None and person_for_cutout:
+                try:
+                    import hashlib as _id_hash
+                    from creative.identity import compose_identity_cutout
+                    side_seed = int(_id_hash.md5(f"{company_id}:{i}:{s.get('title','')}".encode("utf-8", "ignore")).hexdigest(), 16)
+                    person_side = "right" if (side_seed % 2) else "left"
+                    img, identity_meta = await asyncio.to_thread(
+                        compose_identity_cutout, img, person_for_cutout, canvas_size, person_side, side_seed)
+                    used_real_influencer = True
+                    img_ok = True
+                    fallback_without_people = False
+                    spillovers.append((i, "influencer recortado: " + (influencer.get("name") or "")))
+                except Exception as pe:
+                    img_err = ("identity-cutout: " + str(pe))[:180]
+                    spillovers.append((i, "influencer recorte falhou: cena sem pessoa"))
             # 1b) JUIZ POR VISÃO: confirma a metade LIVRE de pessoa p/ o texto; se NENHUMA, regenera (teto 1).
             #     Só no modo card e com foto NOVA (não no cache). Define text_side; em erro cai pra heurística.
             if img is not None and use_composer and reuse_url is None:
@@ -1085,7 +1088,7 @@ async def render_carousel(request: Request):
             out.append({"url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{fn}",
                         "type": s.get("type"), "title": s.get("title", ""), "app": s.get("app") or "",
                         "prompt": prompt, "image_ok": img_ok, "image_error": img_err, "base_url": base_out,
-                        "model_used": used_model})
+                        "model_used": used_model, "identity": identity_meta})
         # Persiste o carrossel como POST DRAFT (não some ao navegar; aparece em Arquivos/Acervo).
         post_id = None
         if out:

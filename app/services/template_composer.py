@@ -80,18 +80,61 @@ def _cover(img: Image.Image, w: int, h: int) -> Image.Image:
     return img.crop((x, y, x + w, y + h))
 
 
+def _remove_solid_logo_bg(lg: Image.Image) -> Image.Image:
+    """Remove fundo sólido conectado às bordas sem destruir áreas internas do logo."""
+    try:
+        lg = lg.convert("RGBA")
+        alpha = lg.getchannel("A")
+        if alpha.getextrema()[0] < 245:
+            return lg
+        w, h = lg.size
+        rgb = lg.convert("RGB")
+        sentinel = (1, 254, 2)
+        seeds = [
+            (0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
+            (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2),
+        ]
+        for seed in seeds:
+            try:
+                ImageDraw.floodfill(rgb, seed, sentinel, thresh=64)
+            except Exception:
+                pass
+        px = rgb.load()
+        mask = Image.new("L", (w, h), 255)
+        mp = mask.load()
+        removed = 0
+        for yy in range(h):
+            for xx in range(w):
+                if px[xx, yy] == sentinel:
+                    mp[xx, yy] = 0
+                    removed += 1
+        # Se quase nada saiu, provavelmente não era fundo sólido. Se saiu quase tudo,
+        # era uma arte sem recorte confiável; mantém original para não sumir o logo.
+        area = max(1, w * h)
+        if removed < area * 0.03 or removed > area * 0.92:
+            return lg
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=max(0.6, min(w, h) * 0.004)))
+        lg.putalpha(mask)
+        return lg
+    except Exception:
+        return lg
+
+
 def _load_logo(path, max_w, max_h) -> Optional[Image.Image]:
     if not path or not os.path.exists(path) or path.lower().endswith(".svg"):
         return None
     try:
-        lg = Image.open(path).convert("RGBA")
+        lg = _remove_solid_logo_bg(Image.open(path).convert("RGBA"))
     except Exception:
         return None
     bbox = lg.getchannel("A").getbbox()   # corta a moldura transparente → logo no tamanho REAL (não sai minúscula)
     if bbox:
         lg = lg.crop(bbox)
-    r = min(max_w / lg.width, max_h / lg.height)
-    if r < 1:
+    r = min(max_w / max(1, lg.width), max_h / max(1, lg.height))
+    # Logos cadastradas frequentemente chegam pequenas ou com sobra; antes ficavam
+    # desproporcionais entre apps. Upscale controlado normaliza a caixa visual.
+    r = max(0.05, min(r, 3.0))
+    if abs(r - 1.0) > 0.04:
         lg = lg.resize((max(1, int(lg.width * r)), max(1, int(lg.height * r))), Image.LANCZOS)
     return lg
 
@@ -132,7 +175,7 @@ def _stamp_app_logo(canvas: Image.Image, lg: Image.Image, x: int = 44, y: int = 
     """Carimba a logo REAL do app. Se o contraste com o fundo for baixo, põe um HALO suave
     (glow da luminância oposta, borrado) atrás — destaca a logo SEM caixa visível. Senão, só a logo."""
     pad = 18
-    box = (x, y, min(W, x + lg.width + pad * 2), min(H, y + lg.height + pad * 2))
+    box = (x, y, min(canvas.width, x + lg.width + pad * 2), min(canvas.height, y + lg.height + pad * 2))
     bg_lum = _region_lum(canvas, box)
     light = _logo_is_light(lg)
     low_contrast = (light and bg_lum > 150) or ((not light) and bg_lum < 110)

@@ -2207,6 +2207,54 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
             _lines.append(f"• {p.get('name')}" + (f" — {obj}" if obj else "") + (f" (recursos REAIS: {fns})" if fns else ""))
         prod_brief = ("DADOS REAIS DOS APPS desta empresa (use o posicionamento e os RECURSOS reais; NÃO invente benefício): \n"
                       + "\n".join(_lines) + "\n")
+    _prod_by_norm = {_norm(str(p.get("name") or "")): p for p in _prods if p.get("name")}
+
+    def _product_feature(p):
+        raw = p.get("functions") or []
+        if isinstance(raw, str):
+            raw = [raw]
+        fns = [str(x).strip() for x in raw if str(x).strip()]
+        return fns[0] if fns else ((p.get("objective") or p.get("description") or "").strip() or "valor real cadastrado")
+
+    def _deterministic_product_slide(app):
+        p = _prod_by_norm.get(_norm(app), {})
+        feat = _product_feature(p)
+        title = f"{app}: {feat[:52]}"
+        body = f"Com {app}, seus clientes recebem {feat.lower()} como diferencial real da sua oferta."
+        visual = f"Cena publicitária coerente com o tema {theme}, sem texto ou logo, representando {feat.lower()} para clientes de provedores."
+        return {"type": "content", "app": app, "title": title, "body": body, "visual": visual}
+
+    def _enforce_storyline(sl):
+        """Guarda de narrativa: corrige plano genérico usando apenas dados reais do cadastro."""
+        if not sl:
+            return sl
+        company_name = (company.get("name") or "").strip()
+        event_name = (event or {}).get("name") if event else ""
+        selected_names = [str(p.get("name") or "").strip() for p in _prods if p.get("name")]
+        for s in sl:
+            tp = (s.get("type") or "").lower()
+            txt = " ".join(str(s.get(k) or "") for k in ("title", "body", "subtitle", "cta"))
+            app = (s.get("app") or "").strip()
+            if tp == "cover" and event_name:
+                if _norm(event_name) not in _norm(txt):
+                    s["title"] = f"{company_name} na {event_name}" if company_name else f"Presença na {event_name}"
+                s["visual"] = (s.get("visual") or f"Ambiente real de feira e corredor de estandes do evento {event_name}.")
+            if tp == "cta" and event_name:
+                s["title"] = f"Visite {company_name} na {event_name}" if company_name else f"Visite nosso estande na {event_name}"
+                s["cta"] = (ctx.get("cta") or s.get("cta") or "Venha conversar com a gente").strip()
+                s["visual"] = (s.get("visual") or f"Estande profissional no evento {event_name}, sem texto ou logos gerados pela IA.")
+            if tp == "content" and app:
+                p = _prod_by_norm.get(_norm(app))
+                if p:
+                    feat = _product_feature(p)
+                    hay = _norm(txt)
+                    if _norm(feat) and _norm(feat) not in hay:
+                        s["body"] = (s.get("body") or f"Com {app}, seus clientes recebem valor real da sua oferta.").rstrip(".")
+                        s["body"] += f". Recurso real cadastrado: {feat}."
+            if tp == "cta" and selected_names and not any(_norm(a) in _norm(txt) for a in selected_names):
+                s["body"] = ((s.get("body") or "").strip() + " " + "Apps em destaque: " + ", ".join(selected_names[:5]) + ".").strip()
+        return sl
+
     tom_line = (f"TOM de voz da marca (siga à risca): {ctx['tom']}. " if (ctx.get('tom') or '').strip() else "")
     cta_line = (f"CTA desejado (use no último slide, adaptando ao contexto): {ctx['cta']}. " if (ctx.get('cta') or '').strip() else "")
     user = (
@@ -2249,17 +2297,19 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
             if s2 and sum(1 for a in themed if _covered_in(s2, a)) > sum(1 for a in themed if _covered_in(slides, a)):
                 slides = s2
         for app in [a for a in themed if not _covered_in(slides, a)]:   # ainda faltou → FORÇA via código
+            sl1 = {}
             try:
                 one = complete_ai(config, "Você escreve UM slide de carrossel e devolve só JSON.",
                                   f"Empresa {company.get('name','')} oferece o app {app} para provedores de internet. Tema: {theme}. "
                                   f"Escreva 1 slide de conteúdo vendendo o {app} dentro do tema (ache o ângulo, copy curta). "
                                   f'Responda SÓ JSON: {{"title":"...","body":"...","visual":"...","app":"{app}"}}', 600)
                 sl1 = extract_json(one) or {}
-                if sl1.get("title"):
-                    sl1["type"] = "content"; sl1["app"] = app
-                    slides.insert(max(1, len(slides) - 1), sl1)   # insere antes do CTA (último)
             except Exception:
                 pass
+            if not sl1.get("title"):
+                sl1 = _deterministic_product_slide(app)
+            sl1["type"] = "content"; sl1["app"] = app
+            slides.insert(max(1, len(slides) - 1), sl1)   # insere antes do CTA (último)
     _LV = (creative_cfg(company).get("layout_policy") or {}).get("available_layout_variants") or ["editorial_left"]
     _DEF_LV = (creative_cfg(company).get("layout_policy") or {}).get("default_layout") or "editorial_left"
     # normaliza: numera os content, garante 1 cover no início e 1 cta no fim
@@ -2289,6 +2339,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         s.setdefault("text_area", "left")
         s.setdefault("app_logo_position", "top_right")
         s.setdefault("brand_logo_position", "bottom_left")
+    slides = _enforce_storyline(slides)
     # SANEAMENTO NA FONTE (briefing + legenda + render): dado REAL do evento; remove stand inventado.
     slides = sanitize_event_plan(event, slides)
     return {"theme": _canon_app_names(data.get("theme") or theme), "slides": slides}
