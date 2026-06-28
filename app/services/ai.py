@@ -690,6 +690,42 @@ def _cometapi_key() -> str:
             or get_setting("token:cometapi") or os.environ.get("COMETAPI_API_KEY") or "").strip()
 
 
+def web_research(query: str, max_tokens: int = 700) -> str:
+    """BUSCA WEB AO VIVO p/ enriquecer o briefing (3ª fonte: internet). Perplexity Sonar via OpenRouter
+    (busca nativa, com fontes); fallback CometAPI. Retorna digest factual em PT-BR — ou '' se indisponível.
+    Silencioso em erro (nunca derruba a geração)."""
+    if not (query or "").strip():
+        return ""
+    sysmsg = ("Você é pesquisador. Responda em PORTUGUÊS do Brasil, SÓ com fatos verificáveis e ATUAIS da web "
+              "(recursos/funções reais, números, novidades, casos). Conciso, em tópicos curtos e específicos. "
+              "NÃO invente: se não houver dado, diga que não encontrou. Sem rodeios, sem marketing vazio.")
+    chain = []
+    ok = _openrouter_key()
+    if ok:
+        chain.append(("https://openrouter.ai/api/v1", ok, "perplexity/sonar-pro"))
+        chain.append(("https://openrouter.ai/api/v1", ok, "perplexity/sonar"))
+    ck = _cometapi_key()
+    if ck:
+        chain.append((_COMETAPI_BASE, ck, "perplexity/sonar"))           # fallback Comet
+        chain.append((_COMETAPI_BASE, ck, "gpt-4o-search-preview"))      # 2º fallback Comet (busca OpenAI)
+    for base, key, model in chain:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(75.0, connect=10.0)) as c:
+                r = c.post(base + "/chat/completions",
+                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                           json={"model": model, "max_tokens": max_tokens, "temperature": 0.2,
+                                 "messages": [{"role": "system", "content": sysmsg},
+                                              {"role": "user", "content": query[:1500]}]})
+            if r.status_code >= 400:
+                continue
+            txt = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
+            if txt and len(txt) > 40:
+                return txt
+        except Exception:
+            continue
+    return ""
+
+
 _COMETAPI_BASE = "https://api.cometapi.com/v1"
 # (id real no catálogo CometAPI, nome, família, nível, preço USD aprox.)
 # SÓ modelos que usam /v1/images/generations E geram de verdade (verificado: gpt-image-2/1.5 + seedream).
@@ -2251,6 +2287,16 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
                 "sem inventar recursos): " + " || ".join(f"[{n}] {t}" for n, t in _kb_blocks) + ". ") if _kb_blocks else "")
     excl_line = (("FOCO EXCLUSIVO: este conteúdo é SOMENTE sobre " + ", ".join(_apps) + " — NÃO mencione, NÃO cite e NÃO "
                   "crie telas de NENHUM outro app/produto da empresa. ") if (_focus_names and _apps) else "")
+    # 3ª FONTE — INTERNET AO VIVO: só quando há app EM FOCO (selecionado/citado), p/ não gastar busca à toa.
+    web_line = ""
+    if _focus_names or themed:
+        _wnames = _apps if _apps else themed
+        _wr = web_research("Recursos, funções e novidades REAIS e ATUAIS de " + ", ".join(_wnames)
+                           + " (apps/SVAs para provedores de internet). Tema do conteúdo: " + theme
+                           + ". Liste fatos concretos, específicos e recentes, com números quando houver.", 700)
+        if _wr:
+            web_line = ("PESQUISA WEB ATUAL (fatos REAIS da internet — combine com o conhecimento acima, NÃO invente): "
+                        + _wr[:4000] + ". ")
     # MODO EVENTO: injeta os dados REAIS do evento (datas/local/stand) na instrução do briefing.
     event_line = ""
     if event:
@@ -2282,7 +2328,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         user = (
             f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
             f"Público (fale COM ele): {audience}. Tema: {theme}. "
-            + event_line + apps_line + kb_line + excl_line
+            + event_line + apps_line + kb_line + web_line + excl_line
             + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
             + G["single_json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"] + G["content_rules"]
         )
@@ -2291,7 +2337,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
             f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
             f"Público (fale COM ele): {audience}. "
             f"Tema do carrossel: {theme}. {n_rule} "
-            + event_line + apps_line + cover_line + kb_line + excl_line
+            + event_line + apps_line + cover_line + kb_line + web_line + excl_line
             + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
             + G["json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"]
             + G.get("layout_rule", "") + G["content_rules"]
