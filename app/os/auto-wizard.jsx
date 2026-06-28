@@ -197,7 +197,7 @@ function AutoMode({ onExit, onClose }) {
                 {/* Thumbnail */}
                 <div style={{ aspectRatio: '16/9', position: 'relative', background: 'linear-gradient(135deg,#16161f,#0c0c14)', overflow: 'hidden' }}>
                   {thumb
-                    ? <img src={thumb} alt={f.n} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                    ? <img loading="lazy" decoding="async" src={thumb} alt={f.n} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                     : <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.2)', fontSize: 28 }}>▶</div>
                   }
                   {/* Check badge */}

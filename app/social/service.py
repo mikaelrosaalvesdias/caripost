@@ -272,7 +272,7 @@ async def create_post(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
     content_type = str(body.get("contentType") or body.get("content_type") or "").strip().lower()
     if not content_type:
         content_type = _asset_type(asset_urls[0], None) if asset_urls else "text"
-    if content_type not in {"image", "video", "carousel", "text"}:
+    if content_type not in {"image", "video", "carousel", "text", "story"}:
         raise SocialProviderError("contentType inválido.", status_code=422)
 
     channels = []
@@ -320,6 +320,9 @@ async def create_post(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
             "source_status": (source_post or {}).get("status"),
             "tags": body.get("tags") or [],
             "made_for_kids": bool(body.get("madeForKids", False)),
+            "collaborators": body.get("collaborators") or body.get("collab") or [],   # COLLAB: @ do influencer
+            "also_story": bool(body.get("alsoStory") or body.get("also_story")),       # republicar no story (opção)
+            "story_url": body.get("storyUrl") or body.get("story_url") or "",          # 9:16 bonito p/ o story-repost
         },
         "assets": _build_assets(asset_urls, content_type),
         "channels": channels,

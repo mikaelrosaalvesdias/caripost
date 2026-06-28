@@ -109,6 +109,7 @@ def init_companies_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_company ON posts(company_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_scheduled ON posts(scheduled_at)")
+        _ensure_column("posts", "media_url", "media_url TEXT")
 
         # ── Research reports ───────────────────────────────────────────────
         conn.execute("""
@@ -126,11 +127,32 @@ def init_companies_db() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_company_type ON research_reports(company_id, type)")
 
+        # ── Products ────────────────────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                slug        TEXT,
+                description TEXT,
+                category    TEXT,
+                website     TEXT,
+                socials     TEXT NOT NULL DEFAULT '{}',
+                colors      TEXT NOT NULL DEFAULT '{}',
+                active      INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_products_company ON products(company_id)")
+
         # ── Company assets (logos, references) ─────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS company_assets (
                 id          TEXT PRIMARY KEY,
                 company_id  TEXT NOT NULL,
+                product_id  TEXT,
                 post_id     TEXT,
                 kind        TEXT NOT NULL DEFAULT 'IMAGE',
                 source      TEXT NOT NULL DEFAULT 'UPLOADED',
@@ -141,6 +163,153 @@ def init_companies_db() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_company ON company_assets(company_id)")
+        # Ensure the column exists before indexing it (older DBs created company_assets
+        # before product_id was introduced — indexing first would crash on those).
+        _ensure_column("company_assets", "product_id", "product_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_product ON company_assets(product_id)")
+
+        # ── Influencers (POR EMPRESA) — cadastro + dados; o banco de imagem fica em company_assets
+        #    (kind='INFLUENCER_PHOTO', meta.influencer_id) → reusa o mesmo storage/upload das logos. ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS influencers (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                handle      TEXT,
+                bio         TEXT,
+                meta        TEXT NOT NULL DEFAULT '{}',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_influencers_company ON influencers(company_id)")
+
+        # ── Empresa influencer (ex.: loucosdatelecom): INTERNA ou TERCEIRIZADA; @ + logo; tem influenciadores embaixo ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS influencer_companies (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                handle      TEXT,
+                kind        TEXT DEFAULT 'external',
+                website     TEXT,
+                meta        TEXT NOT NULL DEFAULT '{}',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_infco_company ON influencer_companies(company_id)")
+
+        # ── Eventos (cadastro p/ divulgação: data, local, descrição, logos, cores) ──
+        #    logos do evento em company_assets (kind='EVENT_LOGO', meta.event_id). cores/extra no meta.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                event_date  TEXT,
+                location    TEXT,
+                description TEXT,
+                meta        TEXT NOT NULL DEFAULT '{}',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_company ON events(company_id)")
+
+        # ── Empresa do evento (ORGANIZADOR, ex.: ExPSP) — IG + site + logo; tem vários eventos embaixo ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS event_organizers (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                instagram   TEXT,
+                website     TEXT,
+                meta        TEXT NOT NULL DEFAULT '{}',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_eventorg_company ON event_organizers(company_id)")
+
+        # ── Solutions (Cliente → Produto → Solução) ─────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS solutions (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                product_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                description TEXT,
+                links       TEXT NOT NULL DEFAULT '[]',
+                active      INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_solutions_product ON solutions(product_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_solutions_company ON solutions(company_id)")
+
+        # ── Approval links (página pública de aprovação) ────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS approval_links (
+                token       TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                post_ids    TEXT NOT NULL DEFAULT '[]',
+                stage       TEXT NOT NULL DEFAULT 'client',
+                status      TEXT NOT NULL DEFAULT 'open',
+                created_at  TEXT NOT NULL,
+                expires_at  TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_approval_links_company ON approval_links(company_id)")
+
+        # ── Notifications log ───────────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications_log (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT,
+                channel     TEXT NOT NULL,
+                trigger     TEXT,
+                recipient   TEXT,
+                status      TEXT NOT NULL DEFAULT 'sent',
+                detail      TEXT,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_company ON notifications_log(company_id)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cost_log (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT,
+                kind        TEXT,
+                model       TEXT,
+                cost_usd    REAL DEFAULT 0,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_cost_company ON cost_log(company_id)")
+
+        # Briefing/positioning fields (added later; tables already exist on prod).
+        _ensure_column("products", "objective", "objective TEXT")
+        _ensure_column("products", "functions", "functions TEXT")
+        _ensure_column("brand_kits", "audience", "audience TEXT")
+        _ensure_column("posts", "review_comment", "review_comment TEXT")
+        _ensure_column("posts", "review_decision", "review_decision TEXT")
+        _ensure_column("posts", "meta", "meta TEXT")                 # params de geração (regenerar c/ feedback)
+        _ensure_column("posts", "reviewed_at", "reviewed_at TEXT")   # quando o cliente decidiu
+        _ensure_column("brand_kits", "client_rules", "client_rules TEXT")  # aprendizado por cliente
+        _ensure_column("brand_kits", "assuntos", "assuntos TEXT")  # pautas/temas cadastrados do cliente
+        _ensure_column("brand_kits", "creative_config", "creative_config TEXT")  # prompts/design editáveis por cliente (JSON)
+        _ensure_column("influencers", "infcompany_id", "infcompany_id TEXT")  # influencer pertence a uma EMPRESA influencer
+        _ensure_column("events", "organizer_id", "organizer_id TEXT")  # evento pertence a um ORGANIZADOR
+        _ensure_column("events", "date_start", "date_start TEXT")      # data de INÍCIO
+        _ensure_column("events", "date_end", "date_end TEXT")          # data de FIM
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -204,6 +373,10 @@ def company_get(company_id: str) -> Optional[Dict[str, Any]]:
             row["brand_kit"] = dict(bk)
             row["brand_kit"]["colors"] = json.loads(row["brand_kit"].get("colors") or "{}")
             row["brand_kit"]["extras"] = json.loads(row["brand_kit"].get("extras") or "{}")
+            try:
+                row["brand_kit"]["creative_config"] = json.loads(row["brand_kit"].get("creative_config") or "{}")
+            except Exception:
+                row["brand_kit"]["creative_config"] = {}
         else:
             row["brand_kit"] = None
         return row
@@ -307,6 +480,10 @@ def brand_kit_get(company_id: str) -> Optional[Dict[str, Any]]:
         row = dict(row)
         row["colors"] = json.loads(row.get("colors") or "{}")
         row["extras"] = json.loads(row.get("extras") or "{}")
+        try:
+            row["creative_config"] = json.loads(row.get("creative_config") or "{}")
+        except Exception:
+            row["creative_config"] = {}
         return row
 
 
@@ -319,7 +496,7 @@ def brand_kit_upsert(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     if existing:
         fields = []
         values: List[Any] = []
-        for key in ("logo_url", "voice", "persona", "visual_prompt_base"):
+        for key in ("logo_url", "voice", "persona", "visual_prompt_base", "audience", "client_rules", "assuntos"):
             if key in data:
                 fields.append(f"{key} = ?")
                 values.append(data[key])
@@ -329,6 +506,9 @@ def brand_kit_upsert(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         if "extras" in data:
             fields.append("extras = ?")
             values.append(extras)
+        if "creative_config" in data:
+            fields.append("creative_config = ?")
+            values.append(json.dumps(data.get("creative_config") or {}))
         if not fields:
             return existing
         fields.append("updated_at = ?")
@@ -433,8 +613,9 @@ POST_STATUSES = ["DRAFT", "REVIEW", "APPROVED", "SCHEDULED", "PUBLISHED", "FAILE
 POST_TRANSITIONS = {
     "DRAFT": ["REVIEW"],
     "REVIEW": ["APPROVED", "DRAFT"],
-    "APPROVED": ["SCHEDULED", "REVIEW"],
-    "SCHEDULED": ["APPROVED"],
+    "APPROVED": ["SCHEDULED", "PUBLISHED", "REVIEW"],
+    "SCHEDULED": ["PUBLISHED", "APPROVED"],
+    "PUBLISHED": [],
 }
 
 POST_LABELS = {
@@ -471,6 +652,10 @@ def post_list(statuses: Optional[List[str]] = None, company_id: Optional[str] = 
             row = dict(r)
             row["networks"] = json.loads(row.get("networks") or "[]")
             row["hashtags"] = [t for t in (row.get("hashtags") or "").split(" ") if t]
+            try:
+                row["meta"] = json.loads(row.get("meta") or "{}")
+            except Exception:
+                row["meta"] = {}
             results.append(row)
         return results
 
@@ -488,6 +673,10 @@ def post_get(post_id: str) -> Optional[Dict[str, Any]]:
         row = dict(row)
         row["networks"] = json.loads(row.get("networks") or "[]")
         row["hashtags"] = [t for t in (row.get("hashtags") or "").split(" ") if t]
+        try:
+            row["meta"] = json.loads(row.get("meta") or "{}")
+        except Exception:
+            row["meta"] = {}
         return row
 
 
@@ -502,11 +691,12 @@ def post_create(data: Dict[str, Any]) -> Dict[str, Any]:
     status = data.get("status", "DRAFT")
     if status not in POST_STATUSES:
         status = "DRAFT"
+    meta = json.dumps(data.get("meta") or {})
     with get_conn() as conn:
         conn.execute("""
-            INSERT INTO posts (id, company_id, status, title, copy, hashtags, networks, scheduled_at, published_at, postiz_id, error, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (pid, data.get("company_id"), status, data.get("title"), data.get("copy"), hashtags, networks, data.get("scheduled_at"), data.get("published_at"), data.get("postiz_id"), data.get("error"), now, now))
+            INSERT INTO posts (id, company_id, status, title, copy, hashtags, networks, media_url, scheduled_at, published_at, postiz_id, error, meta, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (pid, data.get("company_id"), status, data.get("title"), data.get("copy"), hashtags, networks, data.get("media_url"), data.get("scheduled_at"), data.get("published_at"), data.get("postiz_id"), data.get("error"), meta, now, now))
     return post_get(pid)
 
 
@@ -523,7 +713,10 @@ def post_transition(post_id: str, to_status: str) -> Optional[Dict[str, Any]]:
         return None
     now = _now()
     with get_conn() as conn:
-        conn.execute("UPDATE posts SET status = ?, updated_at = ? WHERE id = ?", (to_status, now, post_id))
+        if to_status == "PUBLISHED":
+            conn.execute("UPDATE posts SET status = ?, published_at = ?, updated_at = ? WHERE id = ?", (to_status, now, now, post_id))
+        else:
+            conn.execute("UPDATE posts SET status = ?, updated_at = ? WHERE id = ?", (to_status, now, post_id))
     return post_get(post_id)
 
 
@@ -532,7 +725,7 @@ def post_update(post_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     now = _now()
     fields = []
     values: List[Any] = []
-    for key in ("title", "copy", "scheduled_at", "published_at", "postiz_id", "error"):
+    for key in ("title", "copy", "media_url", "scheduled_at", "published_at", "postiz_id", "error", "review_comment", "review_decision", "reviewed_at"):
         if key in data:
             fields.append(f"{key} = ?")
             values.append(data[key])
@@ -649,10 +842,10 @@ def asset_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     meta = json.dumps(data.get("meta") or {})
     with get_conn() as conn:
         conn.execute("""
-            INSERT INTO company_assets (id, company_id, post_id, kind, source, url, meta, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (aid, company_id, data.get("post_id"), data.get("kind", "IMAGE"), data.get("source", "UPLOADED"), data.get("url", ""), meta, now))
-    return {"id": aid, "company_id": company_id, "kind": data.get("kind", "IMAGE"), "source": data.get("source", "UPLOADED"), "url": data.get("url", ""), "meta": data.get("meta") or {}}
+            INSERT INTO company_assets (id, company_id, product_id, post_id, kind, source, url, meta, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (aid, company_id, data.get("product_id"), data.get("post_id"), data.get("kind", "IMAGE"), data.get("source", "UPLOADED"), data.get("url", ""), meta, now))
+    return {"id": aid, "company_id": company_id, "product_id": data.get("product_id"), "kind": data.get("kind", "IMAGE"), "source": data.get("source", "UPLOADED"), "url": data.get("url", ""), "meta": data.get("meta") or {}}
 
 
 @_sqlite_retry
@@ -660,3 +853,639 @@ def asset_delete(asset_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM company_assets WHERE id = ?", (asset_id,))
         return cur.rowcount > 0
+
+
+@_sqlite_retry
+def asset_get(asset_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM company_assets WHERE id = ?", (asset_id,)).fetchone()
+        if not row:
+            return None
+        row = dict(row)
+        row["meta"] = json.loads(row.get("meta") or "{}")
+        return row
+
+
+@_sqlite_retry
+def asset_update_meta(asset_id: str, meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        conn.execute("UPDATE company_assets SET meta = ? WHERE id = ?", (json.dumps(meta), asset_id))
+    return asset_get(asset_id)
+
+
+@_sqlite_retry
+def asset_list_logos(company_id: str, product_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List all logo assets for a company (or specific product)."""
+    with get_conn() as conn:
+        if product_id:
+            rows = conn.execute("""
+                SELECT * FROM company_assets
+                WHERE company_id = ? AND product_id = ? AND json_extract(meta, '$.role') = 'logo'
+                ORDER BY created_at DESC
+            """, (company_id, product_id)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM company_assets
+                WHERE company_id = ? AND product_id IS NULL AND json_extract(meta, '$.role') = 'logo'
+                ORDER BY created_at DESC
+            """, (company_id,)).fetchall()
+        results = []
+        for r in rows:
+            row = dict(r)
+            row["meta"] = json.loads(row.get("meta") or "{}")
+            results.append(row)
+        return results
+
+
+@_sqlite_retry
+def asset_clear_primary(company_id: str, product_id: Optional[str] = None) -> None:
+    """Clear is_primary flag on all logos of a company (or product)."""
+    with get_conn() as conn:
+        if product_id:
+            rows = conn.execute("""
+                SELECT id, meta FROM company_assets
+                WHERE company_id = ? AND product_id = ? AND json_extract(meta, '$.role') = 'logo'
+            """, (company_id, product_id)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT id, meta FROM company_assets
+                WHERE company_id = ? AND product_id IS NULL AND json_extract(meta, '$.role') = 'logo'
+            """, (company_id,)).fetchall()
+        for r in rows:
+            meta = json.loads(r["meta"] or "{}")
+            if meta.get("is_primary"):
+                meta["is_primary"] = 0
+                conn.execute("UPDATE company_assets SET meta = ? WHERE id = ?", (json.dumps(meta), r["id"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Products CRUD
+# ─────────────────────────────────────────────────────────────────────────────
+
+@_sqlite_retry
+def product_list(company_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM products WHERE company_id = ? ORDER BY created_at DESC", (company_id,)).fetchall()
+        results = []
+        for r in rows:
+            row = dict(r)
+            row["socials"] = json.loads(row.get("socials") or "{}")
+            row["colors"] = json.loads(row.get("colors") or "{}")
+            row["functions"] = json.loads(row.get("functions") or "[]")
+            row["active"] = bool(row.get("active", 1))
+            results.append(row)
+        return results
+
+
+@_sqlite_retry
+def product_get(product_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        if not row:
+            return None
+        row = dict(row)
+        row["socials"] = json.loads(row.get("socials") or "{}")
+        row["colors"] = json.loads(row.get("colors") or "{}")
+        row["functions"] = json.loads(row.get("functions") or "[]")
+        row["active"] = bool(row.get("active", 1))
+        return row
+
+
+@_sqlite_retry
+def product_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    pid = _uuid()
+    now = _now()
+    slug = _slugify(data.get("name", "produto"))
+    with get_conn() as conn:
+        base = slug
+        n = 1
+        while conn.execute("SELECT 1 FROM products WHERE company_id = ? AND slug = ?", (company_id, slug)).fetchone():
+            slug = f"{base}-{n}"
+            n += 1
+    socials = json.dumps(data.get("socials") or {})
+    colors = json.dumps(data.get("colors") or {})
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO products (id, company_id, name, slug, description, category, website, socials, colors, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        """, (pid, company_id, data.get("name", ""), slug, data.get("description"), data.get("category"), data.get("website"), socials, colors, now, now))
+    return product_get(pid)
+
+
+# ── INFLUENCERS (por empresa) — cadastro + banco de imagem (fotos em company_assets) ──
+@_sqlite_retry
+def cost_log_add(company_id: str, kind: str, model: str, cost_usd: float) -> None:
+    """Registra o custo (USD) de UMA geração — pra ver gasto por dia/mês. Silencioso se falhar."""
+    try:
+        with get_conn() as conn:
+            conn.execute("INSERT INTO cost_log (id, company_id, kind, model, cost_usd, created_at) VALUES (?,?,?,?,?,?)",
+                         (_uuid(), company_id, kind or "", model or "", float(cost_usd or 0), _now()))
+    except Exception:
+        pass
+
+
+def cost_summary(company_id: Optional[str] = None) -> Dict[str, Any]:
+    """Soma de custos: hoje, mês, total + nº de gerações. Filtra por empresa se informado."""
+    import datetime
+    try:
+        with get_conn() as conn:
+            if company_id:
+                rows = conn.execute("SELECT cost_usd, created_at FROM cost_log WHERE company_id=?", (company_id,)).fetchall()
+            else:
+                rows = conn.execute("SELECT cost_usd, created_at FROM cost_log").fetchall()
+    except Exception:
+        rows = []
+    today = datetime.date.today().isoformat(); month = today[:7]
+    t = d = m = 0.0
+    for r in rows:
+        c = (r[0] or 0); ca = (r[1] or "")
+        t += c
+        if ca[:10] == today:
+            d += c
+        if ca[:7] == month:
+            m += c
+    return {"total_usd": round(t, 4), "today_usd": round(d, 4), "month_usd": round(m, 4), "count": len(rows)}
+
+
+# ── EMPRESA INFLUENCER (ex.: loucosdatelecom): interna/terceirizada, @ + logo, tem influenciadores embaixo ──
+def infcompany_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    cid = _uuid(); now = _now()
+    with get_conn() as conn:
+        conn.execute("INSERT INTO influencer_companies (id, company_id, name, handle, kind, website, meta, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (cid, company_id, data.get("name", ""), (data.get("handle") or "").lstrip("@").strip(),
+                      (data.get("kind") or "external"), data.get("website"), json.dumps(data.get("meta") or {}), now, now))
+    return infcompany_get(cid)
+
+
+@_sqlite_retry
+def infcompany_logos(infcompany_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM company_assets WHERE kind='INFCOMPANY_LOGO' AND meta LIKE ? ORDER BY created_at DESC",
+                            (f'%"{infcompany_id}"%',)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); m = json.loads(d.get("meta") or "{}")
+        if m.get("infcompany_id") == infcompany_id:
+            d["meta"] = m; out.append(d)
+    return out
+
+
+@_sqlite_retry
+def infcompany_get(infcompany_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM influencer_companies WHERE id = ?", (infcompany_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["meta"] = json.loads(d.get("meta") or "{}")
+    d["logos"] = infcompany_logos(infcompany_id); d["influencers"] = influencer_list(infcompany_id=infcompany_id)
+    return d
+
+
+@_sqlite_retry
+def infcompany_list(company_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM influencer_companies WHERE company_id = ? ORDER BY created_at DESC", (company_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); d["meta"] = json.loads(d.get("meta") or "{}")
+        d["logos"] = infcompany_logos(d["id"]); d["influencers"] = influencer_list(infcompany_id=d["id"])
+        out.append(d)
+    return out
+
+
+@_sqlite_retry
+def infcompany_update(infcompany_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields, vals = [], []
+    for k in ("name", "kind", "website"):
+        if k in data:
+            fields.append(f"{k} = ?"); vals.append(data[k])
+    if "handle" in data:
+        fields.append("handle = ?"); vals.append((data.get("handle") or "").lstrip("@").strip())
+    if "meta" in data:
+        fields.append("meta = ?"); vals.append(json.dumps(data.get("meta") or {}))
+    if fields:
+        fields.append("updated_at = ?"); vals.append(_now()); vals.append(infcompany_id)
+        with get_conn() as conn:
+            conn.execute(f"UPDATE influencer_companies SET {', '.join(fields)} WHERE id = ?", vals)
+    return infcompany_get(infcompany_id)
+
+
+@_sqlite_retry
+def infcompany_delete(infcompany_id: str) -> bool:
+    with get_conn() as conn:
+        for a in infcompany_logos(infcompany_id):
+            conn.execute("DELETE FROM company_assets WHERE id = ?", (a["id"],))
+        infs = [r[0] for r in conn.execute("SELECT id FROM influencers WHERE infcompany_id = ?", (infcompany_id,)).fetchall()]
+    for i in infs:
+        influencer_delete(i)
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM influencer_companies WHERE id = ?", (infcompany_id,))
+        return cur.rowcount > 0
+
+
+def influencer_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    iid = _uuid(); now = _now()
+    with get_conn() as conn:
+        conn.execute("INSERT INTO influencers (id, company_id, infcompany_id, name, handle, bio, meta, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (iid, company_id, data.get("infcompany_id"), data.get("name", ""), (data.get("handle") or "").lstrip("@").strip(),
+                      data.get("bio"), json.dumps(data.get("meta") or {}), now, now))
+    return influencer_get(iid)
+
+
+@_sqlite_retry
+def influencer_photos(influencer_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM company_assets WHERE kind='INFLUENCER_PHOTO' AND meta LIKE ? ORDER BY created_at DESC",
+                            (f'%"{influencer_id}"%',)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); m = json.loads(d.get("meta") or "{}")
+        if m.get("influencer_id") == influencer_id:
+            d["meta"] = m; out.append(d)
+    return out
+
+
+@_sqlite_retry
+def influencer_get(influencer_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM influencers WHERE id = ?", (influencer_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["meta"] = json.loads(d.get("meta") or "{}"); d["photos"] = influencer_photos(influencer_id)
+    return d
+
+
+@_sqlite_retry
+def influencer_list(company_id: Optional[str] = None, infcompany_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    if infcompany_id:
+        q, arg = "SELECT * FROM influencers WHERE infcompany_id = ?", (infcompany_id,)
+    else:
+        q, arg = "SELECT * FROM influencers WHERE company_id = ?", (company_id,)
+    q += " ORDER BY created_at DESC"
+    with get_conn() as conn:
+        rows = conn.execute(q, arg).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); d["meta"] = json.loads(d.get("meta") or "{}"); d["photos"] = influencer_photos(d["id"])
+        out.append(d)
+    return out
+
+
+@_sqlite_retry
+def influencer_update(influencer_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields, vals = [], []
+    for k in ("name", "bio", "infcompany_id"):
+        if k in data:
+            fields.append(f"{k} = ?"); vals.append(data[k])
+    if "handle" in data:
+        fields.append("handle = ?"); vals.append((data.get("handle") or "").lstrip("@").strip())
+    if "meta" in data:
+        fields.append("meta = ?"); vals.append(json.dumps(data.get("meta") or {}))
+    if fields:
+        fields.append("updated_at = ?"); vals.append(_now()); vals.append(influencer_id)
+        with get_conn() as conn:
+            conn.execute(f"UPDATE influencers SET {', '.join(fields)} WHERE id = ?", vals)
+    return influencer_get(influencer_id)
+
+
+@_sqlite_retry
+def influencer_delete(influencer_id: str) -> bool:
+    with get_conn() as conn:
+        for a in influencer_photos(influencer_id):
+            conn.execute("DELETE FROM company_assets WHERE id = ?", (a["id"],))
+        cur = conn.execute("DELETE FROM influencers WHERE id = ?", (influencer_id,))
+        return cur.rowcount > 0
+
+
+# ── ORGANIZADOR (empresa do evento, ex.: ExPSP): IG + site + logo; tem vários eventos embaixo ──
+def organizer_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    oid = _uuid(); now = _now()
+    with get_conn() as conn:
+        conn.execute("INSERT INTO event_organizers (id, company_id, name, instagram, website, meta, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                     (oid, company_id, data.get("name", ""), (data.get("instagram") or "").lstrip("@").strip(),
+                      data.get("website"), json.dumps(data.get("meta") or {}), now, now))
+    return organizer_get(oid)
+
+
+@_sqlite_retry
+def organizer_logos(organizer_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM company_assets WHERE kind='ORGANIZER_LOGO' AND meta LIKE ? ORDER BY created_at DESC",
+                            (f'%"{organizer_id}"%',)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); m = json.loads(d.get("meta") or "{}")
+        if m.get("organizer_id") == organizer_id:
+            d["meta"] = m; out.append(d)
+    return out
+
+
+@_sqlite_retry
+def organizer_get(organizer_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM event_organizers WHERE id = ?", (organizer_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["meta"] = json.loads(d.get("meta") or "{}")
+    d["logos"] = organizer_logos(organizer_id); d["events"] = event_list(organizer_id=organizer_id)
+    return d
+
+
+@_sqlite_retry
+def organizer_list(company_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM event_organizers WHERE company_id = ? ORDER BY created_at DESC", (company_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); d["meta"] = json.loads(d.get("meta") or "{}")
+        d["logos"] = organizer_logos(d["id"]); d["events"] = event_list(organizer_id=d["id"])
+        out.append(d)
+    return out
+
+
+@_sqlite_retry
+def organizer_update(organizer_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields, vals = [], []
+    for k in ("name", "website"):
+        if k in data:
+            fields.append(f"{k} = ?"); vals.append(data[k])
+    if "instagram" in data:
+        fields.append("instagram = ?"); vals.append((data.get("instagram") or "").lstrip("@").strip())
+    if "meta" in data:
+        fields.append("meta = ?"); vals.append(json.dumps(data.get("meta") or {}))
+    if fields:
+        fields.append("updated_at = ?"); vals.append(_now()); vals.append(organizer_id)
+        with get_conn() as conn:
+            conn.execute(f"UPDATE event_organizers SET {', '.join(fields)} WHERE id = ?", vals)
+    return organizer_get(organizer_id)
+
+
+@_sqlite_retry
+def organizer_delete(organizer_id: str) -> bool:
+    with get_conn() as conn:
+        for a in organizer_logos(organizer_id):
+            conn.execute("DELETE FROM company_assets WHERE id = ?", (a["id"],))
+        evs = [r[0] for r in conn.execute("SELECT id FROM events WHERE organizer_id = ?", (organizer_id,)).fetchall()]
+    for e in evs:
+        event_delete(e)
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM event_organizers WHERE id = ?", (organizer_id,))
+        return cur.rowcount > 0
+
+
+# ── EVENTO (edição) embaixo do organizador: data início/fim, cidade, descrição, logos + imagens ──
+def event_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    eid = _uuid(); now = _now()
+    with get_conn() as conn:
+        conn.execute("INSERT INTO events (id, company_id, organizer_id, name, event_date, date_start, date_end, location, description, meta, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (eid, company_id, data.get("organizer_id"), data.get("name", ""),
+                      data.get("date_start") or data.get("event_date"), data.get("date_start"), data.get("date_end"),
+                      data.get("location"), data.get("description"), json.dumps(data.get("meta") or {}), now, now))
+    return event_get(eid)
+
+
+@_sqlite_retry
+def _event_assets(event_id: str, kind: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM company_assets WHERE kind=? AND meta LIKE ? ORDER BY created_at DESC",
+                            (kind, f'%"{event_id}"%')).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); m = json.loads(d.get("meta") or "{}")
+        if m.get("event_id") == event_id:
+            d["meta"] = m; out.append(d)
+    return out
+
+
+def event_logos(event_id: str) -> List[Dict[str, Any]]:
+    return _event_assets(event_id, "EVENT_LOGO")
+
+
+def event_images(event_id: str) -> List[Dict[str, Any]]:
+    return _event_assets(event_id, "EVENT_IMAGE")
+
+
+@_sqlite_retry
+def event_get(event_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["meta"] = json.loads(d.get("meta") or "{}")
+    d["logos"] = event_logos(event_id); d["images"] = event_images(event_id)
+    return d
+
+
+@_sqlite_retry
+def event_list(company_id: Optional[str] = None, organizer_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    if organizer_id:
+        q, arg = "SELECT * FROM events WHERE organizer_id = ?", (organizer_id,)
+    else:
+        q, arg = "SELECT * FROM events WHERE company_id = ?", (company_id,)
+    q += " ORDER BY COALESCE(date_start, event_date) DESC, created_at DESC"
+    with get_conn() as conn:
+        rows = conn.execute(q, arg).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r); d["meta"] = json.loads(d.get("meta") or "{}")
+        d["logos"] = event_logos(d["id"]); d["images"] = event_images(d["id"])
+        out.append(d)
+    return out
+
+
+@_sqlite_retry
+def event_update(event_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields, vals = [], []
+    for k in ("name", "event_date", "date_start", "date_end", "location", "description", "organizer_id"):
+        if k in data:
+            fields.append(f"{k} = ?"); vals.append(data[k])
+    if "meta" in data:
+        fields.append("meta = ?"); vals.append(json.dumps(data.get("meta") or {}))
+    if fields:
+        fields.append("updated_at = ?"); vals.append(_now()); vals.append(event_id)
+        with get_conn() as conn:
+            conn.execute(f"UPDATE events SET {', '.join(fields)} WHERE id = ?", vals)
+    return event_get(event_id)
+
+
+@_sqlite_retry
+def event_delete(event_id: str) -> bool:
+    with get_conn() as conn:
+        for a in (event_logos(event_id) + event_images(event_id)):
+            conn.execute("DELETE FROM company_assets WHERE id = ?", (a["id"],))
+        cur = conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        return cur.rowcount > 0
+
+
+@_sqlite_retry
+def product_update(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    now = _now()
+    fields = []
+    values: List[Any] = []
+    for key in ("name", "description", "category", "website", "objective"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "socials" in data:
+        fields.append("socials = ?")
+        values.append(json.dumps(data["socials"] or {}))
+    if "colors" in data:
+        fields.append("colors = ?")
+        values.append(json.dumps(data["colors"] or {}))
+    if "functions" in data:
+        fields.append("functions = ?")
+        values.append(json.dumps(data["functions"] or []))
+    if "active" in data:
+        fields.append("active = ?")
+        values.append(1 if data["active"] else 0)
+    if not fields:
+        return product_get(product_id)
+    fields.append("updated_at = ?")
+    values.append(now)
+    values.append(product_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE products SET {', '.join(fields)} WHERE id = ?", values)
+    return product_get(product_id)
+
+
+@_sqlite_retry
+def product_delete(product_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+        return cur.rowcount > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Solutions (Cliente → Produto → Solução)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _serialize_solution(row: Dict[str, Any]) -> Dict[str, Any]:
+    row = dict(row)
+    row["links"] = json.loads(row.get("links") or "[]")
+    row["active"] = bool(row.get("active", 1))
+    return row
+
+
+@_sqlite_retry
+def solution_list(product_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM solutions WHERE product_id = ? ORDER BY created_at DESC", (product_id,)).fetchall()
+        return [_serialize_solution(r) for r in rows]
+
+
+@_sqlite_retry
+def solution_list_for_company(company_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM solutions WHERE company_id = ? ORDER BY created_at DESC", (company_id,)).fetchall()
+        return [_serialize_solution(r) for r in rows]
+
+
+@_sqlite_retry
+def solution_get(solution_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM solutions WHERE id = ?", (solution_id,)).fetchone()
+        return _serialize_solution(row) if row else None
+
+
+@_sqlite_retry
+def solution_create(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    product = product_get(product_id)
+    if not product:
+        return None
+    sid = _uuid()
+    now = _now()
+    links = json.dumps(data.get("links") or [])
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO solutions (id, company_id, product_id, name, description, links, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+        """, (sid, product["company_id"], product_id, data.get("name", ""), data.get("description"), links, now, now))
+    return solution_get(sid)
+
+
+@_sqlite_retry
+def solution_update(solution_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    now = _now()
+    fields: List[str] = []
+    values: List[Any] = []
+    for key in ("name", "description"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "links" in data:
+        fields.append("links = ?")
+        values.append(json.dumps(data["links"] or []))
+    if "active" in data:
+        fields.append("active = ?")
+        values.append(1 if data["active"] else 0)
+    if not fields:
+        return solution_get(solution_id)
+    fields.append("updated_at = ?")
+    values.append(now)
+    values.append(solution_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE solutions SET {', '.join(fields)} WHERE id = ?", values)
+    return solution_get(solution_id)
+
+
+@_sqlite_retry
+def solution_delete(solution_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM solutions WHERE id = ?", (solution_id,))
+        return cur.rowcount > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Approval links (public approval page) + notifications log
+# ─────────────────────────────────────────────────────────────────────────────
+
+@_sqlite_retry
+def approval_link_create(company_id: str, post_ids: List[str], *, stage: str = "client", expires_at: Optional[str] = None) -> Dict[str, Any]:
+    token = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+    now = _now()
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO approval_links (token, company_id, post_ids, stage, status, created_at, expires_at)
+            VALUES (?, ?, ?, ?, 'open', ?, ?)
+        """, (token, company_id, json.dumps(post_ids or []), stage, now, expires_at))
+    return approval_link_get(token)
+
+
+@_sqlite_retry
+def approval_link_get(token: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM approval_links WHERE token = ?", (token,)).fetchone()
+        if not row:
+            return None
+        row = dict(row)
+        row["post_ids"] = json.loads(row.get("post_ids") or "[]")
+        return row
+
+
+@_sqlite_retry
+def approval_link_set_status(token: str, status: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE approval_links SET status = ? WHERE token = ?", (status, token))
+
+
+@_sqlite_retry
+def notifications_log_create(data: Dict[str, Any]) -> Dict[str, Any]:
+    nid = _uuid()
+    now = _now()
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO notifications_log (id, company_id, channel, trigger, recipient, status, detail, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (nid, data.get("company_id"), data.get("channel", ""), data.get("trigger"),
+              data.get("recipient"), data.get("status", "sent"), data.get("detail"), now))
+    return {"id": nid, **data, "created_at": now}
+
+
+@_sqlite_retry
+def notifications_log_list(company_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        if company_id:
+            rows = conn.execute("SELECT * FROM notifications_log WHERE company_id = ? ORDER BY created_at DESC LIMIT ?", (company_id, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM notifications_log ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]

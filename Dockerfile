@@ -57,6 +57,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# Fonte moderna p/ posts/carrossel (Poppins — geométrica, estilo editorial g4/v4).
+# Plug-and-play: a fonte real da Cariap (se enviada em app/services/fonts/) tem preferência.
+RUN mkdir -p /usr/share/fonts/truetype/brand \
+  && for w in Black ExtraBold Bold SemiBold Medium Regular; do \
+       wget -q "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-$w.ttf" \
+         -O "/usr/share/fonts/truetype/brand/Poppins-$w.ttf" || true; \
+     done
+
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 

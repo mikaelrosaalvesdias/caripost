@@ -31,7 +31,7 @@ function PillGroup({ label, hint, options, selected, onChange }) {
   }
   return (
     <div className="space-y-2">
-      <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">{label}</div>
+      <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">{label}</div>
       {hint && <div className="text-xs text-slate-500">{hint}</div>}
       <div className="flex flex-wrap gap-2">
         {options.map(o => {
@@ -43,8 +43,8 @@ function PillGroup({ label, hint, options, selected, onChange }) {
               onClick={() => toggle(o.value)}
               className={`rounded-full border px-4 py-1.5 text-sm transition-all ${
                 active
-                  ? "border-cyan-400 bg-cyan-400/15 text-cyan-300"
-                  : "border-white/15 bg-white/5 text-slate-400 hover:border-white/30 hover:text-slate-200"
+                  ? "border-cyan-400 bg-cyan-400/15 text-cyan-700"
+                  : "border-black/15 bg-black/5 text-slate-500 hover:border-black/30 hover:text-slate-700"
               }`}
             >
               {o.label}
@@ -112,19 +112,19 @@ export default function ProfilePage() {
   }
 
   if (loading) {
-    return <div className="flex min-h-[200px] items-center justify-center text-slate-400 text-sm">Carregando…</div>;
+    return <div className="flex min-h-[200px] items-center justify-center text-slate-500 text-sm">Carregando…</div>;
   }
 
   return (
     <div className="space-y-5 max-w-xl">
       <div>
-        <h1 className="text-xl font-semibold text-white">Meu Perfil de Produção</h1>
-        <p className="mt-1 text-sm text-slate-400">
+        <h1 className="text-xl font-semibold text-slate-900">Meu Perfil de Produção</h1>
+        <p className="mt-1 text-sm text-slate-500">
           O Trend Radar usa essas informações para sugerir cenas que você realmente consegue gravar.
         </p>
       </div>
 
-      <div className="rounded-2xl border border-white/8 bg-slate-950/60 p-5 space-y-5">
+      <div className="rounded-2xl border border-black/8 bg-slate-50/60 p-5 space-y-5">
         <PillGroup
           label="Tipos de cena"
           hint="Marque tudo que você consegue fazer"
@@ -139,7 +139,7 @@ export default function ProfilePage() {
           onChange={setLocationTypes}
         />
         <div className="space-y-1.5">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Equipamento</div>
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Equipamento</div>
           <div className="flex flex-wrap gap-2">
             {LEVEL_OPTIONS.map(o => (
               <button
@@ -148,8 +148,8 @@ export default function ProfilePage() {
                 onClick={() => setProductionLevel(o.value)}
                 className={`rounded-full border px-4 py-1.5 text-sm transition-all ${
                   productionLevel === o.value
-                    ? "border-cyan-400 bg-cyan-400/15 text-cyan-300"
-                    : "border-white/15 bg-white/5 text-slate-400 hover:border-white/30 hover:text-slate-200"
+                    ? "border-cyan-400 bg-cyan-400/15 text-cyan-700"
+                    : "border-black/15 bg-black/5 text-slate-500 hover:border-black/30 hover:text-slate-700"
                 }`}
               >
                 {o.label}
@@ -159,56 +159,56 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-white/8 bg-slate-950/60 p-5 space-y-4">
+      <div className="rounded-2xl border border-black/8 bg-slate-50/60 p-5 space-y-4">
         <div className="space-y-1.5">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Descrição dos performers</div>
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Descrição dos performers</div>
           <div className="text-xs text-slate-500">Físico de quem aparece — usado para gerar thumbnails realistas com IA</div>
           <input
             type="text"
             value={performerDescription}
             onChange={e => setPerformerDescription(e.target.value)}
             placeholder="Ex: morena 25 anos, corpo atlético, tatuagem no braço"
-            className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
+            className="w-full rounded-xl border border-black/10 bg-white/60 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
           />
         </div>
         <div className="space-y-1.5">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">O que você NÃO faz</div>
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">O que você NÃO faz</div>
           <div className="text-xs text-slate-500">Sem isso o Trend Radar vai sugerir cena que você não consegue fazer</div>
           <input
             type="text"
             value={productionConstraints}
             onChange={e => setProductionConstraints(e.target.value)}
             placeholder="Ex: não faço anal, não apareço com rosto, máximo 2 pessoas"
-            className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
+            className="w-full rounded-xl border border-black/10 bg-white/60 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
           />
         </div>
         <div className="space-y-1.5">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Categorias</div>
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Categorias</div>
           <input
             type="text"
             value={preferredCategories}
             onChange={e => setPreferredCategories(e.target.value)}
             placeholder="Amateur, Brazilian, MILF, Solo"
-            className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
+            className="w-full rounded-xl border border-black/10 bg-white/60 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
           />
         </div>
         <div className="space-y-1.5">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Tags habituais</div>
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Tags habituais</div>
           <input
             type="text"
             value={preferredTags}
             onChange={e => setPreferredTags(e.target.value)}
             placeholder="brasileira, amadora, morena"
-            className="w-full rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
+            className="w-full rounded-xl border border-black/10 bg-white/60 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-600 focus:border-cyan-400/40 focus:outline-none"
           />
         </div>
       </div>
 
       {error && (
-        <div className="rounded-xl border border-rose-300/20 bg-rose-400/8 px-4 py-3 text-sm text-rose-300">{error}</div>
+        <div className="rounded-xl border border-rose-300/20 bg-rose-400/8 px-4 py-3 text-sm text-rose-700">{error}</div>
       )}
       {saved && (
-        <div className="rounded-xl border border-emerald-300/20 bg-emerald-400/8 px-4 py-3 text-sm text-emerald-300">Salvo!</div>
+        <div className="rounded-xl border border-emerald-300/20 bg-emerald-400/8 px-4 py-3 text-sm text-emerald-700">Salvo!</div>
       )}
 
       <button

@@ -27,7 +27,7 @@ export default function LoginPage({ onLogin, creator, entrySlug = "" }) {
 
   return (
     <div
-      className="portal-theme min-h-screen px-4 py-10 text-white"
+      className="portal-theme min-h-screen px-4 py-10"
       style={{
         ...buildPortalThemeStyle(branding),
         background: `linear-gradient(160deg, var(--portal-bg-start) 0%, var(--portal-bg-mid) 45%, var(--portal-bg-end) 100%)`,
@@ -41,14 +41,14 @@ export default function LoginPage({ onLogin, creator, entrySlug = "" }) {
               <img
                 src={branding.logo_b64}
                 alt={branding.brand_name || "Logo"}
-                className="h-16 w-16 rounded-2xl border border-white/10 bg-white/5 object-contain p-2"
+                className="h-16 w-16 rounded-2xl border border-black/10 bg-black/5 object-contain p-2"
               />
             ) : null}
             <div className="text-xs uppercase tracking-[0.35em]" style={{ color: "var(--portal-primary)" }}>
-              {branding.brand_name || "MetaPorn Agency"}
+              {branding.brand_name || "Caripost Agency"}
             </div>
           </div>
-          <div className="mt-5 inline-flex rounded-full border border-white/10 bg-white/6 px-4 py-2 text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--portal-primary)" }}>
+          <div className="mt-5 inline-flex rounded-full border border-black/10 bg-black/5 px-4 py-2 text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--portal-primary)" }}>
             {entrySlug ? `Portal dedicado · ${creatorName}` : "Portal do criador"}
           </div>
           <h1 className="mt-4 max-w-xl font-display text-5xl font-semibold leading-tight">
@@ -59,7 +59,7 @@ export default function LoginPage({ onLogin, creator, entrySlug = "" }) {
           </p>
           <div className="portal-soft-panel mt-6 rounded-[24px] px-4 py-3 text-sm">
             <div className="portal-theme-muted">Entrada deste portal</div>
-            <div className="mt-1 font-medium text-white">{entryUrl}</div>
+            <div className="mt-1 font-medium" style={{ color: "var(--portal-text)" }}>{entryUrl}</div>
           </div>
           <div className="mt-8 grid gap-4 sm:grid-cols-3">
             <Feature title="Dashboards" text="Views, ganhos e publicações em um só lugar." />
@@ -76,29 +76,29 @@ export default function LoginPage({ onLogin, creator, entrySlug = "" }) {
 
           <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
             <label className="block">
-              <span className="mb-2 block text-sm text-slate-300">E-mail</span>
+              <span className="mb-2 block text-sm text-slate-500">E-mail</span>
               <input
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="portal-input w-full rounded-2xl px-4 py-3 text-white outline-none transition"
+                className="portal-input w-full rounded-2xl px-4 py-3 outline-none transition"
                 placeholder="criador@email.com"
                 required
               />
             </label>
             <label className="block">
-              <span className="mb-2 block text-sm text-slate-300">Senha</span>
+              <span className="mb-2 block text-sm text-slate-500">Senha</span>
               <input
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                className="portal-input w-full rounded-2xl px-4 py-3 text-white outline-none transition"
+                className="portal-input w-full rounded-2xl px-4 py-3 outline-none transition"
                 placeholder="••••••••"
                 required
               />
             </label>
 
-            {error ? <div className="rounded-2xl border border-rose-300/25 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div> : null}
+            {error ? <div className="rounded-2xl border border-rose-300/40 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
 
             <button
               type="submit"
@@ -117,7 +117,7 @@ export default function LoginPage({ onLogin, creator, entrySlug = "" }) {
 function Feature({ title, text }) {
   return (
     <div className="portal-soft-panel rounded-[24px] p-4">
-      <div className="font-medium text-white">{title}</div>
+      <div className="font-medium" style={{ color: "var(--portal-text)" }}>{title}</div>
       <div className="portal-theme-muted mt-2 text-sm">{text}</div>
     </div>
   );

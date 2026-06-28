@@ -102,14 +102,14 @@ export default function App() {
   }
 
   if (booting) {
-    return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-300">Validando sessão do portal...</div>;
+    return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">Validando sessão do portal...</div>;
   }
 
   const branding = getPortalBranding(creator);
 
   return (
     <PortalShell creator={creator} branding={branding} themeStyle={buildPortalThemeStyle(branding)} onLogout={handleLogout}>
-      <Suspense fallback={<div className="rounded-[28px] border border-white/10 bg-white/6 px-5 py-10 text-center text-slate-300">Carregando página do portal...</div>}>
+      <Suspense fallback={<div className="rounded-[28px] border border-black/10 bg-black/5 px-5 py-10 text-center text-slate-500">Carregando página do portal...</div>}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/videos" element={<MyVideosPage />} />

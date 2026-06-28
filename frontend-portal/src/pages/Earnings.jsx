@@ -84,8 +84,8 @@ export default function EarningsPage() {
         <SectionCard title="Breakdown por plataforma" subtitle="Resumo do mês corrente para cada canal monitorado.">
           <div className="space-y-3">
             {breakdown.map(([platform, item]) => (
-              <article key={platform} className="rounded-2xl border border-white/8 bg-white/5 p-4">
-                <div className="font-medium text-white">{platform}</div>
+              <article key={platform} className="rounded-2xl border border-black/8 bg-black/5 p-4">
+                <div className="font-medium text-slate-900">{platform}</div>
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                   <Mini label="Bruto" value={money(item.total_gross)} />
                   <Mini label="Líquido" value={money(item.total_net)} />
@@ -103,18 +103,18 @@ export default function EarningsPage() {
 }
 
 function Box({ text }) {
-  return <div className="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-400">{text}</div>;
+  return <div className="rounded-2xl border border-dashed border-black/10 px-4 py-8 text-center text-sm text-slate-500">{text}</div>;
 }
 
 function ErrorBox({ text }) {
-  return <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-4 text-sm text-rose-100">{text}</div>;
+  return <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-4 text-sm text-rose-700">{text}</div>;
 }
 
 function Mini({ label, value }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-slate-950/40 px-3 py-2">
+    <div className="rounded-2xl border border-black/8 bg-slate-50/40 px-3 py-2">
       <div className="text-slate-500">{label}</div>
-      <div className="mt-1 font-medium text-white">{value}</div>
+      <div className="mt-1 font-medium text-slate-900">{value}</div>
     </div>
   );
 }

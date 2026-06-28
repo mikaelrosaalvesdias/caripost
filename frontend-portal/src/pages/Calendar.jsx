@@ -38,11 +38,11 @@ export default function CalendarPage() {
       {!loading && !error ? (
         <div className="space-y-4">
           {entries.map((entry) => (
-            <article key={entry.entry_id} className="rounded-[24px] border border-white/10 bg-white/5 p-5">
+            <article key={entry.entry_id} className="rounded-[24px] border border-black/10 bg-black/5 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="font-medium text-white">{entry.title || "Publicação"}</div>
-                  <div className="mt-2 text-sm text-slate-300">
+                  <div className="font-medium text-slate-900">{entry.title || "Publicação"}</div>
+                  <div className="mt-2 text-sm text-slate-600">
                     {entry.description || "Sem descrição"}
                   </div>
                 </div>
@@ -64,19 +64,19 @@ export default function CalendarPage() {
 
 function Mini({ label, value }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-slate-950/40 px-3 py-3">
+    <div className="rounded-2xl border border-black/8 bg-slate-50/40 px-3 py-3">
       <div className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</div>
-      <div className="mt-2 text-sm text-white">{value}</div>
+      <div className="mt-2 text-sm text-slate-900">{value}</div>
     </div>
   );
 }
 
 function Box({ text }) {
-  return <div className="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-400">{text}</div>;
+  return <div className="rounded-2xl border border-dashed border-black/10 px-4 py-8 text-center text-sm text-slate-500">{text}</div>;
 }
 
 function ErrorBox({ text }) {
-  return <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-4 text-sm text-rose-100">{text}</div>;
+  return <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-4 text-sm text-rose-700">{text}</div>;
 }
 
 function formatDateTime(value) {

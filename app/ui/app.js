@@ -534,6 +534,13 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.23.4', date: '2026-06-22',
+    items: [
+      { type: 'fix', text: 'Instagram: re-host de imagem corrigido — URLs completas HTTPS agora são resolvidas para o caminho local no disco antes do upload ao tmpfiles.org.' },
+      { type: 'fix', text: 'Logo: cutout refeito com alpha gradiente suave (sem flood-fill) — fundo sólido é removido sem pixelar bordas nem cortar letras.' },
+    ],
+  },
+  {
     version: 'v1.23.3', date: '2026-06-22',
     items: [
       { type: 'fix', text: 'Composio/Instagram: publicação funcionando end-to-end. Imagem re-hosteada em tmpfiles.org (sem auth), ig_user_id no passo de publish, formato arguments corrigido.' },

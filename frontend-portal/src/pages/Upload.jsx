@@ -65,14 +65,14 @@ function FileRow({ item, onRemove }) {
     : job ? job.progress_pct : 0;
 
   const statusColor = {
-    pending: "text-slate-400",
-    uploading: "text-cyan-300",
-    queued: "text-amber-300",
-    processing: "text-violet-300",
-    done: "text-emerald-300",
-    error: "text-rose-300",
-    failed: "text-rose-300",
-  }[status] || "text-slate-400";
+    pending: "text-slate-500",
+    uploading: "text-cyan-700",
+    queued: "text-amber-700",
+    processing: "text-violet-700",
+    done: "text-emerald-700",
+    error: "text-rose-700",
+    failed: "text-rose-700",
+  }[status] || "text-slate-500";
 
   const statusLabel = {
     pending: "Aguardando",
@@ -85,21 +85,21 @@ function FileRow({ item, onRemove }) {
   }[status] || status;
 
   return (
-    <div className="rounded-2xl border border-white/8 bg-white/4 px-4 py-3 flex flex-col gap-2">
+    <div className="rounded-2xl border border-black/8 bg-black/4 px-4 py-3 flex flex-col gap-2">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-white truncate">{item.file.name}</div>
+          <div className="text-sm font-medium text-slate-900 truncate">{item.file.name}</div>
           <div className="text-xs text-slate-500 mt-0.5">{fmtBytes(item.file.size)}</div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className={`text-xs ${statusColor}`}>{statusLabel}</span>
           {status === "pending" && (
-            <button onClick={() => onRemove(item.id)} className="text-slate-600 hover:text-slate-400 text-xs">✕</button>
+            <button onClick={() => onRemove(item.id)} className="text-slate-600 hover:text-slate-500 text-xs">✕</button>
           )}
         </div>
       </div>
       {(status === "uploading" || status === "processing") && (
-        <div className="h-1.5 rounded-full bg-white/8 overflow-hidden">
+        <div className="h-1.5 rounded-full bg-black/8 overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${status === "uploading" ? "bg-cyan-400" : "bg-violet-400"}`}
             style={{ width: `${progress}%` }}
@@ -182,10 +182,10 @@ function UploadTab({ titleHint, setTitleHint, isParts, setIsParts }) {
         onDrop={onDrop}
         onDragOver={e => e.preventDefault()}
         onClick={() => inputRef.current?.click()}
-        className="rounded-2xl border-2 border-dashed border-white/15 bg-white/3 hover:bg-white/5 hover:border-white/25 transition cursor-pointer px-6 py-10 text-center"
+        className="rounded-2xl border-2 border-dashed border-black/15 bg-black/3 hover:bg-black/5 hover:border-black/25 transition cursor-pointer px-6 py-10 text-center"
       >
         <div className="text-3xl mb-2">📁</div>
-        <div className="text-sm text-slate-300">Clique ou arraste os arquivos aqui</div>
+        <div className="text-sm text-slate-600">Clique ou arraste os arquivos aqui</div>
         <div className="text-xs text-slate-500 mt-1">MP4, MOV, MKV — múltiplos arquivos permitidos</div>
         <input
           ref={inputRef}
@@ -207,13 +207,13 @@ function UploadTab({ titleHint, setTitleHint, isParts, setIsParts }) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
-          <span className="mb-1.5 block text-xs text-slate-400 uppercase tracking-widest">Título / Observação</span>
+          <span className="mb-1.5 block text-xs text-slate-500 uppercase tracking-widest">Título / Observação</span>
           <input
             type="text"
             value={titleHint}
             onChange={e => setTitleHint(e.target.value)}
             placeholder="Ex.: cena praiana versão longa"
-            className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-2.5 text-sm text-white outline-none focus:border-cyan-300/40"
+            className="w-full rounded-2xl border border-black/10 bg-black/6 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-cyan-300/40"
           />
         </label>
       </div>
@@ -227,8 +227,8 @@ function UploadTab({ titleHint, setTitleHint, isParts, setIsParts }) {
             className="w-4 h-4 accent-amber-400"
           />
           <div>
-            <div className="text-sm text-amber-200">São partes do mesmo vídeo</div>
-            <div className="text-xs text-amber-200/60 mt-0.5">
+            <div className="text-sm text-amber-800">São partes do mesmo vídeo</div>
+            <div className="text-xs text-amber-800/60 mt-0.5">
               Cada parte será processada com o mesmo título base (parte 1, 2, 3…)
             </div>
           </div>
@@ -255,20 +255,20 @@ function DriveJobRow({ jobId, name }) {
   const pct = job?.progress_pct ?? 0;
   const done = ["done", "error", "failed"].includes(status);
   return (
-    <div className="rounded-2xl border border-white/8 bg-white/3 px-4 py-3 flex items-center gap-3">
+    <div className="rounded-2xl border border-black/8 bg-black/3 px-4 py-3 flex items-center gap-3">
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-white truncate">{name}</div>
-        <div className="text-xs text-slate-400 mt-0.5">
+        <div className="text-sm text-slate-900 truncate">{name}</div>
+        <div className="text-xs text-slate-500 mt-0.5">
           {status === "done" ? "Concluído ✓" : job?.detail || status}
         </div>
       </div>
       {!done && (
-        <div className="w-20 h-1.5 rounded-full bg-white/8 overflow-hidden">
+        <div className="w-20 h-1.5 rounded-full bg-black/8 overflow-hidden">
           <div className="h-full rounded-full bg-violet-400 transition-all" style={{ width: `${pct}%` }} />
         </div>
       )}
-      {status === "done" && <span className="text-emerald-400 text-lg">✓</span>}
-      {(status === "error" || status === "failed") && <span className="text-rose-400 text-lg">✗</span>}
+      {status === "done" && <span className="text-emerald-600 text-lg">✓</span>}
+      {(status === "error" || status === "failed") && <span className="text-rose-600 text-lg">✗</span>}
     </div>
   );
 }
@@ -327,18 +327,18 @@ function DriveTab({ titleHint, setTitleHint }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm text-slate-400">Arquivos na sua pasta do Google Drive</div>
-        <button onClick={load} disabled={loading} className="text-xs text-cyan-400 hover:text-cyan-300 disabled:opacity-40">
+        <div className="text-sm text-slate-500">Arquivos na sua pasta do Google Drive</div>
+        <button onClick={load} disabled={loading} className="text-xs text-cyan-600 hover:text-cyan-700 disabled:opacity-40">
           {loading ? "Carregando…" : "↻ Atualizar"}
         </button>
       </div>
 
       {error && (
-        <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">{error}</div>
+        <div className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-700">{error}</div>
       )}
 
       {!loading && files.length === 0 && !error && (
-        <div className="rounded-2xl border border-dashed border-white/10 px-6 py-10 text-center text-sm text-slate-500">
+        <div className="rounded-2xl border border-dashed border-black/10 px-6 py-10 text-center text-sm text-slate-500">
           Nenhum arquivo encontrado na pasta do Drive.<br />
           <span className="text-xs mt-1 block">Faça upload dos vídeos na pasta compartilhada com a agência.</span>
         </div>
@@ -347,7 +347,7 @@ function DriveTab({ titleHint, setTitleHint }) {
       {loading && (
         <div className="space-y-2">
           {[1, 2, 3].map(i => (
-            <div key={i} className="rounded-2xl border border-white/8 bg-white/3 h-16 animate-pulse" />
+            <div key={i} className="rounded-2xl border border-black/8 bg-black/3 h-16 animate-pulse" />
           ))}
         </div>
       )}
@@ -359,7 +359,7 @@ function DriveTab({ titleHint, setTitleHint }) {
             className={`flex items-center gap-3 rounded-2xl border px-4 py-3 cursor-pointer transition ${
               selected.has(f.id)
                 ? "border-cyan-300/30 bg-cyan-300/6"
-                : "border-white/8 bg-white/3 hover:bg-white/5"
+                : "border-black/8 bg-black/3 hover:bg-black/5"
             }`}
           >
             <input
@@ -369,7 +369,7 @@ function DriveTab({ titleHint, setTitleHint }) {
               className="w-4 h-4 accent-cyan-400"
             />
             <div className="flex-1 min-w-0">
-              <div className="text-sm text-white truncate">{f.name}</div>
+              <div className="text-sm text-slate-900 truncate">{f.name}</div>
               <div className="text-xs text-slate-500 mt-0.5">
                 {f.size ? fmtBytes(Number(f.size)) : ""}
                 {f.modifiedTime ? ` · ${f.modifiedTime.slice(0, 10)}` : ""}
@@ -388,13 +388,13 @@ function DriveTab({ titleHint, setTitleHint }) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
-          <span className="mb-1.5 block text-xs text-slate-400 uppercase tracking-widest">Título / Observação</span>
+          <span className="mb-1.5 block text-xs text-slate-500 uppercase tracking-widest">Título / Observação</span>
           <input
             type="text"
             value={titleHint}
             onChange={e => setTitleHint(e.target.value)}
             placeholder="Ex.: vídeo praia julho"
-            className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-2.5 text-sm text-white outline-none focus:border-cyan-300/40"
+            className="w-full rounded-2xl border border-black/10 bg-black/6 px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-cyan-300/40"
           />
         </label>
       </div>
@@ -429,11 +429,11 @@ export default function UploadPage() {
       subtitle="Upload direto ou via Google Drive."
     >
       {/* Tabs */}
-      <div className="flex gap-1 rounded-2xl border border-white/8 bg-white/3 p-1 mb-6">
+      <div className="flex gap-1 rounded-2xl border border-black/8 bg-black/3 p-1 mb-6">
         <button
           onClick={() => setTab("upload")}
           className={`flex-1 rounded-xl py-2 text-sm font-medium transition ${
-            tab === "upload" ? "bg-cyan-400/15 text-cyan-200" : "text-slate-400 hover:text-slate-200"
+            tab === "upload" ? "bg-cyan-400/15 text-cyan-800" : "text-slate-500 hover:text-slate-700"
           }`}
         >
           📤 Upload direto
@@ -442,9 +442,9 @@ export default function UploadPage() {
           onClick={() => driveConfigured && setTab("drive")}
           className={`flex-1 rounded-xl py-2 text-sm font-medium transition ${
             tab === "drive"
-              ? "bg-cyan-400/15 text-cyan-200"
+              ? "bg-cyan-400/15 text-cyan-800"
               : driveConfigured
-              ? "text-slate-400 hover:text-slate-200"
+              ? "text-slate-500 hover:text-slate-700"
               : "text-slate-600 cursor-not-allowed"
           }`}
           title={driveConfigured ? "" : "Google Drive não configurado para esta conta"}

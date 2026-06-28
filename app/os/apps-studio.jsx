@@ -308,7 +308,7 @@ function CriacaoApp() {
           <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ aspectRatio: '16/9', position: 'relative', background: '#000' }}>
               {frames[frameSel]
-                ? <img src={frameSrc(frames[frameSel])} alt="capa" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                ? <img loading="lazy" decoding="async" src={frameSrc(frames[frameSel])} alt="capa" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                 : sel?.video_object_key ? <RealThumb objectKey={sel.video_object_key} /> : null}
             </div>
             <div style={{ padding: 16 }}>
@@ -321,7 +321,7 @@ function CriacaoApp() {
         <div className="stack">
           {frames.length > 0 && <Field label="Escolher capa"><div className="thumbs">{frames.slice(0, 8).map((f, i) =>
             <div key={i} className={'thumb' + (i === frameSel ? ' sel' : '')} onClick={() => setFrameSel(i)}>
-              <img src={frameSrc(f)} alt={'f' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              <img loading="lazy" decoding="async" src={frameSrc(f)} alt={'f' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
             </div>)}</div></Field>}
           <Field label="Título"><input className="inp" defaultValue={grok.title || ''} key={sel?.id + '_t'} /></Field>
           <Field label="Descrição"><textarea className="inp" rows="3" defaultValue={grok.description || sug.description_template || ''} key={sel?.id + '_d'} /></Field>
@@ -383,7 +383,7 @@ function ReferenciaApp() {
     <div className="thumbs" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(230px,1fr))', gap: 14 }}>
       {cards.map((c, i) => <a key={i} className="panel" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer', textDecoration: 'none', color: 'inherit' }} href={c.url || '#'} target="_blank" rel="noreferrer">
         <div style={{ aspectRatio: '16/9', position: 'relative', background: '#0c0c14' }}>
-          {c.thumb && <img src={c.thumb} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
+          {c.thumb && <img loading="lazy" decoding="async" src={c.thumb} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
           {c.d !== '—' && <span className="dur" style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(0,0,0,.75)', color: '#fff', fontSize: 10, fontFamily: 'var(--fm)', padding: '2px 7px', borderRadius: 5 }}>{c.d}</span>}
         </div>
         <div style={{ padding: 12 }}>

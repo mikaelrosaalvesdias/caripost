@@ -817,6 +817,9 @@
     async socialCreatePost(payload) {
       return mpFetch('/api/social/posts', { method: 'POST', body: JSON.stringify(payload) });
     },
+    async ensureStoryImage(postId) {
+      return mpFetch('/api/posts/' + _enc(postId) + '/story-image', { method: 'POST', body: '{}' });
+    },
     async socialPublish(postId) {
       return mpFetch('/api/social/posts/' + _enc(postId) + '/publish', { method: 'POST', body: JSON.stringify({}) });
     },
@@ -1040,6 +1043,167 @@
       return r.competitors || [];
     },
 
+    /* ════════ PRODUTOS → SOLUÇÕES (fontes de conteúdo) ════════ */
+
+    async listProducts(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products').catch(() => ({ products: [] }));
+      return r.products || [];
+    },
+    async createProduct(companyId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products', { method: 'POST', body: JSON.stringify(payload) });
+      return r.product;
+    },
+    async updateProduct(companyId, productId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId), { method: 'PUT', body: JSON.stringify(payload) });
+      return r.product;
+    },
+    async deleteProduct(companyId, productId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId), { method: 'DELETE' });
+    },
+    async enrichProduct(companyId, productId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/enrich', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
+
+    /* ════════ INFLUENCERS (por empresa) — cadastro + banco de imagem ════════ */
+    async listInfluencers(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/influencers').catch(() => ({ influencers: [] }));
+      return r.influencers || [];
+    },
+    async createInfluencer(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencers', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async updateInfluencer(companyId, infId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencers/' + _enc(infId), { method: 'PUT', body: JSON.stringify(payload) });
+    },
+    async deleteInfluencer(companyId, infId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencers/' + _enc(infId), { method: 'DELETE' });
+    },
+    async uploadInfluencerPhoto(companyId, infId, file) {
+      const fd = new FormData(); fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencers/' + _enc(infId) + '/photo', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteInfluencerPhoto(companyId, infId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencers/' + _enc(infId) + '/photo/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async listInfCompanies(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies').catch(() => ({ companies: [] }));
+      return r.companies || [];
+    },
+    async createInfCompany(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async updateInfCompany(companyId, infcoId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies/' + _enc(infcoId), { method: 'PUT', body: JSON.stringify(payload) });
+    },
+    async deleteInfCompany(companyId, infcoId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies/' + _enc(infcoId), { method: 'DELETE' });
+    },
+    async uploadInfCompanyLogo(companyId, infcoId, file) {
+      const fd = new FormData(); fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies/' + _enc(infcoId) + '/logo', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteInfCompanyLogo(companyId, infcoId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies/' + _enc(infcoId) + '/logo/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async listEvents(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/events').catch(() => ({ events: [] }));
+      return r.events || [];
+    },
+    async createEvent(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async updateEvent(companyId, eventId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events/' + _enc(eventId), { method: 'PUT', body: JSON.stringify(payload) });
+    },
+    async deleteEvent(companyId, eventId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events/' + _enc(eventId), { method: 'DELETE' });
+    },
+    async uploadEventLogo(companyId, eventId, file) {
+      const fd = new FormData(); fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events/' + _enc(eventId) + '/logo', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteEventLogo(companyId, eventId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events/' + _enc(eventId) + '/logo/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async uploadEventImage(companyId, eventId, file) {
+      const fd = new FormData(); fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events/' + _enc(eventId) + '/image', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteEventImage(companyId, eventId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/events/' + _enc(eventId) + '/image/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async listOrganizers(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/event-organizers').catch(() => ({ organizers: [] }));
+      return r.organizers || [];
+    },
+    async createOrganizer(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/event-organizers', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async updateOrganizer(companyId, orgId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/event-organizers/' + _enc(orgId), { method: 'PUT', body: JSON.stringify(payload) });
+    },
+    async deleteOrganizer(companyId, orgId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/event-organizers/' + _enc(orgId), { method: 'DELETE' });
+    },
+    async uploadOrganizerLogo(companyId, orgId, file) {
+      const fd = new FormData(); fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/event-organizers/' + _enc(orgId) + '/logo', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteOrganizerLogo(companyId, orgId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/event-organizers/' + _enc(orgId) + '/logo/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async enrichCompany(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/enrich', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
+    async uploadProductLogo(companyId, productId, file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/logo', { method: 'POST', body: fd, headers: {} });
+    },
+    async createSolution(companyId, productId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/solutions', { method: 'POST', body: JSON.stringify(payload) });
+      return r.solution;
+    },
+    async updateSolution(companyId, solutionId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId), { method: 'PUT', body: JSON.stringify(payload) });
+      return r.solution;
+    },
+    async deleteSolution(companyId, solutionId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId), { method: 'DELETE' });
+    },
+
+    /* ════════ MULTI-LOGO (empresa) ════════ */
+
+    async listLogos(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/logos').catch(() => ({ logos: [] }));
+      return r.logos || [];
+    },
+    async uploadLogoVariant(companyId, file, variant, primary) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('variant', variant || 'light');
+      fd.append('primary', primary ? 'true' : 'false');
+      return mpFetch('/api/companies/' + _enc(companyId) + '/logos', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteLogo(companyId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/logos/' + _enc(assetId), { method: 'DELETE' });
+    },
+
+    /* ════════ NOTIFICAÇÕES (Evolution WhatsApp + SMTP) ════════ */
+
+    async notifyConfig() {
+      return mpFetch('/api/notify/config').catch(() => ({ whatsapp: {}, smtp: {} }));
+    },
+    async saveNotifyConfig(payload) {
+      return mpFetch('/api/notify/config', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async notifyTest(payload) {
+      return mpFetch('/api/notify/test', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async createApprovalLink(payload) {
+      return mpFetch('/api/approvals/link', { method: 'POST', body: JSON.stringify(payload) });
+    },
+
     /* ════════ POSTS (Approval) ════════ */
 
     async listPosts(status) {
@@ -1057,9 +1221,49 @@
     async deletePost(id) {
       return mpFetch('/api/posts/' + _enc(id), { method: 'DELETE' });
     },
+    async updatePost(id, payload) {
+      const r = await mpFetch('/api/posts/' + _enc(id), { method: 'PUT', body: JSON.stringify(payload) });
+      return r.post || r;
+    },
     async generatePostAI(payload) {
       const r = await mpFetch('/api/posts/generate-ai', { method: 'POST', body: JSON.stringify(payload) });
       return r.generated;
+    },
+    async generatePostImage(payload) {
+      return mpFetch('/api/posts/generate-image', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async generateCarousel(payload) {
+      return mpFetch('/api/posts/generate-carousel', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async generateBriefing(payload) {
+      return mpFetch('/api/posts/generate-briefing', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async renderCarousel(payload) {
+      return mpFetch('/api/posts/render-carousel', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async imageTemplates(companyId, type) {
+      return mpFetch('/api/posts/image-templates?company_id=' + _enc(companyId || '') + '&type=' + _enc(type || 'carrossel')).catch(() => ({ templates: [] }));
+    },
+    async saveImageTemplate(payload) {
+      return mpFetch('/api/posts/save-template', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async getCreativeConfig(companyId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/creative-config');
+    },
+    async saveCreativeConfig(companyId, override) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/creative-config', { method: 'POST', body: JSON.stringify({ creative_config: override }) });
+    },
+    async aiModels() {
+      return mpFetch('/api/posts/ai-models').catch(() => ({ image: [] }));
+    },
+    async setAiModel(payload) {
+      return mpFetch('/api/posts/ai-models', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async generatePostVideo(payload) {
+      return mpFetch('/api/posts/generate-video', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async videoStatus(jobsCsv, companyId) {
+      return mpFetch('/api/posts/video-status?jobs=' + _enc(jobsCsv) + '&company_id=' + _enc(companyId || ''));
     },
     async postStats() {
       return mpFetch('/api/posts/stats');

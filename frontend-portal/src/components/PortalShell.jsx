@@ -28,7 +28,7 @@ export default function PortalShell({ creator, branding = {}, themeStyle = {}, o
           {branding.logo_b64 ? (
             <img src={branding.logo_b64} alt="Logo" className="portal-logo-img" />
           ) : (
-            <div className="portal-logo-mark">{(branding.brand_name || "M")[0]}</div>
+            <div className="portal-logo-mark">{(branding.brand_name || "C")[0]}</div>
           )}
           <span className="portal-topbar-name">{branding.brand_name || "Portal"}</span>
         </div>
@@ -86,10 +86,10 @@ export default function PortalShell({ creator, branding = {}, themeStyle = {}, o
             {branding.logo_b64 ? (
               <img src={branding.logo_b64} alt="Logo" className="portal-logo-img-lg" />
             ) : (
-              <div className="portal-logo-mark-lg">{(branding.brand_name || "M")[0]}</div>
+              <div className="portal-logo-mark-lg">{(branding.brand_name || "C")[0]}</div>
             )}
             <div className="portal-sidebar-brand-text">
-              <div className="portal-brand-label">{branding.brand_name || "MetaPorn"}</div>
+              <div className="portal-brand-label">{branding.brand_name || "Caripost"}</div>
               <div className="portal-brand-headline">{branding.headline || "Creator Portal"}</div>
             </div>
           </div>

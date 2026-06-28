@@ -49,3 +49,13 @@ proxy_test.txt
 *.tmp
 *.swp
 Dockerfile.hotfix_logo_profiles
+
+# Sensíveis untracked (a chave Fernet NÃO casava com .env*) + gerados/scratch
+.encryption_key.env
+*.env
+!*.env.example
+*.zip
+test-results/
+graphify-out/
+video-porra/
+caripost-os/

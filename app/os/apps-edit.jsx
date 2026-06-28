@@ -232,7 +232,7 @@ function LogoApp() {
         <div className="vstage" style={{ aspectRatio: '16/9', position: 'relative', overflow: 'hidden' }}>
           {file ? <div style={{ position: 'absolute', inset: 0 }}><RealThumb objectKey={file.object_key} /></div> : <div className="ph" />}
           <div className="logo-drag" style={{ left: lx + '%', top: ly + '%', width: size + '%', opacity: op / 100, zIndex: 2 }}>
-            {selProfile?.logo_b64 ? <img src={selProfile.logo_b64} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : 'LOGO'}
+            {selProfile?.logo_b64 ? <img loading="lazy" decoding="async" src={selProfile.logo_b64} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : 'LOGO'}
           </div>
         </div>
         <div className="hint" style={{ fontSize: 12, color: 'var(--cyan)', fontFamily: 'var(--fm)' }}>posição: {pos} · escala: {size}% · opacidade: {op}%</div>
@@ -334,7 +334,7 @@ function LogoBurnModal({ teaserKey, runId, profiles, onClose, onDone }) {
           <div className="vstage" style={{ aspectRatio: '16/9', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'absolute', inset: 0 }}><RealThumb objectKey={teaserKey} /></div>
             <div className="logo-drag" style={{ left: lx + '%', top: ly + '%', width: size + '%', opacity: op / 100, zIndex: 2 }}>
-              {selProfile?.logo_b64 ? <img src={selProfile.logo_b64} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : 'LOGO'}
+              {selProfile?.logo_b64 ? <img loading="lazy" decoding="async" src={selProfile.logo_b64} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : 'LOGO'}
             </div>
           </div>
           <div className="hint" style={{ fontSize: 12, color: 'var(--cyan)', fontFamily: 'var(--fm)' }}>posição: {pos} · escala: {size}% · opacidade: {op}%</div>
@@ -581,7 +581,7 @@ function TeaserApp() {
             {frames.map((f, i) => {
               const on = selFrames.includes(i);
               return <div key={i} className={'thumb' + (on ? ' sel' : '')} onClick={() => setSelFrames(p => on ? p.filter(x => x !== i) : [...p, i])} style={{ position: 'relative' }}>
-                <img src={_frameSrc(f)} alt={'cena ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img loading="lazy" decoding="async" src={_frameSrc(f)} alt={'cena ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                 {on && <span style={{ position: 'absolute', top: 4, right: 4, width: 18, height: 18, borderRadius: 5, background: 'var(--pri)', display: 'grid', placeItems: 'center', fontSize: 11, color: '#fff', zIndex: 2 }}>✓</span>}
                 {_tsFor(i) && <span className="t">{_tsFor(i)}</span>}
               </div>;
@@ -737,7 +737,7 @@ function ThumbnailApp() {
         <div className="sec cy"><Icon name="image" />Frames candidatos {frames.length ? '(' + frames.length + ')' : ''}</div>
         {frames.length ? <div className="thumbs">{frames.slice(0, 12).map((f, i) =>
           <div key={i} className={'thumb' + (i === sel ? ' sel' : '')} onClick={() => setSel(i)}>
-            <img src={frameSrc(f)} alt={'frame ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+            <img loading="lazy" decoding="async" src={frameSrc(f)} alt={'frame ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
           </div>)}
         </div> : <div className="panel">
           <div className="hint">{file ? 'Sem frames ainda. O vídeo precisa de análise — clique em Gerar que a análise roda automaticamente.' : 'Selecione um vídeo.'}</div>
@@ -745,9 +745,9 @@ function ThumbnailApp() {
         <div className="sec mut" style={{ marginTop: 6 }}>Prévia da capa</div>
         <div className="vstage" style={{ aspectRatio: '16/9', position: 'relative', overflow: 'hidden' }}>
           {resultUrl
-            ? <img src={resultUrl} alt="thumbnail" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+            ? <img loading="lazy" decoding="async" src={resultUrl} alt="thumbnail" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
             : frames[sel]
-              ? <img src={frameSrc(frames[sel])} alt="frame" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              ? <img loading="lazy" decoding="async" src={frameSrc(frames[sel])} alt="frame" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
               : file ? <div style={{ position: 'absolute', inset: 0 }}><RealThumb objectKey={file.object_key} /></div> : <div className="ph" />}
         </div>
       </div>

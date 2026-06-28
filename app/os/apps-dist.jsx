@@ -105,15 +105,15 @@ function PublisherApp() {
 
   const brandOptions = React.useMemo(() => [
     ...companies.map(c => ({ id: c.id, name: c.name, kind: 'cliente' })),
-    ...creators.map(c => ({ id: c.creator_id, name: c.n || c.name, kind: 'criador' })),
-  ], [companies, creators]);
+  ], [companies]);
 
   React.useEffect(() => {
     if (!window.mpApi) return;
     window.mpApi.publisherPlatforms().then(p => {
       const list = Array.isArray(p) ? p : Object.keys(p || {});
-      setPlatforms(list);
-    }).catch(() => {});
+      const social = list.filter(x => SOCIAL_PLATFORMS.includes(x));
+      setPlatforms(social.length ? social : SOCIAL_PLATFORMS);   // só redes sociais, sem plataformas adultas
+    }).catch(() => setPlatforms(SOCIAL_PLATFORMS));
     window.mpApi.listCreators().then(c => {
       setCreators(c);
       if (c.length) setSelCreator(c[0].creator_id);
@@ -396,98 +396,79 @@ function PublisherApp() {
 
 /* ── CALENDÁRIO EDITORIAL ── */
 function CalendarApp() {
-  const days = [];
-  for (let i = 0; i < 35; i++) days.push(i + 1);
-  const [raw, setRaw] = React.useState([]);
+  const [posts, setPosts] = React.useState([]);
+  const [companies, setCompanies] = React.useState([]);
+  const [companyId, setCompanyId] = React.useState('');
   const [loading, setLoading] = React.useState(true);
-  const [creators, setCreators] = React.useState([]);
-  const [platforms, setPlatforms] = React.useState([]);
-  const [optimal, setOptimal] = React.useState(null);
-  const [tab, setTab] = React.useState('list');
+  const [sel, setSel] = React.useState(null);
+  const [ref, setRef] = React.useState(new Date());
 
   const load = React.useCallback(() => {
     if (!window.mpApi) return;
     setLoading(true);
-    window.mpApi.listCalendar().then(r => { setRaw(r); setLoading(false); }).catch(() => setLoading(false));
+    window.mpApi.listPosts().then(r => { setPosts((r.posts || []).filter(p => ['SCHEDULED', 'PUBLISHED'].includes(p.status))); setLoading(false); }).catch(() => setLoading(false));
+    window.mpApi.listCompanies().then(c => setCompanies(c || [])).catch(() => {});
   }, []);
+  React.useEffect(() => { load(); }, [load]);
 
-  React.useEffect(() => {
-    load();
-    if (!window.mpApi) return;
-    window.mpApi.listCreators().then(setCreators).catch(() => {});
-    window.mpApi.publisherPlatforms().then(p => setPlatforms(Array.isArray(p) ? p : Object.keys(p || {}))).catch(() => {});
-    window.mpApi.calendarOptimalTimes().then(setOptimal).catch(() => {});
-  }, [load]);
-
-  const entries = raw.map(e => ({
-    id: e.entry_id,
-    t: e.title || 'Publicação',
-    d: e.publish_at ? new Date(e.publish_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—',
-    c: e.creator_name || e.creator_id || '—',
-    plat: Array.isArray(e.publish_platforms) ? e.publish_platforms.join(' · ') : (e.publish_platforms || '—'),
-    tone: e.status === 'published' || e.status === 'done' ? 'good' : e.status === 'error' ? 'pri' : 'warn',
-    s: e.status || 'agendado',
-    day: e.publish_at ? new Date(e.publish_at).getDate() : null,
-    publish_at: e.publish_at,
-  }));
-
-  const today = new Date().getDate();
-  const eventDays = {};
-  entries.forEach(e => { if (e.day) eventDays[e.day] = e.tone === 'good' ? 'pri' : 'cy'; });
-  const monthLabel = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-
-  async function handleDelete(id) {
-    if (!confirm('Excluir esta publicação agendada?')) return;
-    try { await window.mpApi.calendarDelete(id); load(); } catch (e) { alert('Erro: ' + e.message); }
-  }
-  async function handleReschedule(id, iso) {
-    try { await window.mpApi.calendarUpdate(id, { publish_at: iso }); load(); } catch (e) { alert('Erro: ' + e.message); }
-  }
+  const dateOf = (p) => p.scheduled_at || p.published_at;
+  const fmt = (p) => { const d = dateOf(p); return d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'; };
+  const fil = posts.filter(p => !companyId || p.company_id === companyId);
+  const year = ref.getFullYear(), month = ref.getMonth();
+  const startDow = (new Date(year, month, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const byDay = {};
+  fil.forEach(p => { const d = dateOf(p); if (d) { const dt = new Date(d); if (dt.getFullYear() === year && dt.getMonth() === month) (byDay[dt.getDate()] = byDay[dt.getDate()] || []).push(p); } });
+  const td = new Date();
+  const isToday = (d) => td.getFullYear() === year && td.getMonth() === month && td.getDate() === d;
+  const monthLabel = ref.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
   return <div className="app">
-    <AppHead icon="calendar" title="Calendário Editorial" desc="Publicações agendadas por criador e plataforma."
-      right={<div className="rowx" style={{ gap: 8 }}>
-        <button className="btn sm pri" onClick={() => setTab(t => t === 'new' ? 'list' : 'new')}><Icon name="plus" />Nova publicação</button>
-        <button className="btn sm" onClick={() => setTab(t => t === 'auto' ? 'list' : 'auto')}><Icon name="sparkles" />Auto-agendar</button>
-      </div>} />
-
-    {tab === 'new' && <CalendarNewForm creators={creators} platforms={platforms} onDone={() => { setTab('list'); load(); }} onCancel={() => setTab('list')} />}
-    {tab === 'auto' && <CalendarAutoForm creators={creators} platforms={platforms} onDone={() => { setTab('list'); load(); }} onCancel={() => setTab('list')} />}
-
-    {tab === 'list' && <div className="split">
+    <AppHead icon="calendar" title="Agenda" desc="Posts agendados e publicados, por dia." right={
+      <select className="inp" value={companyId} onChange={e => setCompanyId(e.target.value)} style={{ maxWidth: 200 }}>
+        <option value="">Todos os clientes</option>
+        {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>} />
+    <div className="split">
       <div className="panel">
-        <div className="rowx" style={{ justifyContent: 'center', marginBottom: 14 }}>
-          <b style={{ fontFamily: 'var(--fh)', fontSize: 16, textTransform: 'capitalize' }}>{monthLabel}</b>
+        <div className="rowx" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <button className="btn sm ghost" onClick={() => setRef(new Date(year, month - 1, 1))}>‹</button>
+          <b style={{ textTransform: 'capitalize' }}>{monthLabel}</b>
+          <button className="btn sm ghost" onClick={() => setRef(new Date(year, month + 1, 1))}>›</button>
         </div>
         <div className="cal">
           {['S', 'T', 'Q', 'Q', 'S', 'S', 'D'].map((d, i) => <div key={i} className="dow">{d}</div>)}
-          {days.map((d, i) => {
-            const valid = d >= 1 && d <= 31;
-            return <div key={i} className={'cell' + (valid ? '' : ' out') + (d === today ? ' today' : '')}>
-              {valid ? d : ''}
-              {eventDays[d] && <span className={'ev ' + (eventDays[d] === 'pri' ? 'pri' : '')} />}
-            </div>;
-          })}
+          {cells.map((d, i) => <div key={i} className={'cell' + (!d ? ' out' : '') + (d && isToday(d) ? ' today' : '')} onClick={() => d && byDay[d] && setSel(byDay[d][0])} style={{ cursor: d && byDay[d] ? 'pointer' : 'default' }}>
+            {d || ''}
+            {d && byDay[d] && <span className={'ev ' + (byDay[d].some(p => p.status === 'PUBLISHED') ? 'pri' : '')} />}
+          </div>)}
         </div>
-        <div className="rowx" style={{ marginTop: 12, fontSize: 11.5, color: 'var(--muted)' }}>
+        <div className="rowx" style={{ marginTop: 12, fontSize: 11.5, color: 'var(--muted)', gap: 12 }}>
           <span className="rowx" style={{ gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: 'var(--pri)' }} />publicado</span>
           <span className="rowx" style={{ gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: 'var(--cyan)' }} />agendado</span>
         </div>
-        {optimal?.optimal_times && <div className="panel stack" style={{ marginTop: 12 }}>
-          <div className="sec mut"><Icon name="clock" />Horários ideais por plataforma</div>
-          {Object.entries(optimal.optimal_times).map(([plat, t]) => (
-            <div key={plat} className="row"><span className="k" style={{ textTransform: 'capitalize' }}>{plat}</span><span className="v" style={{ fontSize: 11.5 }}>{t.br} BR</span></div>
-          ))}
-          {optimal.recommendation && <div className="hint">{optimal.recommendation}</div>}
-        </div>}
       </div>
       <div className="stack">
-        <div className="sec mut"><Icon name="clock" />Próximas publicações</div>
+        <div className="sec mut"><Icon name="clock" />Posts ({fil.length})</div>
         {loading && <div className="hint">Carregando…</div>}
-        {!loading && !entries.length && <div className="hint">Nenhuma publicação agendada.</div>}
-        {entries.slice(0, 20).map((e) => (
-          <CalendarEntryRow key={e.id} entry={e} onDelete={() => handleDelete(e.id)} onReschedule={(iso) => handleReschedule(e.id, iso)} />
-        ))}
+        {!loading && !fil.length && <div className="hint">Nenhum post agendado ou publicado ainda. Agende/publique em Conteúdo → Agendamento.</div>}
+        {fil.slice().sort((a, b) => (dateOf(b) || '').localeCompare(dateOf(a) || '')).map(p => <div key={p.id} className="litem" style={{ cursor: 'pointer', gap: 8 }} onClick={() => setSel(p)}>
+          {p.media_url ? <img loading="lazy" decoding="async" src={p.media_url} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6 }} /> : <span className="li-ic"><Icon name="post" /></span>}
+          <div className="li-main"><b>{p.title || 'Post'}</b><small>{fmt(p)} · {(p.networks || []).join(', ')}</small></div>
+          <Pill kind={p.status === 'PUBLISHED' ? 'good' : 'cy'} dot>{p.status === 'PUBLISHED' ? 'publicado' : 'agendado'}</Pill>
+        </div>)}
+      </div>
+    </div>
+    {sel && <div onClick={() => setSel(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'grid', placeItems: 'center', zIndex: 9999, padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} className="panel stack" style={{ maxWidth: 420, maxHeight: '90vh', overflow: 'auto' }}>
+        <div className="rowx" style={{ justifyContent: 'space-between' }}><b>{sel.title || 'Post'}</b><button className="btn sm ghost" onClick={() => setSel(null)}><Icon name="x" /></button></div>
+        {sel.media_url && <img loading="lazy" decoding="async" src={sel.media_url} style={{ width: '100%', borderRadius: 8 }} />}
+        <Pill kind={sel.status === 'PUBLISHED' ? 'good' : 'cy'} dot>{sel.status === 'PUBLISHED' ? 'publicado' : 'agendado'} · {fmt(sel)}</Pill>
+        <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{sel.copy}</div>
+        <div className="hint">Redes: {(sel.networks || []).join(', ') || '—'}</div>
       </div>
     </div>}
   </div>;

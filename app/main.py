@@ -71,7 +71,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.23.3")
+app = FastAPI(title="Adult Meta (internal)", version="1.26.49")
 
 app.add_middleware(
     CORSMiddleware,
@@ -5452,7 +5452,7 @@ def _startup():
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "version": app.version}
 
 
 @app.get("/xvideos/top")

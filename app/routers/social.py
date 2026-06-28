@@ -39,7 +39,11 @@ def _auth(request: Request):
 def _error(exc: Exception) -> JSONResponse:
     if isinstance(exc, SocialProviderError):
         return JSONResponse({"detail": exc.message, **(exc.detail or {})}, status_code=exc.status_code)
-    return JSONResponse({"detail": str(exc)}, status_code=500)
+    # Surface the real error instead of swallowing it into a bare 500.
+    import logging
+    import traceback
+    logging.getLogger("caripost.social").error("social error: %s\n%s", exc, traceback.format_exc())
+    return JSONResponse({"detail": str(exc) or exc.__class__.__name__, "error_type": exc.__class__.__name__}, status_code=500)
 
 
 def _verify_webhook(raw_body: bytes, request: Request) -> Optional[JSONResponse]:
@@ -175,7 +179,23 @@ async def analyze_brand(brand_id: str, request: Request):
             competitor_profiles.append(item)
 
         refs = asset_list(brand_id)
-        strategy_payload = generate_social_strategy(company, own_profile, competitor_profiles, refs)
+        try:
+            strategy_payload = generate_social_strategy(company, own_profile, competitor_profiles, refs)
+        except Exception as ai_exc:
+            import logging
+            import traceback
+            logging.getLogger("caripost.social").error(
+                "analyze strategy failed: %s\n%s", ai_exc, traceback.format_exc()
+            )
+            return JSONResponse(
+                {
+                    "detail": f"Falha ao gerar a estratégia com IA: {ai_exc}",
+                    "error_type": ai_exc.__class__.__name__,
+                    "own_profile": own_profile,
+                    "competitors": competitor_profiles,
+                },
+                status_code=502,
+            )
         report = report_create(brand_id, "SOCIAL_STRATEGY", {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "own_profile": own_profile,

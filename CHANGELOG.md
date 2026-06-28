@@ -2,6 +2,12 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.23.4 - 2026-06-22
+
+- **fix: Instagram/publicação pela plataforma.** URLs completas HTTPS (ex.: `https://caripost.n8nmikael.com.br/uploads/...`) agora são corretamente resolvidas para o caminho local no disco antes do re-host no tmpfiles.org. Antes o re-host falhava silenciosamente e o post nunca era publicado.
+- **fix: Logo com cutout suave.** O novo `_logo_cutout` usa alpha gradiente por distância de cor (não flood-fill). Remove fundos sólidos sem pixelar bordas nem cortar letras. Fundos com photo/textura são preservados intactos.
+- Versão: main.py 1.23.4, OS/UI cache bust v=12334.
+
 ## v1.23.3 - 2026-06-22
 
 - **fix: Publicação Instagram funcionando end-to-end.** Imagem é re-hosteada em tmpfiles.org (upload anônimo, sem auth), `ig_user_id` incluído no passo de publish, formato `arguments` corrigido para API v3.1 do Composio. Testado e confirmado: post publicado com sucesso no Instagram.

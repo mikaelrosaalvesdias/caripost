@@ -1,4 +1,4 @@
-/* MetaPorn OS — Inteligência & Mídia: Analyze, Compare, Runs, Arquivos */
+/* Caripost OS — Inteligência & Mídia: Analyze, Compare, Runs, Arquivos */
 
 function AppHead({ icon, title, desc, right }) {
   return <div className="app-head">
@@ -22,7 +22,7 @@ function RealThumb({ objectKey, alt, style }) {
     }
     return () => { alive = false; };
   }, [objectKey]);
-  if (url) return <img src={url} alt={alt || ''} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', ...style }} />;
+  if (url) return <img loading="lazy" decoding="async" src={url} alt={alt || ''} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', ...style }} />;
   return <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.18)', fontSize: 26, background: 'linear-gradient(135deg,#16161f,#0c0c14)', ...style }}>{err ? '◼' : '▶'}</div>;
 }
 
@@ -68,12 +68,30 @@ function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel }) {
     const m = Math.floor(s / 60), ss = s % 60;
     return (m > 0 ? m + 'm ' : '') + String(ss).padStart(m > 0 ? 2 : 1, '0') + 's';
   };
-  const p = Math.max(0, Math.min(100, pct || 0));
+  const p = Math.round(Math.max(0, Math.min(100, pct || 0)));
   // ETA estimado pela taxa de progresso — só mostra depois de 10% p/ não exagerar
   const eta = p >= 10 && p < 100 ? (elapsed / p) * (100 - p) : null;
   const isErr = phase === 'error';
   const isDone = phase === 'done';
   return <div className={'proc-modal' + (isErr ? ' err' : '')}>
+    <style>{`
+      .proc-modal{position:fixed;inset:0;z-index:99999;background:rgba(8,6,12,.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:24px;text-align:center;animation:proc-fade .2s ease}
+      @keyframes proc-fade{from{opacity:0}to{opacity:1}}
+      .proc-ring-wrap{position:relative;width:172px;height:172px;display:grid;place-items:center}
+      .proc-ring{position:absolute;inset:0;border-radius:50%;border:9px solid rgba(255,122,24,.16);border-top-color:#ff7a18;border-right-color:#ff7a18;animation:proc-spin 1s linear infinite;box-shadow:0 0 40px rgba(255,122,24,.25)}
+      .proc-pct{position:relative;font-size:40px;font-weight:800;color:#fff;letter-spacing:-1px}
+      .proc-title{font-size:21px;font-weight:700;color:#fff;margin:0}
+      .proc-detail{font-size:14px;color:#cbd5e1;max-width:440px;line-height:1.55;margin:0}
+      .proc-track{width:min(440px,82vw);height:8px;border-radius:99px;background:rgba(255,255,255,.12);overflow:hidden}
+      .proc-track i{display:block;height:100%;background:linear-gradient(90deg,#ff7a18,#ffb060);border-radius:99px;transition:width .45s ease}
+      .proc-times{display:flex;gap:40px}
+      .proc-time-b{display:flex;flex-direction:column;align-items:center;color:#fff}
+      .proc-time-b b{font-size:19px;font-weight:700}
+      .proc-time-b span{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+      .proc-actions{margin-top:8px}
+      .proc-modal.err .proc-ring{border-color:rgba(251,47,104,.2);border-top-color:#fb2f68;animation:none}
+      @keyframes proc-spin{to{transform:rotate(360deg)}}
+    `}</style>
     <div className="proc-ring-wrap">
       {isDone
         ? <div style={{ width: 150, height: 150, borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'var(--good)', boxShadow: '0 0 30px rgba(0,230,118,.4)' }}><Icon name="check" style={{ width: 54, height: 54, color: '#fff' }} /></div>
@@ -99,22 +117,110 @@ function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel }) {
   </div>;
 }
 
-/* ── ANALYZE — transcrição, análise e prompt ── */
+function formatAnalyzeEta(ms) {
+  const sec = Math.max(0, Math.ceil((ms || 0) / 1000));
+  if (sec <= 0) return 'menos de 1s restante';
+  if (sec < 60) return `${sec}s restantes`;
+  const min = Math.floor(sec / 60);
+  const rest = sec % 60;
+  if (min < 60) return rest ? `${min}min ${rest}s restantes` : `${min}min restantes`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}h ${m}min restantes` : `${h}h restantes`;
+}
+
+function AnalyzeLoadingModal({ open, pct, detail, fileName, phase }) {
+  const [elapsed, setElapsed] = React.useState(0);
+  const startRef = React.useRef(0);
+  React.useEffect(() => {
+    if (!open) { startRef.current = 0; setElapsed(0); return; }
+    startRef.current = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Date.now() - startRef.current), 500);
+    return () => clearInterval(id);
+  }, [open]);
+  if (!open) return null;
+  const safePct = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const eta = safePct <= 1 ? 'calculando tempo restante'
+    : safePct >= 99 ? 'finalizando...'
+    : formatAnalyzeEta(elapsed * (100 - safePct) / safePct);
+  const cls = 'mp-analyze-modal' + (phase === 'done' ? ' is-done' : '') + (phase === 'error' ? ' is-error' : '');
+  return <div id="mp-analyze-modal" className={cls} style={{ '--pct': safePct }}>
+    <style>{`
+      #mp-analyze-modal{--pct:0;position:fixed;inset:0;z-index:2147482900;display:grid;place-items:center;background:rgba(255,255,255,.94);backdrop-filter:blur(18px);font-family:"Space Grotesk","Inter",sans-serif;color:#1b2231}
+      #mp-analyze-modal .mp-an-wrap{width:min(440px,88vw);display:flex;flex-direction:column;align-items:center;text-align:center;gap:18px}
+      #mp-analyze-modal .mp-an-ring{width:188px;height:188px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#ff7a18 calc(var(--pct) * 1%),rgba(255,122,24,.14) 0);box-shadow:0 22px 70px rgba(255,122,24,.24),0 0 0 1px rgba(255,122,24,.18);position:relative}
+      #mp-analyze-modal .mp-an-ring::before{content:"";position:absolute;width:142px;height:142px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1px rgba(20,28,45,.08)}
+      #mp-analyze-modal .mp-an-pct{position:relative;z-index:1;font-size:36px;font-weight:800;color:#ff7a18;letter-spacing:0}
+      #mp-analyze-modal .mp-an-title{font-size:22px;font-weight:800;color:#1b2231}
+      #mp-analyze-modal .mp-an-detail{font-size:14px;font-weight:600;color:#4b5568;min-height:22px}
+      #mp-analyze-modal .mp-an-eta{font-size:13px;color:#8b95a6;min-height:20px}
+      #mp-analyze-modal .mp-an-file{max-width:100%;font-family:"JetBrains Mono","Courier New",monospace;font-size:11px;color:#8b95a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #mp-analyze-modal.is-error .mp-an-ring{background:conic-gradient(#fb2f68 calc(var(--pct) * 1%),rgba(251,47,104,.14) 0);box-shadow:0 22px 70px rgba(251,47,104,.22)}
+      #mp-analyze-modal.is-error .mp-an-pct{color:#fb2f68}
+      #mp-analyze-modal.is-done .mp-an-ring{background:conic-gradient(#1faa5a calc(var(--pct) * 1%),rgba(31,170,90,.14) 0);box-shadow:0 22px 70px rgba(31,170,90,.20)}
+      #mp-analyze-modal.is-done .mp-an-pct{color:#1faa5a}
+    `}</style>
+    <div className="mp-an-wrap" role="status" aria-live="polite">
+      <div className="mp-an-ring"><div className="mp-an-pct">{phase === 'error' ? '!' : `${safePct}%`}</div></div>
+      <div className="mp-an-title">{phase === 'done' ? 'Análise concluída' : phase === 'error' ? 'Análise falhou' : 'Analisando vídeo'}</div>
+      <div className="mp-an-detail">{detail || 'Preparando análise...'}</div>
+      <div className="mp-an-eta">{phase === 'done' ? 'finalizado' : phase === 'error' ? 'verifique o erro e tente novamente' : eta}</div>
+      <div className="mp-an-file">{fileName || 'video'}</div>
+    </div>
+  </div>;
+}
+
+/* ── ANALYZE — referências, Vision e JSON ── */
+const SOCIAL_PLATFORMS = [
+  ['youtube', 'YouTube'], ['instagram', 'Instagram'], ['tiktok', 'TikTok'], ['facebook', 'Facebook'],
+  ['kwai', 'Kwai'], ['x', 'X/Twitter'], ['pinterest', 'Pinterest'], ['linkedin', 'LinkedIn'],
+];
+
 function AnalyzeApp() {
   const [tab, setTab] = React.useState('prompt');
-  const [stt, setStt] = React.useState('premium');
   const [busy, setBusy] = React.useState(false);
   const [busyLabel, setBusyLabel] = React.useState('');
+  const [analyzeModal, setAnalyzeModal] = React.useState({ open: false, pct: 0, detail: '', fileName: '', phase: 'running' });
   const [uploadPct, setUploadPct] = React.useState(0);
   const [file, setFile] = React.useState(window.mpCtx?.file || null);
   const [result, setResult] = React.useState(null);
   const [srt, setSrt] = React.useState('');
   const [frames, setFrames] = React.useState([]);
+  const [picking, setPicking] = React.useState(false);
   const fileInputRef = React.useRef(null);
-  const providers = [
-    ['auto', '⚡ Auto estrito'], ['assemblyai', 'AssemblyAI'], ['groq', 'OpenRouter STT'],
-    ['openai', 'OpenAI'], ['local', '🖥 Local'], ['premium', '⭐ Premium'],
-  ];
+  const [creators, setCreators] = React.useState([]);
+  const [creatorId, setCreatorId] = React.useState('');
+  const [creatorRefs, setCreatorRefs] = React.useState(null); // null=desconhecido, []=sem refs
+  const [refDraft, setRefDraft] = React.useState('');
+  const [savingRefs, setSavingRefs] = React.useState(false);
+  const [platforms, setPlatforms] = React.useState(['youtube', 'instagram']);
+
+  React.useEffect(() => {
+    if (window.mpApi) window.mpApi.listCreators().then(setCreators).catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    if (!creatorId || !window.mpApi) { setCreatorRefs(null); return; }
+    window.mpApi.getCreator(creatorId)
+      .then(c => setCreatorRefs(c.reference_channels || []))
+      .catch(() => setCreatorRefs([]));
+  }, [creatorId]);
+
+  function togglePlatform(p) {
+    setPlatforms(ps => ps.includes(p) ? ps.filter(x => x !== p) : [...ps, p]);
+  }
+
+  async function saveRefs() {
+    const links = refDraft.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!links.length || !creatorId) return;
+    setSavingRefs(true);
+    try {
+      await window.mpApi.updateCreator(creatorId, { reference_channels: links });
+      setCreatorRefs(links); setRefDraft('');
+    } catch (e) { alert('Erro ao salvar referências: ' + e.message); }
+    finally { setSavingRefs(false); }
+  }
 
   // Se veio do Arquivos com run existente, carrega o resultado
   React.useEffect(() => {
@@ -157,37 +263,102 @@ function AnalyzeApp() {
 
   async function doAnalyze() {
     if (!file?.object_key) { alert('Selecione ou envie um vídeo primeiro.'); return; }
-    setBusy(true); setBusyLabel('Transcrevendo + analisando… (pode levar minutos)');
+    if (!creatorId) { alert('Escolha a empresa/criador primeiro.'); return; }
+    const payload = {
+      video_object_key: file.object_key,
+      original_filename: file.n || '',
+      creator_id: creatorId,
+      platforms,
+      stt_provider: 'none',
+      limit: 20,
+    };
+    setBusy(true);
+    setBusyLabel('Preparando análise...');
+    setAnalyzeModal({ open: true, pct: 3, detail: 'Preparando análise...', fileName: file.n || file.object_key, phase: 'running' });
     try {
-      const r = await window.mpApi.analyze({
-        video_object_key: file.object_key,
-        original_filename: file.n || '',
-        limit: 20,
-      });
+      const r = await runAnalyzeJob(payload);
       setResult(r);
       if (r.run_id) {
-        window.mpApi.getRunSrt(r.run_id).then(s => setSrt(typeof s === 'string' ? s : (s.srt || ''))).catch(() => {});
         window.mpApi.getRunFrames(r.run_id).then(f => setFrames(f || [])).catch(() => {});
       }
+      setAnalyzeModal(m => ({ ...m, open: true, pct: 100, detail: 'Análise concluída.', phase: 'done' }));
+      await new Promise(resolve => setTimeout(resolve, 650));
     } catch (e) {
+      setAnalyzeModal(m => ({ ...m, open: true, detail: 'Erro: ' + e.message, phase: 'error' }));
+      await new Promise(resolve => setTimeout(resolve, 1600));
       alert('Análise falhou: ' + e.message);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      setAnalyzeModal(m => ({ ...m, open: false }));
+    }
+  }
+
+  async function runAnalyzeJob(payload) {
+    if (!window.mpApi.analyzeStart || !window.mpApi.analyzeStatus) {
+      setAnalyzeModal(m => ({ ...m, pct: 70, detail: 'Analisando referência, JSON e Vision...' }));
+      return window.mpApi.analyze(payload);
+    }
+    const start = await window.mpApi.analyzeStart(payload);
+    if (!start?.job_id) throw new Error(start?.error || 'Não foi possível iniciar análise.');
+    return new Promise((resolve, reject) => {
+      let stopped = false;
+      let pollTimer = null;
+      let transientErrors = 0;
+      const finish = (fn, value) => {
+        if (stopped) return;
+        stopped = true;
+        if (pollTimer) clearTimeout(pollTimer);
+        fn(value);
+      };
+      const poll = async () => {
+        try {
+          const job = await window.mpApi.analyzeStatus(start.job_id);
+          transientErrors = 0;
+          const pct = Math.max(0, Math.min(100, Math.round(Number(job.progress_pct) || 0)));
+          const detail = job.detail || 'Analisando referência, JSON e Vision...';
+          setBusyLabel(detail);
+          setAnalyzeModal(m => ({ ...m, pct, detail, phase: job.status === 'error' ? 'error' : 'running' }));
+          if (job.status === 'done') {
+            finish(resolve, job.result || {});
+            return;
+          }
+          if (job.status === 'error') {
+            finish(reject, new Error(job.detail || job.error || 'Análise falhou'));
+            return;
+          }
+        } catch (err) {
+          transientErrors += 1;
+          if (transientErrors >= 6) {
+            finish(reject, err);
+            return;
+          }
+          setAnalyzeModal(m => ({ ...m, detail: 'Reconectando ao status da análise...' }));
+        }
+        pollTimer = setTimeout(poll, 2000);
+      };
+      poll();
+    });
   }
 
   const sug = result?.suggested || {};
   const grok = result?.grok || {};
   const vision = result?.vision || {};
-  const promptText = grok.prompt || grok.title_prompt || sug.description_template ||
+  const promptText = grok.markdown_prompt_ptbr_keep_original || grok.prompt || grok.title_prompt || sug.description_template ||
     (result ? JSON.stringify(sug, null, 2) : '');
 
   return <div className="app">
-    <AppHead icon="analyze" title="Analyze" desc="Transcrição PT-BR, análise por IA e geração de prompt — tudo em um."
+    <AnalyzeLoadingModal open={analyzeModal.open} pct={analyzeModal.pct} detail={analyzeModal.detail} fileName={analyzeModal.fileName} phase={analyzeModal.phase} />
+    <AppHead icon="analyze" title="Analyze" desc="Referências, Vision IA e JSON do vídeo — sem transcrição nesta etapa."
       right={<Pill kind="good" dot>storage online</Pill>} />
     <div className="split">
       {/* ENTRADA */}
       <div className="stack">
         <div className="panel stack">
-          <div className="sec"><Icon name="upload" />Upload de vídeo (direto para storage)</div>
+          <div className="rowx" style={{ justifyContent: 'space-between' }}>
+            <div className="sec"><Icon name="upload" />Vídeo (upload ou do servidor)</div>
+            <button className="btn sm" onClick={() => setPicking(p => !p)}><Icon name="media" />Escolher do servidor</button>
+          </div>
+          {picking && <FilePicker onClose={() => setPicking(false)} onSelect={f => { setFile(f); window.mpCtx.file = f; setPicking(false); }} />}
           <div className="dropzone" data-tour="an-drop" style={{ padding: '26px 20px', cursor: 'pointer' }}
             onClick={() => fileInputRef.current && fileInputRef.current.click()}
             onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }}
@@ -205,18 +376,34 @@ function AnalyzeApp() {
           </div>
         </div>
 
-        <div>
-          <label className="lbl">Motor de transcrição (STT)</label>
-          <div className="rowx" data-tour="an-stt">
-            {providers.map(([k, l]) => <button key={k} className={'btn sm' + (stt === k ? ' pri' : '')} onClick={() => setStt(k)}>{l}</button>)}
+        <div className="panel stack">
+          <Field label="Empresa / criador">
+            <select className="inp" value={creatorId} onChange={e => setCreatorId(e.target.value)}>
+              <option value="">— selecione —</option>
+              {creators.map(c => <option key={c.creator_id} value={c.creator_id}>{c.n}</option>)}
+            </select>
+          </Field>
+          <div>
+            <label className="lbl">Plataformas-alvo</label>
+            <div className="rowx" style={{ flexWrap: 'wrap' }}>
+              {SOCIAL_PLATFORMS.map(([k, l]) => <button key={k} className={'btn sm' + (platforms.includes(k) ? ' pri' : '')} onClick={() => togglePlatform(k)}>{l}</button>)}
+            </div>
           </div>
+          {creatorId && Array.isArray(creatorRefs) && creatorRefs.length > 0 &&
+            <div className="hint">Usando {creatorRefs.length} referência(s) cadastrada(s) deste criador como contexto.</div>}
+          {creatorId && Array.isArray(creatorRefs) && creatorRefs.length === 0 && <div className="stack">
+            <div className="hint" style={{ color: 'var(--pri)' }}>Este criador não tem referências cadastradas. Cole os links (1 por linha):</div>
+            <textarea className="inp" rows="3" value={refDraft} onChange={e => setRefDraft(e.target.value)}
+              placeholder={'https://youtube.com/@canal\nhttps://instagram.com/perfil'} />
+            <button className="btn sm pri" disabled={savingRefs || !refDraft.trim()} onClick={saveRefs}><Icon name="check" />{savingRefs ? 'Salvando…' : 'Salvar referências'}</button>
+          </div>}
         </div>
 
         <div className="rowx" data-tour="an-go">
           <button className="btn pri" disabled={busy} onClick={doAnalyze}><Icon name="sparkles" />{busy ? 'Analisando…' : 'Analisar'}</button>
           <button className="btn ghost" onClick={() => { setFile(null); setResult(null); setSrt(''); setFrames([]); window.mpCtx.file = null; }}>Limpar</button>
         </div>
-        {busy && <div className="panel"><ProgressBar pct={70} tone="cy" label={busyLabel} eta="transcrição + Grok Vision em andamento" /></div>}
+        {busy && <div className="panel"><ProgressBar pct={70} tone="cy" label={busyLabel} eta="referência + Vision em andamento" /></div>}
       </div>
 
       {/* RESULTADO */}
@@ -229,34 +416,33 @@ function AnalyzeApp() {
           </div>
         </div>
         <div className="tabbar">
-          {[['prompt', 'Resultado'], ['srt', 'SRT'], ['vision', 'Visão IA'], ['json', 'JSON']].map(([k, l]) =>
+          {[['prompt', 'Referência'], ['vision', 'Vision'], ['json', 'JSON']].map(([k, l]) =>
             <button key={k} className={'tabx' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>)}
         </div>
-        {tab === 'prompt' && <div className="panel" style={{ fontFamily: 'var(--fm)', fontSize: 12.5, lineHeight: 1.7, color: 'var(--text2)', whiteSpace: 'pre-wrap', maxHeight: 380, overflow: 'auto' }}>
-          {result
-            ? [
-                sug.tags?.length ? 'TAGS: ' + sug.tags.join(', ') : '',
-                sug.description_template ? '\nDESCRIÇÃO:\n' + sug.description_template : '',
-                grok.title ? '\nTÍTULO: ' + grok.title : '',
-                grok.description ? '\nDESC GROK:\n' + grok.description : '',
-              ].filter(Boolean).join('\n') || JSON.stringify(result.suggested || result.grok || {}, null, 2)
-            : 'Analise um vídeo para ver o resultado aqui.'}
-        </div>}
-        {tab === 'srt' && <div className="stack">
-          <button className="btn sm" style={{ alignSelf: 'flex-start' }} disabled={!srt} onClick={() => {
-            const blob = new Blob([srt], { type: 'text/plain' });
-            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'legendas.srt'; a.click();
-          }}><Icon name="download" />Baixar .SRT</button>
-          <div className="panel" style={{ fontFamily: 'var(--fm)', fontSize: 12, lineHeight: 1.7, color: 'var(--text2)', whiteSpace: 'pre-wrap', maxHeight: 340, overflow: 'auto' }}>
-            {srt || 'SRT indisponível — analise um vídeo com transcrição.'}
-          </div>
+        {tab === 'prompt' && <div className="panel stack" style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, maxHeight: 420, overflow: 'auto' }}>
+          {!result && <span className="hint">Analise um vídeo para ver o resultado aqui.</span>}
+          {result && (() => {
+            const g = grok.generated || {};
+            const titles = g.titles || (grok.title ? [grok.title] : []);
+            const hashtags = g.hashtags || [];
+            const desc = g.description || grok.description;
+            return <React.Fragment>
+              {titles.length > 0 && <div><b style={{ color: 'var(--cyan)' }}>Títulos</b>{titles.map((t, i) => <div key={i} className="row"><span className="k">{String.fromCharCode(65 + i)}</span><span className="v" style={{ textAlign: 'left' }}>{t}</span></div>)}</div>}
+              {desc && <div><b style={{ color: 'var(--cyan)' }}>Descrição</b><div style={{ whiteSpace: 'pre-wrap' }}>{desc}</div></div>}
+              {hashtags.length > 0 && <div><b style={{ color: 'var(--cyan)' }}>Hashtags</b><div>{hashtags.map(h => String(h).startsWith('#') ? h : '#' + h).join(' ')}</div></div>}
+              {g.thumbnail_concept && <div><b style={{ color: 'var(--cyan)' }}>Thumbnail</b><div>{g.thumbnail_concept}</div></div>}
+              {g.recommendations && <div><b style={{ color: 'var(--cyan)' }}>Recomendações</b><div style={{ whiteSpace: 'pre-wrap' }}>{g.recommendations}</div></div>}
+              {sug.tags?.length > 0 && <div><b style={{ color: 'var(--cyan)' }}>Tags</b><div>{sug.tags.join(', ')}</div></div>}
+              {titles.length === 0 && !desc && <span className="hint">Sem geração de texto (configure um token de IA em Settings). Prompt disponível em "Copiar prompt".</span>}
+            </React.Fragment>;
+          })()}
         </div>}
         {tab === 'vision' && <div className="stack">
           {frames.length > 0 && <div className="thumbs">{frames.slice(0, 6).map((f, i) =>
-            <div key={i} className="thumb"><img src={frameSrc(f)} alt={'frame ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
+            <div key={i} className="thumb"><img loading="lazy" decoding="async" src={frameSrc(f)} alt={'frame ' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
           </div>}
           <div className="panel" style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, maxHeight: 300, overflow: 'auto' }}>
-            <b style={{ color: 'var(--cyan)' }}>Grok Vision:</b> {vision.analysis || vision.description || 'Sem análise de visão disponível.'}
+            <b style={{ color: 'var(--cyan)' }}>Visão IA:</b> {(vision.analysis && typeof vision.analysis === 'object' ? vision.analysis.description : vision.analysis) || 'Sem análise de visão disponível.'}
           </div>
         </div>}
         {tab === 'json' && <div className="panel" style={{ fontFamily: 'var(--fm)', fontSize: 11.5, lineHeight: 1.6, color: 'var(--text2)', whiteSpace: 'pre-wrap', maxHeight: 380, overflow: 'auto' }}>
@@ -381,7 +567,7 @@ function RunsApp() {
           {frames.length > 0 && <>
             <div className="sec mut"><Icon name="layers" />Frames-chave</div>
             <div className="thumbs">{frames.slice(0, 6).map((f, i) =>
-              <div key={i} className="thumb"><img src={frameSrc(f)} alt={'frame'} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
+              <div key={i} className="thumb"><img loading="lazy" decoding="async" src={frameSrc(f)} alt={'frame'} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
             </div>
           </>}
           <div className="sec mut"><Icon name="doc" />Metadados</div>
@@ -420,14 +606,15 @@ const FILE_ACTIONS = [
   { app: 'autoeditor', icon: 'autoeditor', label: 'AutoEditor', desc: 'Cortar / re-cut com IA', tone: 'violet' },
   { app: 'legenda', icon: 'captions', label: 'Legenda', desc: 'Transcrever e queimar', tone: 'cy' },
   { app: 'logo', icon: 'logo', label: 'Logo', desc: "Marca d'água", tone: 'cy' },
-  { app: 'teaser', icon: 'scissors', label: 'Teaser', desc: 'Corte curto vertical', tone: 'cy' },
+  { app: 'teaser', icon: 'scissors', label: 'Teaser', desc: 'Resumo curto pra divulgação', tone: 'cy' },
+  { app: 'cortes', icon: 'cortes', label: 'Cortes', desc: 'Vertical p/ Shorts/Reels', tone: 'cy' },
   { app: 'thumbnail', icon: 'thumbnail', label: 'Thumbnail', desc: 'Capa por IA', tone: 'violet' },
   { app: 'enhancer', icon: 'enhance', label: 'Melhorar', desc: 'Upscale de qualidade', tone: 'cy' },
   { app: 'criacao', icon: 'post', label: 'Criar Post', desc: 'Montar publicação', tone: 'pri' },
   { app: 'publisher', icon: 'broadcast', label: 'Publicar', desc: 'Enviar às plataformas', tone: 'pri' },
   { app: 'telegram', icon: 'telegram', label: 'Telegram', desc: 'Disparar ao grupo', tone: 'cy' },
 ];
-const FILTERS = [['all', 'Todos'], ['original', 'Originais'], ['burn', 'Queimados'], ['teaser', 'Teasers'], ['autoeditor', 'AutoEditor']];
+const FILTERS = [['all', 'Todos'], ['original', 'Originais'], ['burn', 'Queimados'], ['teaser', 'Teasers'], ['cortes', 'Cortes'], ['autoeditor', 'AutoEditor']];
 
 function FileActionGrid({ file, onOpen }) {
   return <div className="fa-grid">

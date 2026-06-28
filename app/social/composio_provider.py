@@ -292,6 +292,35 @@ class ComposioSocialProvider:
         ig_user_id = await self._get_instagram_user_id(composio_conn_id, user_id, connection)
         log.info("[composio/instagram] ig_user_id=%s", ig_user_id)
 
+        # ── CARROSSEL: 2+ imagens → 1 container por slide (is_carousel_item) +
+        #    1 container CAROUSEL (children) + publish. (Post único cairia só no 1º slide.)
+        if not is_video and len(media_urls) > 1:
+            child_ids: List[str] = []
+            for i, mu in enumerate(media_urls, 1):
+                u = mu
+                if not _is_publicly_accessible_url(u):
+                    u = await _rehost_media(u, False)
+                    if not u:
+                        raise SocialProviderError(
+                            f"Não consegui hospedar a imagem {i}/{len(media_urls)} do carrossel em URL pública.",
+                            status_code=502)
+                cid = await self._ig_create_container(create_slug, composio_conn_id, user_id, {
+                    "ig_user_id": ig_user_id, "image_url": u, "is_carousel_item": True,
+                }, step=f"carousel_child_{i}")
+                child_ids.append(str(cid))
+                log.info("[composio/instagram] carrossel slide %s/%s container=%s", i, len(media_urls), cid)
+            carousel_args = {"ig_user_id": ig_user_id, "media_type": "CAROUSEL", "children": child_ids, "caption": caption}
+            collabs = self._collaborators(post)
+            if collabs:
+                carousel_args["collaborators"] = collabs          # COLLAB: marca o influencer como colaborador do post
+                log.info("[composio/instagram] collab=%s", collabs)
+            carousel_id = await self._ig_create_container(create_slug, composio_conn_id, user_id, carousel_args, step="carousel_container")
+            log.info("[composio/instagram] carrossel container=%s (%s slides)", carousel_id, len(child_ids))
+            feed_result = await self._ig_publish_container(publish_slug, composio_conn_id, user_id, ig_user_id, carousel_id, max_wait=60)
+            # STORY simultâneo (opção): publica a CAPA como story. Falha aqui NÃO derruba o feed (já publicado).
+            await self._maybe_publish_story(post, media_urls, create_slug, publish_slug, composio_conn_id, user_id, ig_user_id, log)
+            return feed_result
+
         # Re-hostear imagem em URL pública se necessário (Instagram não busca de URLs internas)
         if not _is_publicly_accessible_url(media_url):
             log.info("[composio/instagram] re-hosteando mídia: %s", media_url)
@@ -314,6 +343,12 @@ class ComposioSocialProvider:
             create_args["media_type"] = "REELS"
         else:
             create_args["image_url"] = media_url
+            if content_type == "story":
+                create_args["media_type"] = "STORIES"   # FORMATO story → publica como STORY de verdade (9:16)
+        collabs = self._collaborators(post)
+        if collabs:
+            create_args["collaborators"] = collabs          # COLLAB no post único também
+            log.info("[composio/instagram] collab=%s", collabs)
 
         create_payload: Dict[str, Any] = {
             "connected_account_id": composio_conn_id,
@@ -359,6 +394,8 @@ class ComposioSocialProvider:
         ext_id = self._pick(pub_data, ["id", "post_id", "media_id", "ig_media_id"])
         ext_url = self._pick(pub_data, ["permalink", "url", "share_url", "html_url", "external_url"])
         log.info("[composio/instagram] passo 2 ok: id=%s url=%s", ext_id, ext_url)
+        # STORY simultâneo (opção): publica a mesma arte como story (falha não derruba o feed já publicado).
+        await self._maybe_publish_story(post, media_urls, create_slug, publish_slug, composio_conn_id, user_id, ig_user_id, log)
         return PublishResult(
             provider=self.provider,
             platform="instagram",
@@ -366,6 +403,80 @@ class ComposioSocialProvider:
             external_post_url=ext_url,
             status=str(pub_data.get("status") or "published"),
             raw=self._safe_payload(pub_resp),
+        )
+
+    def _collaborators(self, post: Dict[str, Any]) -> List[str]:
+        """@ dos colaboradores (influencer) p/ marcar no post — vem de metadata.collaborators. Máx 3, sem '@'."""
+        meta = post.get("metadata") or {}
+        c = meta.get("collaborators") or post.get("collaborators") or []
+        if isinstance(c, str):
+            c = [c]
+        return [str(x).strip().lstrip("@") for x in c if str(x).strip()][:3]
+
+    async def _maybe_publish_story(self, post: Dict[str, Any], media_urls: List[str], create_slug: str,
+                                   publish_slug: str, composio_conn_id: str, user_id: str, ig_user_id: str, log) -> None:
+        """STORY simultâneo (opção metadata.also_story): publica a CAPA (1ª mídia) como STORIES.
+        Falha aqui é LOGADA mas NÃO propaga — o feed já foi publicado com sucesso."""
+        meta = post.get("metadata") or {}
+        if not (meta.get("also_story") or meta.get("publish_story")):
+            return
+        import asyncio
+        try:
+            await asyncio.sleep(5)   # delay p/ o feed ASSENTAR antes de republicar no story (evita corrida)
+            cover = (meta.get("story_url") or "").strip() or media_urls[0]   # 9:16 bonito; senão a capa
+            if not _is_publicly_accessible_url(cover):
+                cover = await _rehost_media(cover, False)
+            if not cover:
+                log.warning("[composio/instagram] story-repost: sem URL pública — pulando")
+                return
+            sid = await self._ig_create_container(create_slug, composio_conn_id, user_id, {
+                "ig_user_id": ig_user_id, "image_url": cover, "media_type": "STORIES",
+            }, step="story_container")
+            await self._ig_publish_container(publish_slug, composio_conn_id, user_id, ig_user_id, sid, max_wait=60)
+            log.info("[composio/instagram] story-repost (9:16) publicado")
+        except Exception as se:
+            log.error("[composio/instagram] story-repost falhou (feed OK): %s", se)
+
+    async def _ig_create_container(self, slug: str, composio_conn_id: str, user_id: str,
+                                   args: Dict[str, Any], step: str) -> str:
+        """Cria um container de mídia no Instagram (child ou carrossel) e devolve o creation_id."""
+        import logging
+        log = logging.getLogger("caripost.social")
+        payload = {"connected_account_id": composio_conn_id, "user_id": user_id,
+                   "arguments": args, "allow_tracing": False}
+        resp = await self._request("POST", f"/tools/execute/{slug}", json=payload)
+        if resp.get("successful") is False:
+            msg = self._extract_error(resp) or "Composio não criou o container do Instagram."
+            log.error("[composio/instagram] %s falhou: %s", step, msg)
+            raise SocialProviderError(msg, status_code=502, detail={"step": step, "composio": self._safe_payload(resp)})
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+        cid = self._pick(data, ["id", "creation_id", "container_id", "media_id"])
+        if not cid:
+            raise SocialProviderError(f"Container criado mas sem creation_id ({step}).",
+                                      status_code=502, detail={"step": step, "composio": self._safe_payload(resp)})
+        return cid
+
+    async def _ig_publish_container(self, slug: str, composio_conn_id: str, user_id: str,
+                                    ig_user_id: str, creation_id: str, max_wait: int = 30) -> PublishResult:
+        """Publica um container já criado (single ou carrossel) e devolve o PublishResult."""
+        import logging
+        log = logging.getLogger("caripost.social")
+        payload = {"connected_account_id": composio_conn_id, "user_id": user_id,
+                   "arguments": {"creation_id": str(creation_id), "ig_user_id": ig_user_id,
+                                 "max_wait_seconds": max_wait},
+                   "allow_tracing": False}
+        resp = await self._request("POST", f"/tools/execute/{slug}", json=payload)
+        if resp.get("successful") is False:
+            msg = self._extract_error(resp) or "Composio não publicou no Instagram."
+            log.error("[composio/instagram] publish falhou: %s", msg)
+            raise SocialProviderError(msg, status_code=502, detail={"step": "publish", "creation_id": creation_id, "composio": self._safe_payload(resp)})
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+        return PublishResult(
+            provider=self.provider, platform="instagram",
+            external_post_id=self._pick(data, ["id", "post_id", "media_id", "ig_media_id"]),
+            external_post_url=self._pick(data, ["permalink", "url", "share_url", "html_url", "external_url"]),
+            status=str(data.get("status") or "published"),
+            raw=self._safe_payload(resp),
         )
 
     async def _get_instagram_user_id(self, composio_conn_id: str, user_id: str, connection: Dict[str, Any]) -> str:
@@ -614,6 +725,11 @@ async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
     # Resolver o caminho local do arquivo a partir da URL
     upload_prefix = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
     media_root = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+    # Handle full URLs like https://domain.com/uploads/...
+    from urllib.parse import urlparse
+    parsed = urlparse(str(local_url or ""))
+    if parsed.scheme in ("http", "https"):
+        local_url = parsed.path
     if local_url.startswith(upload_prefix):
         local_path = os.path.join(media_root, local_url[len(upload_prefix):].lstrip("/"))
     elif local_url.startswith("/"):

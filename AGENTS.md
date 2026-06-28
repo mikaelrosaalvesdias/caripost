@@ -93,3 +93,8 @@ Quando alterar endpoints ou UI de producao, validar tambem com `curl`, container
 - Nao renomeie IDs, rotas ou `data-route` sem verificar o JavaScript.
 - Nao remova compatibilidade de endpoints antigos sem migracao clara.
 - Em limpeza/exclusao de registros, proteja referencias compartilhadas antes de apagar arquivos.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

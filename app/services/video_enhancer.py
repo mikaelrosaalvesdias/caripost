@@ -222,10 +222,16 @@ async def run_enhance_job(job_id: str) -> None:
 
     size_mb = os.path.getsize(output_path) / 1024 / 1024
     logger.info("[video_enhancer] job=%s concluído output=%s size=%.1fMB", job_id, output_path, size_mb)
+
+    media_root = os.environ.get("LOCAL_MEDIA_ROOT", "/media")
+    rel = os.path.relpath(output_path, media_root)
+    output_object_key = f"local:{rel}" if not rel.startswith("..") else ""
+
     _patch(job_id, {
         "status": "done",
         "detail": f"✓ Vídeo melhorado ({resolution}). {size_mb:.1f}MB",
         "progress_pct": 100,
         "output_path": output_path,
+        "output_object_key": output_object_key,
         "output_size_mb": round(size_mb, 2),
     })

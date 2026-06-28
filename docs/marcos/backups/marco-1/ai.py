@@ -1,0 +1,1917 @@
+"""
+AI integration service — supports Anthropic, OpenAI, and OpenRouter.
+Mirrors caripost-web's lib/ai module.
+
+Settings are stored in the existing settings table (db.py) with keys like:
+  ai.provider, ai.model, ai.apiKey.anthropic, ai.apiKey.openai, ai.apiKey.openrouter
+  image.provider, image.model, image.apiKey.openai, ...
+  video.provider, video.model, video.apiKey.fal, ...
+
+API keys are encrypted via security/encryption.py (Fernet).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+
+from ..db import settings_get, settings_set
+from ..security.encryption import encrypt, decrypt
+
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Settings whitelist
+# ─────────────────────────────────────────────────────────────────────────────
+
+SETTINGS_WHITELIST: Dict[str, List[str]] = {
+    "ai": ["anthropic", "openai", "openrouter", "cometapi"],
+    "image": ["openai", "openrouter", "fal", "cometapi", "piapi", "omniroute"],
+    "video": ["fal", "openai", "openrouter"],
+}
+
+EXTRA_KEYS = {"postiz.url", "postiz.apiKey", "ai.apiKey"}
+
+DEFAULT_MODELS: Dict[str, Dict[str, List[str]]] = {
+    "ai": {
+        "anthropic": ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
+        "openai": ["gpt-5.1", "gpt-5-mini", "gpt-4.1", "o4-mini"],
+        "openrouter": ["anthropic/claude-sonnet-4.6", "openai/gpt-5.1", "google/gemini-2.5-pro", "meta-llama/llama-4-maverick", "deepseek/deepseek-chat-v3.1"],
+        # CometAPI (texto/roteiro) — ids reais do catálogo; preservam acentos. Claude = melhor copy PT-BR.
+        "cometapi": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001",
+                     "gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gemini-3.5-pro", "gemini-3.1-flash", "deepseek-v3.2"],
+    },
+    "image": {
+        "openai": ["gpt-image-1", "dall-e-3"],
+        "openrouter": [],
+        "fal": ["fal-ai/flux/dev", "fal-ai/flux-pro/v1.1-ultra"],
+    },
+    "video": {
+        "fal": ["fal-ai/kling-video/v2.5-turbo/pro", "fal-ai/veo3"],
+        "openai": ["sora-2"],
+        "openrouter": [],
+    },
+}
+
+
+def _is_valid_key(key: str) -> bool:
+    if key in EXTRA_KEYS:
+        return True
+    parts = key.split(".")
+    if len(parts) >= 2 and parts[0] in SETTINGS_WHITELIST:
+        section = parts[0]
+        if parts[1] == "provider" or parts[1] == "model":
+            return True
+        if parts[1] == "apiKey" and len(parts) >= 3 and parts[2] in SETTINGS_WHITELIST[section]:
+            return True
+    return False
+
+
+def _mask_key(value: str) -> str:
+    if not value or len(value) < 4:
+        return "••••••••"
+    return f"••••••••{value[-4:]}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Settings access
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_setting(key: str) -> Optional[str]:
+    row = settings_get(key=key)
+    if row is None:
+        return None
+    return row.get("value") if isinstance(row, dict) else None
+
+
+def set_setting(key: str, value: str) -> None:
+    if not _is_valid_key(key):
+        raise ValueError(f"Invalid settings key: {key}")
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    if "apiKey" in key and value:
+        value = encrypt(value)
+    settings_set(key=key, value=value, updated_at=now)
+
+
+def get_credential(section: str, provider: str) -> Optional[str]:
+    """Get decrypted API key for a section+provider, with fallbacks."""
+    key = f"{section}.apiKey.{provider}"
+    raw = get_setting(key)
+    if raw:
+        decrypted_val = decrypt(raw)
+        if decrypted_val:
+            return decrypted_val
+    # fallback to ai.apiKey for anthropic
+    if section == "ai" and provider in ("anthropic", "openai", "openrouter"):
+        raw = get_setting("ai.apiKey")
+        if raw:
+            decrypted_val = decrypt(raw)
+            if decrypted_val:
+                return decrypted_val
+    # fallback to env vars
+    env_map = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "fal": "FAL_KEY",
+    }
+    env_var = env_map.get(provider)
+    if env_var:
+        return os.environ.get(env_var)
+    return None
+
+
+def get_ai_config() -> Optional[Dict[str, Any]]:
+    """Get AI config for text generation. OpenAI is retired — anything pointing to OpenAI
+    is forced through OpenRouter (same models, OpenRouter token)."""
+    provider = get_setting("ai.provider") or "anthropic"
+    model = get_setting("ai.model")
+    if provider == "omniroute":   # gateway das assinaturas (grátis) — ATENÇÃO: remove acentos do texto
+        return {"provider": "omniroute", "apiKey": _omniroute_key() or "x", "model": model or "high-availability"}
+    if provider == "cometapi":    # texto via CometAPI (OpenAI-compat) — preserva acentos
+        return {"provider": "cometapi", "apiKey": _cometapi_key(), "model": model or "gpt-4o"}
+    if provider == "openai":
+        provider = "openrouter"
+        # Mantém o modelo, mas no formato do OpenRouter (precisa do prefixo do provedor).
+        if model and "/" not in model:
+            model = "openai/" + model
+    api_key = get_credential("ai", provider) or (_openrouter_key() if provider == "openrouter" else None)
+    if not api_key:
+        return None
+    if not model:
+        defaults = DEFAULT_MODELS["ai"].get(provider, [])
+        model = defaults[0] if defaults else None
+    if not model:
+        env_model = {"anthropic": "ANTHROPIC_MODEL", "openai": "OPENAI_MODEL", "openrouter": "OPENROUTER_MODEL"}
+        model = os.environ.get(env_model.get(provider, ""), "openai/gpt-4.1-mini")
+    if provider == "openrouter" and model and "/" not in model:
+        model = "openai/" + model
+    return {"provider": provider, "apiKey": api_key, "model": model}
+
+
+# Cheaper models for TEXT generation (briefing, copy, trends). Image/video stay on
+# their own (better) config. Override globally via setting `ai.textModel`.
+# Non-reasoning cheap models: gpt-5-mini/o-series burn the token budget on hidden
+# reasoning (empty output on large inputs), so use a fast non-reasoning model for text.
+_CHEAP_TEXT_MODELS = {
+    "openai": "gpt-4.1-mini",
+    "openrouter": "openai/gpt-4.1-mini",
+    "anthropic": "claude-haiku-4-5",
+    "cometapi": "gpt-4o",
+}
+
+
+def cheap_text_config(config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return a copy of the AI config using a cheaper text model.
+
+    Keeps cost low for briefing/copy generation (user is token-constrained).
+    Honors the `ai.textModel` setting if set; otherwise picks a cheap default
+    for the provider; falls back to the configured model if provider unknown.
+    """
+    if not config:
+        return config
+    override = (get_setting("ai.textModel") or "").strip()
+    provider = config.get("provider", "")
+    model = override or _CHEAP_TEXT_MODELS.get(provider) or config.get("model")
+    return {**config, "model": model}
+
+
+def is_ai_enabled() -> bool:
+    return get_ai_config() is not None
+
+
+def get_settings_map() -> Dict[str, Any]:
+    """Get all AI-related settings with masked keys for UI display."""
+    result: Dict[str, Any] = {}
+    for section in ("ai", "image", "video"):
+        provider = get_setting(f"{section}.provider")
+        if not provider:
+            defaults = SETTINGS_WHITELIST[section]
+            provider = defaults[0] if defaults else ""
+        model = get_setting(f"{section}.model") or ""
+        key_masks: Dict[str, str] = {}
+        for p in SETTINGS_WHITELIST[section]:
+            raw = get_setting(f"{section}.apiKey.{p}")
+            if raw:
+                decrypted_val = decrypt(raw)
+                if decrypted_val:
+                    key_masks[p] = _mask_key(decrypted_val)
+        result[section] = {"provider": provider, "model": model, "keyMasks": key_masks}
+    # postiz
+    result["postizUrl"] = get_setting("postiz.url") or ""
+    raw_pk = get_setting("postiz.apiKey")
+    if raw_pk:
+        dec_pk = decrypt(raw_pk)
+        result["postizKeyMask"] = _mask_key(dec_pk) if dec_pk else ""
+    else:
+        result["postizKeyMask"] = ""
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI completion
+# ─────────────────────────────────────────────────────────────────────────────
+
+def complete_ai(
+    config: Dict[str, Any],
+    system: str,
+    user: str,
+    max_tokens: int = 1024,
+) -> str:
+    """Call AI provider and return text response."""
+    provider = config.get("provider", "anthropic")
+    api_key = config.get("apiKey", "")
+    model = config.get("model", "")
+
+    if not api_key or not model:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+
+    if provider == "anthropic":
+        return _call_anthropic(api_key, model, system, user, max_tokens)
+    elif provider in ("openai", "openrouter", "omniroute", "cometapi"):
+        return _call_openai_compat(provider, api_key, model, system, user, max_tokens)
+    else:
+        raise ValueError(f"Provedor não suportado: {provider}")
+
+
+def _call_anthropic(api_key: str, model: str, system: str, user: str, max_tokens: int) -> str:
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    }
+    with httpx.Client(timeout=120.0) as client:
+        resp = client.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                return block.get("text", "")
+        return ""
+
+
+def _call_openai_compat(provider: str, api_key: str, model: str, system: str, user: str, max_tokens: int) -> str:
+    if provider == "omniroute":
+        base_url = _omniroute_base()
+    elif provider == "openrouter":
+        base_url = "https://openrouter.ai/api/v1"
+    elif provider == "cometapi":
+        base_url = "https://api.cometapi.com/v1"   # OpenAI-compat; PRESERVA acentos (OmniRoute não)
+    else:
+        base_url = "https://api.openai.com/v1"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if provider == "openrouter":
+        headers["HTTP-Referer"] = "https://caripost.n8nmikael.com.br"
+        headers["X-Title"] = "Caripost"
+    # OpenAI newer models (gpt-5+, o1, o3, o4) require max_completion_tokens instead of max_tokens
+    if provider == "openai":
+        body = {
+            "model": model,
+            "max_completion_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+    else:
+        body = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+    body["stream"] = False   # OmniRoute faz streaming por padrão; força JSON único
+    with httpx.Client(timeout=120.0) as client:
+        resp = client.post(f"{base_url}/chat/completions", headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+
+def test_ai() -> Optional[str]:
+    """Test AI connection. Returns None on success, error string on failure."""
+    try:
+        config = get_ai_config()
+        if not config:
+            return "IA não configurada — adicione sua chave em Configurações."
+        result = complete_ai(config, "Responda apenas: ok", "ping", 100)
+        if not result:
+            return "Resposta vazia do provedor."
+        return None
+    except httpx.HTTPStatusError as exc:
+        try:
+            err_data = exc.response.json()
+            err_msg = err_data.get("error", {}).get("message", "") or str(err_data)
+            return f"HTTP {exc.response.status_code}: {err_msg}"
+        except Exception:
+            return f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+    except Exception as exc:
+        return str(exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# List models
+# ─────────────────────────────────────────────────────────────────────────────
+
+def list_models(section: str, provider: str, api_key: Optional[str] = None) -> List[str]:
+    """List available models for a section+provider."""
+    if not api_key:
+        api_key = get_credential(section, provider)
+    defaults = DEFAULT_MODELS.get(section, {}).get(provider, [])
+
+    try:
+        if provider == "openrouter" and api_key:
+            return _list_openrouter_models(api_key, section)
+        elif provider == "openai" and api_key:
+            return _list_openai_models(api_key, section)
+        elif provider == "anthropic" and api_key:
+            return _list_anthropic_models(api_key)
+        elif provider == "fal":
+            return defaults
+    except Exception as exc:
+        logger.warning("list_models failed for %s/%s: %s", section, provider, exc)
+
+    return defaults
+
+
+def _list_openrouter_models(api_key: str, section: str) -> List[str]:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get("https://openrouter.ai/api/v1/models", headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    modality_map = {"ai": "text", "image": "image", "video": "video"}
+    target = modality_map.get(section, "text")
+    models = []
+    for m in data.get("data", []):
+        modalities = m.get("architecture", {}).get("output_modalities", [])
+        if target in modalities:
+            models.append(m.get("id", ""))
+    return sorted([m for m in models if m])[:50] or DEFAULT_MODELS.get(section, {}).get("openrouter", [])
+
+
+def _list_openai_models(api_key: str, section: str) -> List[str]:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get("https://api.openai.com/v1/models", headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    all_ids = [m.get("id", "") for m in data.get("data", [])]
+    if section == "ai":
+        filtered = [m for m in all_ids if m and not any(x in m for x in ("audio", "tts", "embed", "whisper", "moderation"))]
+        filtered = [m for m in filtered if m.startswith(("gpt", "o1", "o3", "o4", "chatgpt"))]
+        return sorted(set(filtered))[:50] or DEFAULT_MODELS["ai"]["openai"]
+    elif section == "image":
+        filtered = [m for m in all_ids if "image" in m or "dall-e" in m]
+        return sorted(set(filtered))[:20] or DEFAULT_MODELS["image"]["openai"]
+    elif section == "video":
+        filtered = [m for m in all_ids if "sora" in m or "video" in m]
+        return sorted(set(filtered))[:20] or DEFAULT_MODELS["video"]["openai"]
+    return DEFAULT_MODELS.get(section, {}).get("openai", [])
+
+
+def _list_anthropic_models(api_key: str) -> List[str]:
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get("https://api.anthropic.com/v1/models?limit=100", headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    models = [m.get("id", "") for m in data.get("data", [])]
+    return sorted([m for m in models if m])[:50] or DEFAULT_MODELS["ai"]["anthropic"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# High-level helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _repair_truncated_json(s: str) -> Optional[str]:
+    """Best-effort close of a JSON object that got cut off (e.g. token limit)."""
+    stack: List[str] = []
+    in_str = False
+    esc = False
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    if not stack and not in_str:
+        return None  # nothing to repair
+    repaired = s.rstrip().rstrip(",")
+    if in_str:
+        repaired += '"'
+    repaired += "".join(reversed(stack))
+    return repaired
+
+
+def extract_json(text: str) -> Optional[Dict[str, Any]]:
+    """Extract first JSON object from text, tolerating truncated responses."""
+    import re
+    if not text:
+        return None
+    match = re.search(r'\{[\s\S]*\}', text)
+    candidate = match.group() if match else (text[text.find("{"):] if "{" in text else "")
+    if not candidate:
+        return None
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        repaired = _repair_truncated_json(candidate)
+        if repaired:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                return None
+        return None
+
+
+def generate_trends(company: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate trends briefing for a company via AI."""
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+
+    brand_kit = company.get("brand_kit") or {}
+    system = (
+        "Você é um estrategista de conteúdo brasileiro especializado em redes sociais. "
+        'Responda SOMENTE com JSON válido neste formato: '
+        '{"summary":"...","themes":[{"title":"...","why":"...","formats":["reels","carrossel"],"example":"..."}],"hashtags":["#...","#..."]} '
+        "Gere 5 temas em alta para o nicho da empresa, com formato sugerido e exemplo de pauta. "
+        "Sem markdown, sem texto fora do JSON, tudo em PT-BR."
+    )
+    user_parts = [f"Empresa: {company.get('name', '')}"]
+    if company.get("segment"):
+        user_parts.append(f"Segmento: {company['segment']}")
+    if company.get("city"):
+        user_parts.append(f"Cidade: {company['city']}/{company.get('state', '')}")
+    if brand_kit.get("voice"):
+        user_parts.append(f"Tom de voz: {brand_kit['voice']}")
+    if brand_kit.get("persona"):
+        user_parts.append(f"Persona da marca: {brand_kit['persona']}")
+    user = "\n".join(user_parts)
+
+    result = complete_ai(config, system, user, 2048)
+    parsed = extract_json(result)
+    if not parsed:
+        raise ValueError("IA não retornou JSON válido.")
+    return parsed
+
+
+def get_image_config() -> Optional[Dict[str, Any]]:
+    """Image-gen config. Supports OpenAI and OpenRouter (Image API)."""
+    provider = (get_setting("image.provider") or "openrouter").strip()
+    model = get_setting("image.model") or ""
+    # OmniRoute (gateway das assinaturas) — imagem grátis pela assinatura.
+    if provider == "omniroute" or model.lower().startswith("omni:"):
+        return {"provider": "omniroute", "model": model or "omni:antigravity/gemini-3.1-flash-image",
+                "apiKey": _omniroute_key() or "x", "quality": get_setting("image.quality") or "high"}
+    # OpenAI image is retired — force everything to OpenRouter. A bare OpenAI model name
+    # (no "/") gets dropped in favor of the OpenRouter default.
+    if provider == "openai" or not provider:
+        provider = "openrouter"
+        if model and "/" not in model:
+            model = ""
+    if provider == "openrouter" or (model and "/" in model):
+        provider = "openrouter"
+        api_key = _openrouter_key()
+    else:
+        api_key = get_credential("image", provider)
+    if not api_key:
+        api_key = _openrouter_key()
+        provider = "openrouter"
+    if not api_key:
+        return None
+    if not model:
+        model = "google/gemini-2.5-flash-image"
+    quality = get_setting("image.quality") or "high"
+    return {"provider": provider, "apiKey": api_key, "model": model, "quality": quality}
+
+
+def _openrouter_key() -> str:
+    return (get_credential("image", "openrouter")
+            or get_credential("ai", "openrouter")
+            or get_setting("token:openrouter")
+            or get_setting("openrouter.apiKey")
+            or os.environ.get("OPENROUTER_API_KEY") or "").strip()
+
+
+def _omniroute_base() -> str:
+    return (get_setting("omniroute.base") or os.environ.get("OMNIROUTE_BASE")
+            or "http://172.17.0.1:20128/v1").rstrip("/")
+
+
+def _omniroute_key() -> str:
+    return (get_credential("image", "omniroute") or get_setting("token:omniroute")
+            or os.environ.get("OMNIROUTE_API_KEY") or "").strip()
+
+
+def generate_image_omniroute(model: str, prompt: str, size: str = "1080x1350"):
+    """Gera imagem via OmniRoute (gateway das assinaturas, OpenAI-compat). Retorna (png, cost=0)."""
+    import base64
+    key = _omniroute_key()
+    body = {"model": model, "prompt": prompt[:4000], "n": 1}
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    with httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0)) as c:
+        r = c.post(_omniroute_base() + "/images/generations", headers=headers, json=body)
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("error", {}).get("message") or r.text[:300]
+        except Exception:
+            detail = r.text[:300]
+        raise ValueError(f"Falha OmniRoute imagem (HTTP {r.status_code}): {detail}")
+    item = (r.json().get("data") or [{}])[0]
+    b64 = item.get("b64_json")
+    if b64:
+        return base64.b64decode(b64), 0.0
+    url = item.get("url") or item.get("image_url")
+    if url:
+        with httpx.Client(timeout=60) as c:
+            return c.get(url).content, 0.0
+    raise ValueError("OmniRoute não retornou imagem.")
+
+
+# Top-10 curados (slug real do OpenRouter, nome estilo arena, qualidade, preço/img USD aprox.).
+# Espelha o ranking Text-to-Image; reve-2.0/ideogram-4.0/uni-1.1 NÃO existem no OpenRouter.
+CURATED_IMAGE = [
+    ("reve-2.0", "reve-2.0 (Reve — API própria)", "Top", 0.040),
+    ("openai/gpt-5.4-image-2", "gpt-5.4-image-2", "Top", 0.040),
+    ("google/gemini-3.1-flash-image-preview", "gemini-3.1-flash-image (nano-banana-2)", "Top", 0.039),
+    ("microsoft/mai-image-2.5", "mai-image-2.5", "Top", 0.040),
+    ("google/gemini-3-pro-image-preview", "gemini-3-pro-image (nano-banana-pro)", "Top", 0.134),
+    ("openai/gpt-5-image", "gpt-5-image", "Alta", 0.040),
+    ("x-ai/grok-imagine-image-quality", "grok-imagine-image-quality", "Alta", 0.040),
+    ("bytedance-seed/seedream-4.5", "seedream-4.5", "Top", 0.030),
+    ("black-forest-labs/flux.2-pro", "flux.2-pro", "Alta", 0.050),
+    ("google/gemini-2.5-flash-image", "gemini-2.5-flash-image (nano-banana)", "Alta", 0.039),
+    ("sourceful/riverflow-v2.5-pro", "riverflow-v2.5-pro", "Boa", 0.040),
+]
+
+# Top-10 vídeo (slug real do OpenRouter). gemini-omni-flash/happyhorse NÃO existem lá.
+CURATED_VIDEO = [
+    ("bytedance/seedance-2.0", "seedance-2.0", "Top", 0.40),
+    ("google/veo-3.1", "veo-3.1", "Top", 0.50),
+    ("alibaba/wan-2.7", "wan-2.7", "Top", 0.40),
+    ("openai/sora-2-pro", "sora-2-pro", "Top", 0.50),
+    ("google/veo-3.1-fast", "veo-3.1-fast", "Alta", 0.30),
+    ("x-ai/grok-imagine-video", "grok-imagine-video", "Alta", 0.30),
+    ("kwaivgi/kling-v3.0-pro", "kling-v3.0-pro", "Alta", 0.35),
+    ("minimax/hailuo-2.3", "hailuo-2.3", "Alta", 0.30),
+    ("bytedance/seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30),
+    ("google/veo-3.1-lite", "veo-3.1-lite", "Boa", 0.20),
+]
+
+
+def _openrouter_avail(url: str) -> set:
+    key = _openrouter_key()
+    if not key:
+        return set()
+    try:
+        with httpx.Client(timeout=20) as c:
+            data = c.get(url, headers={"Authorization": f"Bearer {key}"}).json()
+        return {m.get("id") for m in (data.get("data") or [])}
+    except Exception:
+        return set()
+
+
+def openrouter_image_models() -> List[Dict[str, Any]]:
+    """Top-10 modelos de imagem curados (ranking), só os disponíveis no OpenRouter."""
+    avail = _openrouter_avail("https://openrouter.ai/api/v1/images/models")
+    # reve-2.0 é API própria (não OpenRouter) → só entra se o token Reve estiver configurado.
+    has_reve = bool(_reve_key())
+    out = [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": i}
+           for i, (s, n, q, p) in enumerate(CURATED_IMAGE)
+           if (s.startswith("reve") and has_reve) or (not s.startswith("reve") and (not avail or s in avail))]
+    return out or [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": i}
+                   for i, (s, n, q, p) in enumerate(CURATED_IMAGE) if not s.startswith("reve")]
+
+
+def openrouter_video_models() -> List[Dict[str, Any]]:
+    """Top-10 modelos de vídeo curados (ranking), só os disponíveis no OpenRouter."""
+    avail = _openrouter_avail("https://openrouter.ai/api/v1/videos/models")
+    out = [{"id": s, "name": n, "quality": q, "price_per_video": p, "rank": i}
+           for i, (s, n, q, p) in enumerate(CURATED_VIDEO) if not avail or s in avail]
+    return out or [{"id": s, "name": n, "quality": q, "price_per_video": p, "rank": i}
+                   for i, (s, n, q, p) in enumerate(CURATED_VIDEO)]
+
+
+def omniroute_image_models() -> List[Dict[str, Any]]:
+    """Modelos de IMAGEM do OmniRoute (gateway das assinaturas). Grátis pela assinatura.
+    id prefixado 'omni:' p/ roteamento. Vazio se a key não estiver configurada."""
+    key = _omniroute_key()
+    if not key:
+        return []
+    out, seen = [], set()
+    try:
+        with httpx.Client(timeout=8) as c:
+            data = c.get(_omniroute_base() + "/models", headers={"Authorization": "Bearer " + key}).json()
+        for m in (data.get("data") or []):
+            mid = m.get("id") or ""
+            prov = mid.split("/")[0].lower()
+            name = mid.split("/")[-1].lower()
+            # PULA provedores '-web' (cgpt-web/chatgpt-web/gweb/gemini-web): geram por NAVEGADOR headless
+            # → travam ~180s e derrubam o gateway (OOM). Só modelos de API real (ex.: antigravity) servem.
+            if "web" in prov:
+                continue
+            # DEDUP por nome do modelo (o gateway repete o mesmo modelo sob vários apelidos).
+            if mid and name not in seen and any(x in mid.lower() for x in ("image", "imagen", "flux", "dall", "banana", "seedream")):
+                seen.add(name)
+                out.append({"id": "omni:" + mid, "name": mid.split("/")[-1] + " (grátis · assinatura)",
+                            "provider": "omniroute", "quality": "Top", "price_per_image": 0.0, "rank": -1, "free": True})
+    except Exception:
+        pass
+    return out
+
+
+# ── CometAPI (api.cometapi.com) — gateway unificado OpenAI-compat. Curadoria: famílias × níveis (top/médio/barato).
+def _cometapi_key() -> str:
+    return (get_credential("ai", "cometapi") or get_credential("image", "cometapi")
+            or get_setting("token:cometapi") or os.environ.get("COMETAPI_API_KEY") or "").strip()
+
+
+_COMETAPI_BASE = "https://api.cometapi.com/v1"
+# (id real no catálogo CometAPI, nome, família, nível, preço USD aprox.)
+# SÓ modelos que usam /v1/images/generations E geram de verdade (verificado: gpt-image-2/1.5 + seedream).
+# Gemini/Flux/Midjourney usam OUTROS endpoints; gpt-4o-image (chat), gpt-image-1-mini e qwen-image-2 não
+# geram por aqui → fora (eram a causa do erro "invalid character '<'").
+_CURATED_COMETAPI = [
+    ("gpt-image-1.5", "GPT Image 1.5", "OpenAI", "Top", 0.08),
+    ("gpt-image-2", "GPT Image 2", "OpenAI", "Médio", 0.06),
+    ("doubao-seedream-5-0-260128", "Seedream 5.0", "Seedream", "Top", 0.028),
+    ("doubao-seedream-4-5-251128", "Seedream 4.5", "Seedream", "Médio", 0.032),
+    ("doubao-seedream-4-0-250828", "Seedream 4.0", "Seedream", "Barato", 0.032),
+]
+# Gemini (nano-banana) na CometAPI usa o endpoint generateContent (não /v1/images/generations) →
+# prefixo 'cometapi-gemini:'. gemini-3-pro-image = nano-banana PRO (o melhor; testado, gera 200 OK).
+_CURATED_COMETAPI_GEMINI = [
+    ("gemini-3-pro-image", "Gemini 3 Pro Image (nano-banana pro)", "Gemini", "Top", 0.10),
+]
+
+
+def cometapi_image_models() -> List[Dict[str, Any]]:
+    """Modelos curados da CometAPI. 'cometapi:'→/v1/images/generations; 'cometapi-gemini:'→generateContent."""
+    if not _cometapi_key():
+        return []
+    def _row(prefix, cid, nm, fam, tier, p):
+        return {"id": prefix + cid, "name": f"{nm} · {fam} ({tier})", "provider": "cometapi",
+                "family": fam, "tier": tier, "quality": tier, "price_per_image": p, "rank": -2}
+    return ([_row("cometapi:", *m) for m in _CURATED_COMETAPI]
+            + [_row("cometapi-gemini:", *m) for m in _CURATED_COMETAPI_GEMINI])
+
+
+def generate_image_cometapi_gemini(model: str, prompt: str):
+    """Gera imagem via Gemini (nano-banana) na CometAPI — endpoint generateContent. Retorna (png, custo)."""
+    import base64
+    key = _cometapi_key()
+    if not key:
+        raise ValueError("CometAPI não configurada (chave ausente).")
+    real = model.split(":", 1)[1] if ":" in model else model
+    url = _COMETAPI_BASE.replace("/v1", "") + f"/v1beta/models/{real}:generateContent"
+    body = {"contents": [{"parts": [{"text": prompt[:4000]}]}], "generationConfig": {"responseModalities": ["IMAGE"]}}
+    with httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0)) as c:
+        r = c.post(url, headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=body)
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("error", {}).get("message") or r.text[:300]
+        except Exception:
+            detail = r.text[:300]
+        raise ValueError(f"Falha CometAPI Gemini (HTTP {r.status_code}): {detail}")
+    parts = (((r.json().get("candidates") or [{}])[0].get("content") or {}).get("parts")) or []
+    for p in parts:
+        d = p.get("inlineData") or p.get("inline_data")
+        if d and d.get("data"):
+            return base64.b64decode(d["data"]), 0.10
+    raise ValueError("CometAPI Gemini não retornou imagem (sem inlineData).")
+
+
+# ── OpenAI imagem (API direta do cliente) ────────────────────────────────────
+_OPENAI_IMG_COST = {"gpt-image-1": 0.06, "gpt-image-2": 0.04, "chatgpt-image-latest-high-fidelity": 0.08,
+                    "gemini-3-pro-image-preview-2k": 0.06, "gemini-3.1-flash-image-preview": 0.04,
+                    "dall-e-3": 0.04, "dall-e-2": 0.018}
+_CURATED_OPENAI = [
+    ("openai:gpt-image-1", "gpt-image-1 (OpenAI · sua conta)", "Top", 0.06),
+    ("openai:dall-e-3", "DALL·E 3 (OpenAI · sua conta)", "Alta", 0.04),
+]
+
+
+def _openai_key() -> str:
+    return (get_credential("ai", "openai") or get_credential("image", "openai")
+            or get_setting("token:openai") or os.environ.get("OPENAI_API_KEY") or "").strip()
+
+
+def generate_image_openai_direct(model: str, prompt: str, size: str = "1024x1536", ref_urls=None,
+                                 base: str = "https://api.openai.com/v1", key: str = None, quality: str = None):
+    """Gera imagem por API OpenAI-compatível (OpenAI direta OU PiAPI LLM API). ref_urls = logos oficiais.
+    gpt-image-1 com referência usa /images/edits (sobe o arquivo da logo). Retorna (png_bytes, custo_usd)."""
+    import base64
+    key = key or _openai_key()
+    if not key:
+        raise ValueError("Provedor de imagem GPT não configurado (chave ausente).")
+    real = model.split(":", 1)[1] if ":" in model else model
+    sz = "1024x1792" if real == "dall-e-3" else ("1024x1024" if real.startswith("dall-e-2") else "1024x1536")
+    refs = [u for u in (ref_urls or []) if u]
+    H = {"Authorization": "Bearer " + key}
+    if refs and real == "gpt-image-1":  # referência → edits (a IA usa a logo oficial, igual ChatGPT)
+        files = []
+        with httpx.Client(timeout=60) as c:
+            for j, u in enumerate(refs[:4]):
+                try:
+                    files.append(("image[]", (f"ref{j}.png", c.get(u).content, "image/png")))
+                except Exception:
+                    pass
+        if files:
+            edata = {"model": real, "prompt": prompt[:4000], "size": sz}
+            if quality:
+                edata["quality"] = quality
+            with httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0)) as c:
+                r = c.post(f"{base}/images/edits", headers=H, data=edata, files=files)
+            if r.status_code >= 400:
+                raise ValueError(f"Falha GPT imagem (edits HTTP {r.status_code}): {r.text[:200]}")
+            item = (r.json().get("data") or [{}])[0]
+            b64 = item.get("b64_json")
+            if b64:
+                return base64.b64decode(b64), _OPENAI_IMG_COST.get(real, 0.06)
+    body = {"model": real, "prompt": prompt[:4000], "n": 1}
+    if sz and not any(x in real.lower() for x in ("seedream", "doubao")):  # Seedream/Doubao rejeitam 'size'
+        body["size"] = sz
+    if quality:
+        body["quality"] = quality
+    with httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0)) as c:
+        r = c.post(f"{base}/images/generations", headers=H, json=body)
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("error", {}).get("message") or r.text[:300]
+        except Exception:
+            detail = r.text[:300]
+        raise ValueError(f"Falha OpenAI imagem (HTTP {r.status_code}): {detail}")
+    item = (r.json().get("data") or [{}])[0]
+    cost = _OPENAI_IMG_COST.get(real, 0.06)
+    b64 = item.get("b64_json")
+    if b64:
+        return base64.b64decode(b64), cost
+    url = item.get("url") or item.get("image_url")
+    if url:
+        with httpx.Client(timeout=60) as c:
+            return c.get(url).content, cost
+    raise ValueError("OpenAI não retornou imagem.")
+
+
+def openai_image_models() -> List[Dict[str, Any]]:
+    """Modelos de imagem OpenAI (API direta). Vazio se a chave não estiver configurada."""
+    if not _openai_key():
+        return []
+    return [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": -2}
+            for (s, n, q, p) in _CURATED_OPENAI]
+
+
+def usd_to_brl(usd: Optional[float]) -> float:
+    """Converte USD→BRL pela cotação em get_setting('fx.usd_brl') (default 5.40)."""
+    try:
+        rate = float(get_setting("fx.usd_brl") or 5.40)
+    except Exception:
+        rate = 5.40
+    return round((usd or 0.0) * rate, 2)
+
+
+# ── PiAPI (piapi.ai) — API unificada (Flux, Nano Banana, Seedream, Qwen…). Assíncrona: cria task → poll ──
+_PIAPI_BASE = "https://api.piapi.ai/api/v1"
+# id_suffix: (model, task_type, kind)
+# SÓ estes 4 (todos via PiAPI LLM API, OpenAI-compat). suffix -> (model_real, quality|None, "openai")
+_PIAPI_MODELS = {
+    "gpt-image-2": ("gpt-image-2", "medium", "openai"),                  # LLM API (/v1/images, sync)
+    "chatgpt-hifi": ("chatgpt-image-latest-high-fidelity", None, "openai"),  # LLM API
+    "gemini-3-pro-2k": ("gemini", "nano-banana-pro", "gemini"),          # TASK API (async, 2K)
+    "nano-banana-2": ("gemini", "nano-banana-2", "gemini"),             # TASK API (async)
+}
+_CURATED_PIAPI = [
+    ("piapi:gpt-image-2", "gpt-image-2 (medium)", "Top", 0.04),
+    ("piapi:chatgpt-hifi", "ChatGPT Image — high fidelity", "Top", 0.08),
+    ("piapi:gemini-3-pro-2k", "Gemini 3 Pro Image (2K)", "Top", 0.06),
+    ("piapi:nano-banana-2", "Gemini 3.1 Flash Image (nano-banana-2)", "Top", 0.04),
+]
+_PIAPI_IMG_COST = {"gpt-image-2": 0.04, "chatgpt-hifi": 0.08, "gemini-3-pro-2k": 0.06, "nano-banana-2": 0.04}
+
+
+def _piapi_key() -> str:
+    return (get_credential("ai", "piapi") or get_credential("image", "piapi")
+            or get_setting("token:piapi") or os.environ.get("PIAPI_API_KEY") or "").strip()
+
+
+def generate_image_piapi(model_id: str, prompt: str, size: str = "1024x1536", ref_urls=None):
+    """Gera imagem via PiAPI (task assíncrona). ref_urls = imagens de REFERÊNCIA (logos oficiais)
+    que a IA deve usar sem inventar. Retorna (png_bytes, custo_usd)."""
+    import time
+    key = _piapi_key()
+    if not key:
+        raise ValueError("PiAPI não configurada (adicione a chave em Configurações).")
+    suffix = model_id.split(":", 1)[1] if ":" in model_id else model_id
+    m, arg2, kind = _PIAPI_MODELS.get(suffix, ("gpt-image-2", "medium", "openai"))
+    if kind == "openai":  # modelos OpenAI-compat via PiAPI LLM API (/v1/images). Saldo PiAPI, respeita logo (edits).
+        return generate_image_openai_direct(m, prompt, size, ref_urls, base="https://api.piapi.ai/v1", key=key, quality=arg2)
+    task_type = arg2
+    try:
+        w, h = (int(x) for x in str(size).lower().split("x"))
+    except Exception:
+        w, h = 1024, 1280
+    ar = "4:5" if h > w else ("16:9" if w > h else "1:1")
+    if kind == "flux":
+        inp = {"prompt": prompt[:3000], "width": w, "height": h}
+    elif kind == "seedream":
+        inp = {"prompt": prompt[:3000], "aspect_ratio": ar, "output_format": "png", "size": "2K"}
+    else:  # gemini / nano-banana
+        inp = {"prompt": prompt[:3000], "output_format": "png", "aspect_ratio": ar, "resolution": "2K"}
+    refs = [u for u in (ref_urls or []) if u]
+    if refs:  # logos oficiais como referência (a IA usa, não inventa)
+        if kind == "gemini":
+            inp["images"] = refs
+        else:
+            inp["image"] = refs[0]
+    headers = {"X-API-Key": key, "Content-Type": "application/json"}
+    payload = {"model": m, "task_type": task_type, "input": inp, "config": {"service_mode": "public"}}
+    # create com retry — PiAPI pode dar 400/429 transitório quando disparamos várias telas em rajada
+    task_id, last_err = None, ""
+    for attempt in range(3):
+        with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+            r = c.post(f"{_PIAPI_BASE}/task", headers=headers, json=payload)
+        try:
+            d = (r.json() or {}).get("data") or {}
+        except Exception:
+            d = {}
+        if r.status_code < 400 and (d.get("status") or "").lower() != "failed" and d.get("task_id"):
+            task_id = d.get("task_id")
+            break
+        last_err = (((d.get("error") or {}).get("message")) or f"HTTP {r.status_code}: {r.text[:160]}")
+        time.sleep(2 + attempt * 2)
+    if not task_id:
+        raise ValueError(f"Falha PiAPI ao criar tarefa (3x): {last_err}")
+    url = None
+    for _ in range(150):  # ~300s (nano-banana 2K demora)
+        time.sleep(2)
+        with httpx.Client(timeout=30) as c:
+            gd = ((c.get(f"{_PIAPI_BASE}/task/{task_id}", headers=headers).json() or {}).get("data") or {})
+        st = (gd.get("status") or "").lower()
+        if st == "completed":
+            out = gd.get("output") or {}
+            url = (out.get("image_url") or (out.get("image_urls") or [None])[0]
+                   or (out.get("temporary_image_urls") or [None])[0])
+            break
+        if st == "failed":
+            raise ValueError("PiAPI falhou: " + (((gd.get("error") or {}).get("message")) or "tarefa falhou"))
+    if not url:
+        raise ValueError("PiAPI: imagem não disponível (timeout ou sem URL).")
+    with httpx.Client(timeout=60) as c:
+        img = c.get(url).content
+    return img, _PIAPI_IMG_COST.get(suffix, 0.02)
+
+
+def piapi_image_models() -> List[Dict[str, Any]]:
+    """Modelos de imagem do PiAPI. Vazio se a chave não estiver configurada."""
+    if not _piapi_key():
+        return []
+    return [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": -3}
+            for (s, n, q, p) in _CURATED_PIAPI]
+
+
+def generate_image_openrouter(model: str, prompt: str, size: str = "1024x1024", ref_images: Optional[List[bytes]] = None):
+    """Generate via OpenRouter Image API. Returns (png_bytes, cost_usd)."""
+    import base64
+    key = _openrouter_key()
+    if not key:
+        raise ValueError("OpenRouter não configurado (token:openrouter).")
+    body: Dict[str, Any] = {"model": model, "prompt": prompt[:4000], "n": 1}
+    if size and "x" in size:
+        try:
+            from math import gcd
+            w, h = [int(v) for v in size.split("x")[:2]]
+            g = gcd(w, h) or 1
+            body["aspect_ratio"] = f"{w // g}:{h // g}"          # ex.: 1080x1350 -> "4:5"
+            body["resolution"] = "2K" if max(w, h) >= 1200 else "1K"
+            # NÃO enviar size em pixel: vários modelos (riverflow) rejeitam size+aspect_ratio juntos.
+        except Exception:
+            pass
+    if ref_images:
+        body["input_references"] = [
+            "data:image/png;base64," + base64.b64encode(b).decode() for b in ref_images[:3] if b
+        ]
+    last_err = ""
+    for attempt in range(3):                       # retry: modelos 'pro' (riverflow) falham intermitente
+        try:
+            with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0)) as client:
+                res = client.post("https://openrouter.ai/api/v1/images",
+                                  headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
+                                  json=body)
+            if res.status_code >= 400:
+                try:
+                    detail = res.json().get("error", {}).get("message") or res.text[:300]
+                except Exception:
+                    detail = res.text[:300]
+                last_err = f"HTTP {res.status_code}: {detail}"
+                if res.status_code < 500 and res.status_code != 429:
+                    raise ValueError(f"Falha OpenRouter imagem ({last_err})")   # 4xx não repete
+                continue
+            d = res.json()
+            item = (d.get("data") or [{}])[0]
+            cost = (d.get("usage") or {}).get("cost")
+            if item.get("b64_json"):
+                return base64.b64decode(item["b64_json"]), cost
+            url = item.get("image_url") or item.get("url")
+            if url:
+                with httpx.Client(timeout=60) as client:
+                    return client.get(url).content, cost
+            last_err = "resposta sem imagem"
+        except httpx.HTTPError as e:
+            last_err = f"rede/timeout: {str(e)[:120]}"
+    raise ValueError(f"Falha OpenRouter imagem após 3 tentativas ({last_err}).")
+
+
+def _reve_key() -> str:
+    return (get_credential("ai", "reve") or get_setting("token:reve")
+            or os.environ.get("REVE_API_KEY") or "").strip()
+
+
+def generate_image_reve(prompt: str, size: str = "1080x1350"):
+    """Gera via API própria da Reve (api.reve.com). Retorna (png_bytes, cost_usd|None).
+    Reve não aceita 4:5 → usa 3:4. Custo vem em créditos (não USD)."""
+    import base64
+    key = _reve_key()
+    if not key:
+        raise ValueError("Reve não configurado (token:reve).")
+    ar = "3:4"
+    if size and "x" in size:
+        try:
+            w, h = [int(v) for v in size.split("x")[:2]]
+            ar = "1:1" if w == h else ("3:4" if h > w else "4:3")
+        except Exception:
+            pass
+    body = {"prompt": prompt[:4000], "aspect_ratio": ar}
+    with httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0)) as c:
+        r = c.post("https://api.reve.com/v1/image/create",
+                   headers={"Authorization": "Bearer " + key, "content-type": "application/json"},
+                   json=body)
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("message") or r.text[:300]
+        except Exception:
+            detail = r.text[:300]
+        raise ValueError(f"Falha Reve (HTTP {r.status_code}): {detail}")
+    d = r.json()
+    b64 = d.get("image") or d.get("b64_json")
+    if not b64 and isinstance(d.get("images"), list) and d["images"]:
+        it = d["images"][0]
+        b64 = it if isinstance(it, str) else (it.get("image") or it.get("b64_json"))
+    if b64:
+        if b64.startswith("data:"):
+            b64 = b64.split(",", 1)[1]
+        return base64.b64decode(b64), None
+    url = d.get("url") or d.get("image_url")
+    if url:
+        with httpx.Client(timeout=60) as c:
+            return c.get(url).content, None
+    raise ValueError("Reve não retornou imagem (keys: " + ",".join(d.keys()) + ").")
+
+
+def generate_image_with_cost(prompt: str, size: str = "1024x1024", ref_images: Optional[List[bytes]] = None, model_override: Optional[str] = None, ref_urls: Optional[List[str]] = None):
+    """Route image generation by configured provider (or an explicit model_override).
+    Returns (bytes, cost_usd|None, model)."""
+    config = get_image_config() or {}
+    provider, model = config.get("provider", "openrouter"), config.get("model")
+    if model_override:
+        model = model_override
+        ml = model_override.lower()
+        if ml.startswith("omni:"):
+            provider = "omniroute"
+        elif ml.startswith("openai:"):
+            provider = "openai_direct"
+        elif ml.startswith("piapi:"):
+            provider = "piapi"
+        elif ml.startswith("cometapi-gemini:"):
+            provider = "cometapi_gemini"
+        elif ml.startswith("cometapi:"):
+            provider = "cometapi"
+        elif ml.startswith("reve"):
+            provider = "reve"
+        elif "/" in model_override:
+            provider = "openrouter"
+    if model and str(model).lower().startswith("omni:"):
+        provider = "omniroute"
+    if model and str(model).lower().startswith("openai:"):
+        provider = "openai_direct"
+    if model and str(model).lower().startswith("piapi:"):
+        provider = "piapi"
+    if model and str(model).lower().startswith("cometapi-gemini:"):
+        provider = "cometapi_gemini"
+    if model and str(model).lower().startswith("cometapi:"):
+        provider = "cometapi"
+    # Default to OpenRouter (OpenAI is being retired).
+    if not model:
+        model = "google/gemini-2.5-flash-image"
+        provider = "openrouter"
+    if provider == "omniroute":
+        real = model.split(":", 1)[1] if str(model).lower().startswith("omni:") else model
+        try:
+            b, cost = generate_image_omniroute(real, prompt, size)
+            return b, cost, model
+        except Exception as oe:
+            m = str(oe).lower()
+            if any(x in m for x in ("429", "usage_limit", "limit reached", "quota", "exhaust", "rate limit")):
+                # Cota grátis da assinatura acabou → fallback pago (mesma família, ~$0.04).
+                fb = "google/gemini-2.5-flash-image"
+                b, cost = generate_image_openrouter(fb, prompt, size, ref_images)
+                return b, cost, fb + " (fallback pago)"
+            raise
+    if provider == "openai_direct":
+        b, cost = generate_image_openai_direct(model, prompt, size, ref_urls)
+        return b, cost, model
+    if provider == "piapi":
+        b, cost = generate_image_piapi(model, prompt, size, ref_urls)
+        return b, cost, model
+    if provider == "cometapi":
+        real = model.split(":", 1)[1] if str(model).lower().startswith("cometapi:") else model
+        b, cost = generate_image_openai_direct(real, prompt, size, ref_urls,
+                                               base="https://api.cometapi.com/v1", key=_cometapi_key())
+        return b, cost, model
+    if provider == "cometapi_gemini":
+        b, cost = generate_image_cometapi_gemini(model, prompt)
+        return b, cost, model
+    if provider == "reve":
+        b, cost = generate_image_reve(prompt, size)
+        return b, cost, model
+    if provider == "openrouter":
+        b, cost = generate_image_openrouter(model, prompt, size, ref_images)
+        return b, cost, model
+    if not config.get("apiKey"):
+        raise ValueError("Geração de imagem não configurada.")
+    if ref_images:
+        return generate_image_edit(prompt, ref_images, size), None, model
+    return _generate_image_openai(prompt, size, config), None, model
+
+
+def generate_image_edit(prompt: str, ref_images: List[bytes], size: str = "1024x1024") -> bytes:
+    """gpt-image-1 image edit: generate guided by reference images (brand logo + refs)
+    so the output carries the real brand identity instead of a generic AI look."""
+    import base64
+    config = get_image_config()
+    if not config:
+        raise ValueError("Geração de imagem não configurada — adicione a chave OpenAI em Configurações.")
+    if config["provider"] != "openai":
+        raise ValueError("Geração com referências só suportada no OpenAI por enquanto.")
+    files = []
+    for i, b in enumerate([r for r in ref_images if r][:4]):
+        files.append(("image[]", (f"ref{i}.png", b, "image/png")))
+    if not files:
+        return generate_image_bytes(prompt, size)
+    data = {"model": config["model"] or "gpt-image-1", "prompt": prompt[:4000], "size": size}
+    if config.get("quality"):
+        data["quality"] = config["quality"]
+    with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0)) as client:
+        res = client.post(
+            "https://api.openai.com/v1/images/edits",
+            headers={"Authorization": f"Bearer {config['apiKey']}"},
+            data=data, files=files,
+        )
+    if res.status_code >= 400:
+        try:
+            detail = res.json().get("error", {}).get("message") or res.text[:300]
+        except Exception:
+            detail = res.text[:300]
+        raise ValueError(f"Falha ao gerar imagem com referências (HTTP {res.status_code}): {detail}")
+    item = (res.json().get("data") or [{}])[0]
+    if item.get("b64_json"):
+        return base64.b64decode(item["b64_json"])
+    raise ValueError("API de imagem (edits) não retornou conteúdo.")
+
+
+def generate_image_bytes(prompt: str, size: str = "1024x1024") -> bytes:
+    """Generate an image and return raw bytes (routes by configured provider)."""
+    return generate_image_with_cost(prompt, size)[0]
+
+
+def _generate_image_openai(prompt: str, size: str, config: Dict[str, Any]) -> bytes:
+    """Generate an image via OpenAI (gpt-image-1)."""
+    import base64
+    body = {"model": config["model"] or "gpt-image-1", "prompt": prompt[:4000], "size": size, "n": 1}
+    if config.get("quality"):
+        body["quality"] = config["quality"]
+    with httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0)) as client:
+        res = client.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
+            json=body,
+        )
+    if res.status_code >= 400:
+        try:
+            detail = res.json().get("error", {}).get("message") or res.text[:300]
+        except Exception:
+            detail = res.text[:300]
+        raise ValueError(f"Falha ao gerar imagem (HTTP {res.status_code}): {detail}")
+    data = res.json()
+    item = (data.get("data") or [{}])[0]
+    if item.get("b64_json"):
+        return base64.b64decode(item["b64_json"])
+    if item.get("url"):
+        with httpx.Client(timeout=60) as client:
+            return client.get(item["url"]).content
+    raise ValueError("API de imagem não retornou conteúdo.")
+
+
+def build_image_prompt(company: Dict[str, Any], theme: str, visual_prompt: str = "",
+                       products: Optional[List[Dict[str, Any]]] = None, has_refs: bool = False,
+                       title: str = "", target_product: str = "", variant: int = 0) -> str:
+    """Prompt para a IA gerar uma PEÇA DE MARKETING branded (estilo Cariap) — não foto crua.
+    Foca só no app-alvo e proíbe logos de outras marcas (a IA erra logos = 'viagem')."""
+    name = company.get("name", "")
+    scene = visual_prompt or theme or "tema do post"
+    head = (title or "").strip()
+    tgt = (target_product or "").strip()
+    foco = f"Contexto do app: {tgt}. " if tgt else "Contexto: portfólio de SVAs da Cariap. "
+    parts = [
+        "Gere APENAS a IMAGEM DE FUNDO (cenário fotográfico) de um post publicitário — "
+        "SEM nenhum texto e SEM nenhum logo. É uma FOTO/cena, não um cartaz pronto.",
+        f"{foco}Cena: {scene}.",
+        "Estilo de CAMPANHA PUBLICITÁRIA PREMIUM: cinematográfico, iluminação de campanha, profundidade, "
+        "cores ricas, foco/desfoque intencional, aparência de anúncio profissional de marca — NÃO foto de banco de imagem.",
+        f"Paleta que combina com a marca {name} (acentos em laranja #ED5E1F quando natural).",
+        {
+            0: "COMPOSIÇÃO: assunto principal (pessoa/dispositivo) à DIREITA; deixe a METADE ESQUERDA limpa e lisa.",
+            1: "COMPOSIÇÃO: assunto principal à ESQUERDA; deixe a METADE DIREITA limpa e lisa.",
+            2: "COMPOSIÇÃO: assunto principal no TOPO/centro, bem enquadrado; deixe a METADE INFERIOR limpa.",
+            3: "COMPOSIÇÃO: cena cinematográfica com profundidade (o sistema escurece a parte de baixo); pode preencher o quadro.",
+        }.get(int(variant) % 4, "COMPOSIÇÃO: assunto à direita, metade esquerda limpa.")
+        + " A FAIXA INFERIOR sempre limpa (vai o rodapé). É onde o sistema aplica texto e logos depois.",
+        "PROIBIDO desenhar: qualquer texto, letra, número, palavra, título, logotipo, marca, ícone de app, "
+        "telefone, site, rodapé, banner ou interface com palavras legíveis. Apenas o cenário.",
+        "Pessoas realistas e naturais (sem cara de IA, sem deformação). VARIE bastante o cenário a cada geração.",
+        "EVITE: aparência genérica de IA, cara de banco de imagem/stock, pessoas artificiais demais, "
+        "cenário corporativo clichê, excesso de elementos abstratos, interface com texto falso, "
+        "marcas de terceiros, visual infantil, estética poluída.",
+        ("Siga o ESTILO/clima/paleta das imagens de referência fornecidas." if has_refs else ""),
+        "Vertical 1080x1350, altíssima qualidade, nítida, com cara de campanha real.",
+    ]
+    rules = ((company.get("brand_kit") or {}).get("client_rules") or "").strip()
+    if rules:
+        parts.append("REGRAS DESTE CLIENTE (correções que ele já pediu — NUNCA repita estes erros):\n" + rules)
+    return " ".join(p for p in parts if p).strip()
+
+
+def get_video_config() -> Optional[Dict[str, Any]]:
+    """Video-gen config (Sora-2). Falls back to the OpenAI text key."""
+    provider = (get_setting("video.provider") or "openai").strip()
+    api_key = get_credential("video", provider) or (get_credential("ai", "openai") if provider == "openai" else None)
+    if not api_key:
+        return None
+    model = get_setting("video.model") or ("sora-2" if provider == "openai" else None)
+    return {"provider": provider, "apiKey": api_key, "model": model}
+
+
+def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
+    """Compose a brand-aware prompt for a short social video."""
+    parts = [
+        f"Vídeo curto vertical para redes sociais da marca {company.get('name','')}.",
+        f"Tema: {theme}." if theme else "",
+        video_prompt or "",
+        "Dinâmico, alta qualidade, alinhado à identidade da marca. Sem legendas/texto na tela.",
+    ]
+    return " ".join(p for p in parts if p).strip()
+
+
+def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "") -> List[Dict[str, str]]:
+    """The AI decides the ideal reel duration AND scene breakdown from the briefing
+    (the human does NOT pick duration). Returns a list of {prompt, seconds} where
+    seconds is one of Sora's allowed values (4/8/12)."""
+    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": "8"}]
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        return fallback
+    system = (
+        "Você é roteirista/estrategista de reels. A partir do briefing, DECIDA a duração ideal do reel "
+        "(o que performa melhor para o objetivo — normalmente entre 15 e 60s, sem forçar nem encurtar demais) "
+        "e quebre em CENAS sequenciais coerentes. Cada cena dura 4, 8 ou 12 segundos (valores válidos). "
+        'Responda SOMENTE JSON: {"total_seconds": N, "scenes":[{"desc":"cena visual","seconds":8}, ...]} . '
+        "Cada 'desc': descrição visual concreta (ambiente, ação, movimento de câmera), SEM texto/letras/logo na tela. PT-BR."
+    )
+    user = f"Empresa: {company.get('name','')} ({company.get('segment','')}). Briefing/tema: {theme}. Direção visual: {video_prompt}"
+    allowed = [4, 8, 12]
+    try:
+        parsed = extract_json(complete_ai(config, system, user, 1500)) or {}
+        out = []
+        for s in (parsed.get("scenes") or [])[:8]:
+            if not isinstance(s, dict):
+                continue
+            desc = (s.get("desc") or s.get("description") or "").strip()
+            if not desc:
+                continue
+            try:
+                sec = int(s.get("seconds") or 8)
+            except Exception:
+                sec = 8
+            sec = min(allowed, key=lambda a: abs(a - sec))  # snap to 4/8/12
+            out.append({"prompt": build_video_prompt(company, theme, desc), "seconds": str(sec)})
+        if out:
+            return out
+    except Exception:
+        pass
+    return fallback
+
+
+def create_video_job(prompt: str, seconds: str = "4", size: str = "720x1280") -> Dict[str, Any]:
+    """Create a Sora-2 video job (async). Returns the job dict (id, status)."""
+    config = get_video_config()
+    if not config:
+        raise ValueError("Geração de vídeo não configurada — adicione a chave OpenAI em Configurações.")
+    body = {"model": config["model"] or "sora-2", "prompt": prompt[:4000], "seconds": str(seconds), "size": size}
+    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+        res = client.post(
+            "https://api.openai.com/v1/videos",
+            headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
+            json=body,
+        )
+    if res.status_code >= 400:
+        try:
+            detail = res.json().get("error", {}).get("message") or res.text[:300]
+        except Exception:
+            detail = res.text[:300]
+        raise ValueError(f"Falha ao criar vídeo (HTTP {res.status_code}): {detail}")
+    return res.json()
+
+
+def get_video_job(job_id: str) -> Dict[str, Any]:
+    config = get_video_config()
+    with httpx.Client(timeout=60) as client:
+        res = client.get(
+            f"https://api.openai.com/v1/videos/{job_id}",
+            headers={"Authorization": f"Bearer {config['apiKey']}"},
+        )
+    return res.json()
+
+
+def download_video(job_id: str) -> bytes:
+    config = get_video_config()
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+        res = client.get(
+            f"https://api.openai.com/v1/videos/{job_id}/content",
+            headers={"Authorization": f"Bearer {config['apiKey']}"},
+        )
+    if res.status_code >= 400:
+        raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
+    return res.content
+
+
+def _fetch_site_text(site_url: str) -> str:
+    """Fetch a site → text for AI extraction. Prefers meta description/title (SPA-safe)
+    and strips cookie-consent boilerplate. Returns '' on failure."""
+    import re
+    if not site_url:
+        return ""
+    url = site_url if site_url.startswith("http") else "https://" + site_url
+
+    def meta(html: str, key: str, attr: str = "name") -> str:
+        m = re.search(r'<meta[^>]+' + attr + r'=["\']' + re.escape(key) + r'["\'][^>]*\bcontent=["\']([^"\']*)', html, re.I)
+        if not m:
+            m = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]*' + attr + r'=["\']' + re.escape(key) + r'["\']', html, re.I)
+        return (m.group(1).strip() if m else "")
+
+    try:
+        with httpx.Client(timeout=25.0, follow_redirects=True,
+                          headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"}) as c:
+            html = c.get(url).text
+        tm = re.search(r'<title[^>]*>(.*?)</title>', html, re.I | re.S)
+        metas = [(tm.group(1).strip() if tm else ""), meta(html, "description"), meta(html, "keywords"),
+                 meta(html, "og:title", "property"), meta(html, "og:description", "property"),
+                 meta(html, "og:site_name", "property")]
+        summary = " | ".join(dict.fromkeys([m for m in metas if m and len(m) > 2]))
+        body = re.sub(r'(?is)<(script|style|noscript)[^>]*>.*?</\1>', ' ', html)
+        body = re.sub(r'(?s)<[^>]+>', ' ', body)
+        body = re.sub(r'\s+', ' ', body).strip()
+        junk = re.compile(r'(cookie consent|consent management|termsfeed|política de cookies|cookie policy|aceitar cookies|gerenciar cookies)', re.I)
+        if junk.search(body) and len(body) < 400:
+            body = ""
+        else:
+            body = junk.sub(' ', body)
+        return (summary + " || " + body).strip()[:6500]
+    except Exception:
+        return ""
+
+
+def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", segment: str = "") -> Dict[str, Any]:
+    """Read the company's site/Instagram and define brand voice/persona/audience/visual base
+    for the agency. NEVER returns prices."""
+    import re as _re
+    import json as _json
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+    text = _fetch_site_text(site_url)
+    system = (
+        "Você é um estrategista de marca. A partir do site/Instagram de uma EMPRESA, defina a "
+        "identidade verbal e o posicionamento para uma agência criar posts. Responda SOMENTE com "
+        "JSON válido, sem markdown. IGNORE textos de cookies/LGPD/privacidade. NUNCA inclua preços."
+    )
+    user = (
+        f"Empresa: {name}\nSegmento atual: {segment or '(não informado)'}\n"
+        f"Instagram: {instagram or '(não informado)'}\n"
+        f"Conteúdo do site:\n{text or '(site indisponível — infira pelo nome e Instagram)'}\n\n"
+        "Extraia exatamente este JSON:\n"
+        '{"description":"o que a empresa faz (1-2 frases)",'
+        '"segment":"segmento curto (ex: agência de SVAs para provedores)",'
+        '"audience":"PÚBLICO + MODELO DE NEGÓCIO: para quem vende e como (a IA segue isto à risca em todo conteúdo)",'
+        '"voice":"tom de voz em poucas palavras (ex: próximo, confiante, sem jargão técnico)",'
+        '"persona":"persona da marca: quem é, como fala, como se posiciona",'
+        '"visual_prompt_base":"base visual para as imagens dos posts: estilo, paleta, elementos, clima",'
+        '"colors":{"primary":"#RRGGBB","secondary":"#RRGGBB","accent":"#RRGGBB"}}\n'
+        "Sem preços. Responda só o JSON."
+    )
+    raw = _call_openai_compat(config["provider"], config["apiKey"], config["model"], system, user, 1600)
+    m = _re.search(r'\{.*\}', raw, _re.S)
+    data = _json.loads(m.group(0)) if m else {}
+    for k in ("price", "preco", "preço", "pricing", "valor", "plano", "planos"):
+        data.pop(k, None)
+    if not isinstance(data.get("colors"), dict):
+        data["colors"] = {}
+    data["site_text_used"] = bool(text)
+    return data
+
+
+def enrich_product_from_web(name: str, site_url: str = "", instagram: str = "") -> Dict[str, Any]:
+    """Read the product's website and extract its profile (functions, objective, colors,
+    à-la-carte items) via AI. NEVER returns prices. Returns a dict to fill the product."""
+    import re as _re
+    import json as _json
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+    text = _fetch_site_text(site_url)
+    system = (
+        "Você analisa o site de um aplicativo/SVA e extrai o PERFIL do produto para uma agência "
+        "que cria posts. Responda SOMENTE com JSON válido, sem markdown. "
+        "IGNORE COMPLETAMENTE textos de banner de cookies, consentimento, LGPD, política de "
+        "privacidade e 'TermsFeed' — eles NÃO descrevem o produto. Baseie-se na descrição, no "
+        "título e no conteúdo real do app. "
+        "REGRA ABSOLUTA: NUNCA inclua preços, valores, mensalidades, planos ou números de R$/$."
+    )
+    user = (
+        f"Produto/app: {name}\n"
+        f"Instagram: {instagram or '(não informado)'}\n"
+        f"Conteúdo do site:\n{text or '(site indisponível — infira pelo nome e Instagram)'}\n\n"
+        "Extraia exatamente este JSON:\n"
+        '{"description":"1-2 frases: o que é e diferenciais",'
+        '"objective":"como a agência deve posicionar/vender este app nos posts (público, ângulo)",'
+        '"functions":["função/recurso 1","função 2","..."],'
+        '"category":"categoria curta (ex: streaming de música, segurança/VPN, e-books)",'
+        '"colors":{"primary":"#RRGGBB","secondary":"#RRGGBB","accent":"#RRGGBB"},'
+        '"alacarte":["itens entregues juntos / add-ons dentro do app, se houver (ex: Telecine, Premiere)"]}\n'
+        "Se não houver cores claras, use {}. SEM PREÇOS. Responda só o JSON."
+    )
+    raw = _call_openai_compat(config["provider"], config["apiKey"], config["model"], system, user, 1400)
+    m = _re.search(r'\{.*\}', raw, _re.S)
+    data = _json.loads(m.group(0)) if m else {}
+    for k in ("price", "preco", "preço", "pricing", "valor", "plano", "planos"):
+        data.pop(k, None)
+    # normalize
+    data["functions"] = [str(f).strip() for f in (data.get("functions") or []) if str(f).strip()][:12]
+    data["alacarte"] = [str(a).strip() for a in (data.get("alacarte") or []) if str(a).strip()][:12]
+    if not isinstance(data.get("colors"), dict):
+        data["colors"] = {}
+    data["site_text_used"] = bool(text)
+    return data
+
+
+def generate_post_copy(company: Dict[str, Any], briefing: str, networks: List[str]) -> Dict[str, Any]:
+    """Generate post copy via AI."""
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+
+    brand_kit = company.get("brand_kit") or {}
+    system = (
+        "Você é um social media sênior brasileiro. Responda SOMENTE com JSON válido: "
+        '{"title":"...","headline":"...","subheadline":"...","benefits":["...","...","..."],'
+        '"cta":"...","copy":"...","hashtags":["..."],"product":"...","media_type":"image|video",'
+        '"visual_prompt":"...","video_prompt":"..."} '
+        "Sem markdown, sem texto fora do JSON. "
+        "ÂNGULO: a maioria dos posts fala COM o provedor de internet (B2B: rentabilizar, fidelizar, agregar valor); "
+        "mas se o briefing pedir, pode ser pro provedor repostar ao ASSINANTE FINAL (benefício direto pro usuário). Adeque o tom. "
+        "headline: o GANCHO da ARTE em 4-7 palavras, forte e direto (será desenhado GRANDE no post). "
+        "subheadline: 1 frase curta de apoio (até ~12 palavras). "
+        "benefits: EXATAMENTE 3 benefícios curtíssimos (2-4 palavras cada) que vão virar bullets na arte. "
+        "cta: chamada curta (ex.: 'Fale conosco', 'Seja parceiro'). "
+        "Copy pronta para publicar (legenda), em PT-BR, com gancho forte na primeira linha, "
+        "quebras de linha e CTA no final. "
+        "product: o NOME EXATO do app/produto principal do post, escolhido da lista de produtos "
+        "fornecida (ex.: Looke, Deezer, ExitLag). Se nenhum produto específico, deixe vazio. "
+        "media_type: escolha 'video' se o tema do briefing pede movimento/demonstração/storytelling, "
+        "senão 'image'. "
+        "visual_prompt: descreva uma CENA cinematográfica e PREMIUM, específica e DIFERENTE para este post "
+        "(ambiente, objetos, ação, ângulo, profundidade, clima e luz de campanha), rica em detalhes e com ALMA, "
+        "fiel ao tema — fuja de clichê de banco de imagem e de cara genérica de IA; sem texto/letras na imagem. "
+        "video_prompt: se media_type for 'video', descreva a cena/ação/movimento do vídeo curto (5-8s) "
+        "alinhado ao briefing; senão deixe vazio."
+    )
+    _audience = (brand_kit.get("audience") or "").strip()
+    if _audience:
+        system += " CONTEXTO DE NEGÓCIO (siga à risca, define público e posicionamento): " + _audience
+    _rules = (brand_kit.get("client_rules") or "").strip()
+    if _rules:
+        system += " REGRAS DESTE CLIENTE (correções já pedidas por ele — NUNCA repita estes erros): " + _rules
+    user_parts = [f"Empresa: {company.get('name', '')}"]
+    if company.get("segment"):
+        user_parts.append(f"Segmento: {company['segment']}")
+    if brand_kit.get("voice"):
+        user_parts.append(f"Tom de voz: {brand_kit['voice']}")
+    if brand_kit.get("persona"):
+        user_parts.append(f"Persona da marca: {brand_kit['persona']}")
+    if networks:
+        user_parts.append(f"Redes alvo: {', '.join(networks)}")
+    try:
+        from ..db_companies import product_list
+        _prods = product_list(company.get("id") or "") or []
+    except Exception:
+        _prods = []
+    if _prods:
+        user_parts.append(
+            "Produtos/apps que a empresa vende (fale de um produto real e seus benefícios, "
+            "escolhendo o mais alinhado ao briefing; siga o 'objetivo' de cada um): "
+            + "; ".join(f"{p.get('name')}: {(p.get('description') or '')[:120]}" + (f" [objetivo: {(p.get('objective') or '')[:150]}]" if p.get('objective') else "") for p in _prods[:25])
+        )
+    user_parts.append(f"Briefing do post: {briefing}")
+    user = "\n".join(user_parts)
+
+    result = complete_ai(config, system, user, 1024)
+    parsed = extract_json(result)
+    if not parsed:
+        raise ValueError("IA não retornou JSON válido.")
+    hashtags = parsed.get("hashtags", [])
+    if isinstance(hashtags, list):
+        hashtags = " ".join(hashtags)
+    media_type = str(parsed.get("media_type") or "").lower()
+    if media_type not in ("image", "video"):
+        text = (briefing + " " + str(parsed.get("visual_prompt") or "") + " " + str(parsed.get("video_prompt") or "")).lower()
+        video_kw = ("vídeo", "video", "reels", "reel", "bastidor", "movimento", "demonstra", "tutorial",
+                    "passo a passo", "tiktok", "animaç", "desfile", "making of", "unbox", "timelapse")
+        media_type = "video" if any(k in text for k in video_kw) else "image"
+    benefits = parsed.get("benefits") or []
+    if not isinstance(benefits, list):
+        benefits = [str(benefits)]
+    benefits = [str(b).strip() for b in benefits if str(b).strip()][:3]
+    return {
+        "title": parsed.get("title", ""),
+        "headline": (parsed.get("headline") or parsed.get("title") or "").strip(),
+        "subheadline": (parsed.get("subheadline") or "").strip(),
+        "benefits": benefits,
+        "cta": (parsed.get("cta") or "Fale conosco").strip(),
+        "copy": parsed.get("copy", ""),
+        "hashtags": hashtags,
+        "product": parsed.get("product", ""),
+        "visual_prompt": parsed.get("visual_prompt", ""),
+        "video_prompt": parsed.get("video_prompt", ""),
+        "media_type": media_type,
+    }
+
+
+_OBJ_BRIEF = {
+    "vender": "conversão — mostre valor concreto e diferencial e leve à ação no fim, sem ser apelão",
+    "engajar": "engajamento — provoque, faça perguntas, gere comentários e salvamentos",
+    "educar": "educação — ensine algo útil e específico, posicione a marca como autoridade",
+    "lançar": "lançamento — novidade, expectativa, o que muda na prática pra quem usa",
+    "awareness": "reconhecimento de marca — território, valores e diferencial da marca",
+}
+
+# Nomes canônicos dos apps — validados/corrigidos POR SISTEMA (não confia no modelo).
+# (regex tolerante a acento/caixa/espaço → forma exata). Ex.: e-Saúde/E-Saude/e-Sáude → E-Saúde.
+_APP_CANON = [
+    (r"e[\s\-]?s[aáàâ]ude", "E-Saúde"),
+    (r"\blooke?\b", "Looke"),       # Look / Looke → Looke
+    (r"\bdeezer\b", "Deezer"),
+    (r"\bexit[\s\-]?lag\b", "ExitLag"),
+    (r"\bcariap\b", "CARIAP"),
+]
+
+
+def _canon_app_names(text: Optional[str]) -> str:
+    """Corrige variações de nome de app (acento/caixa/grafia) para a forma exata."""
+    if not text:
+        return text or ""
+    import re as _re
+    for pat, repl in _APP_CANON:
+        text = _re.sub(pat, repl, text, flags=_re.IGNORECASE | _re.UNICODE)
+    return text
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG ABERTA da GERAÇÃO de briefing/carrossel (antes: prompts fixos no código).
+# Edite aqui ou via get_setting("carousel.prompts") (JSON) p/ mudar tom, regras, formato.
+# {n} em n_exact é substituído pelo nº de telas. NÃO use chaves soltas em json_format.
+# ─────────────────────────────────────────────────────────────────────────────
+BRIEFING_GEN: Dict[str, Any] = {
+    "objetivos": _OBJ_BRIEF,
+    "carousel_system": (
+        "Você cria CARROSSEL editorial de Instagram no nível das agências g4.business e v4company: "
+        "conteúdo de ALTO VALOR, informativo e específico, SEM aspecto de venda no miolo. "
+        "A CAPA tem um gancho forte e curto (promessa/curiosidade). Cada slide de CONTEÚDO traz 1 ideia/insight "
+        "(título curto + 1 a 3 frases densas, concretas, úteis — nada genérico). O ÚLTIMO slide é o CTA de contratação. "
+        "Tom direto, inteligente, brasileiro. Responda SOMENTE com JSON VÁLIDO e COMPACTO: use APENAS os campos pedidos no formato "
+        "(NÃO adicione objective, target_audience, main_angle, slide_number, body vazio nem comentários). Sem markdown, sem ```."
+    ),
+    "n_exact": "Use EXATAMENTE {n} slides no total (incluindo capa e CTA).",
+    "n_default": ("Gere de 7 a 9 slides no total (1 capa + 5 a 7 de conteúdo + 1 CTA). "
+                  "NUNCA menos que 7 — carrossel curto demais perde valor."),
+    "json_format": ('Formato JSON: {"theme":"...","slides":['
+                    '{"type":"cover","eyebrow":"CATEGORIA CURTA","title":"gancho 3-8 palavras","subtitle":"1 linha (opcional)","app":"","visual":"cena fotográfica concreta","layout_variant":"center_statement","text_area":"left","brand_logo_position":"bottom_left"},'
+                    '{"type":"content","title":"título curto","body":"1-3 frases de valor, sem vender","app":"nome EXATO do app se a tela for sobre um app, senão vazio","visual":"cena fotográfica concreta","layout_variant":"editorial_left|editorial_right|center_statement|app_focus|numbered_insight","text_area":"left|right|center","app_logo_position":"top_right|top_left","brand_logo_position":"bottom_left|bottom_right"},'
+                    '... (repita content, VARIANDO o layout_variant),'
+                    '{"type":"cta","title":"chamada final p/ contratar","subtitle":"1 linha","cta":"Fale conosco","app":"","visual":"cena fotográfica concreta","layout_variant":"cta_clean","text_area":"left","brand_logo_position":"bottom_left"}]}. '),
+    "layout_rule": ("POLÍTICA DE LAYOUT (liberdade controlada): NÃO defina pixels, tamanhos, fonte nem cor — o SISTEMA aplica isso. "
+                    "Por slide escolha só: layout_variant (editorial_left, editorial_right, center_statement, app_focus, numbered_insight, split_photo_panel, cta_clean), "
+                    "text_area (left|right|center|bottom), app_logo_position e brand_logo_position (top_left|top_right|bottom_left|bottom_right). "
+                    "O sistema aplica tamanhos/posições finais, contraste, a logo OFICIAL e ajustes de colisão. "
+                    "NUNCA peça pra desenhar logo/texto/marca DENTRO da imagem. VARIE o layout_variant entre as telas (não repita o mesmo). "
+                    "Se a tela for sobre um app, use a logo oficial via o campo 'app'. "),
+    "visual_rule": ("Em \"visual\" descreva uma CENA fotográfica REALISTA, cinematográfica e premium "
+                    "(ambiente brasileiro real, pessoas naturais, luz e clima) que apoie o texto — "
+                    "SEM texto na imagem, SEM logo, SEM clichê de banco de imagem. "),
+    "app_rule": "Em \"app\": se a tela falar de um app específico, escreva o nome EXATO; senão deixe vazio. ",
+    "name_rule": "NOMES EXATOS E OBRIGATÓRIOS (nunca abrevie/erre): E-Saúde, Looke (NUNCA \"Look\"), Deezer, ExitLag, CARIAP. ",
+    "content_rules": ("REGRAS: sem preços; nada de 'compre/contrate/assine' nos slides de conteúdo (só no CTA); "
+                      "conteúdo que EDUCA o provedor sobre o tema; frases específicas, não clichê."),
+    "brief_system": (
+        "Você é planejador de conteúdo de uma agência social de alto nível (referência g4.business / v4company). "
+        "A partir de um ASSUNTO, entregue um PLANO COMPLETO, específico e forte — nada genérico nem raso. "
+        "Conteúdo de VALOR, SEM cara de venda no miolo (CTA de contratação só no fim). "
+        "Português do Brasil, em texto organizado e pronto pra produção (não use JSON)."
+    ),
+    "video_template": ("Formato: VÍDEO/REELS (15-40s). Estruture assim:\n"
+                       "GRANDE IDEIA: (1 frase)\n"
+                       "Gancho (0-3s): (o que prende nos primeiros segundos)\n"
+                       "Cena 1:, Cena 2:, ... (cada cena: o que APARECE + a FALA/legenda)\n"
+                       "CTA: (chamada final)\n"
+                       "Trilha/clima: (ritmo e sensação)"),
+    "post_template": ("Formato: POST ÚNICO (feed). Entregue:\n"
+                      "GRANDE IDEIA:\nHeadline:\nÂngulo: (pra quem e por quê)\nMensagem:\n"
+                      "Destaques: (3 bullets fortes)\nCTA:\nVisual: (cena concreta e cinematográfica, sem clichê de banco de imagem)"),
+}
+
+
+# Template do PROMPT de imagem: a IA cria a CENA ({visual}); a identidade ({brand_fix}) é fixa
+# e aplicada por código. Tudo editável por cliente.
+IMAGE_GEN: Dict[str, Any] = {
+    "scene_template": ("Foto editorial premium, cinematográfica e realista para carrossel 4:5 (1080x1350): {visual}. "
+                       "Pessoas e ambientes brasileiros reais, luz natural controlada, profundidade de campo, lente 35-50mm, "
+                       "color grading quente e profissional, espaço negativo para texto. "
+                       "NADA de aparência de IA/3D/cartoon/banco de imagem genérico. {brand_fix}"),
+    "brand_fix": ("IDENTIDADE FIXA (o sistema aplica DEPOIS — não desenhe, não escreva): cor de marca {color}; "
+                  "a logo oficial do app é carimbada pelo código; todo TEXTO entra como camada de design. "
+                  "NA FOTO: sem texto, sem letras, sem logo, sem marca d'água."),
+}
+
+# Template do PROMPT de vídeo/reels (placeholder editável; a geração de vídeo usa isto quando ligada).
+VIDEO_GEN: Dict[str, Any] = {
+    "scene_template": ("Cena de vídeo vertical 9:16 cinematográfica e realista: {visual}. "
+                       "Movimento natural, luz controlada, ritmo dinâmico, ambiente brasileiro real. "
+                       "Sem texto na imagem (entra como camada). {brand_fix}"),
+    "brand_fix": "Identidade da marca aplicada por código (cor {color}, logo oficial). Não desenhe texto/logo.",
+}
+
+# Defaults criativos GLOBAIS (usados só quando o cliente NÃO personalizou). Tudo editável por cliente.
+# Política de layout "liberdade controlada": a IA ESCOLHE entre opções permitidas;
+# o CÓDIGO aplica tamanhos/posições finais, logo oficial, contraste e colisão.
+LAYOUT_POLICY: Dict[str, Any] = {
+    "mode": "controlled_dynamic",
+    "ai_can_choose": ["layout_variant", "text_area", "subject_area", "app_logo_position", "brand_logo_position", "logo_variant"],
+    "ai_cannot_choose": ["exact_pixel_position", "exact_logo_size", "font_file", "brand_color", "fake_logo", "generated_text_inside_image"],
+    "available_layout_variants": ["editorial_left", "editorial_right", "center_statement", "app_focus", "numbered_insight", "cta_clean"],
+    "default_layout": "editorial_left",
+}
+BRAND_LOGO: Dict[str, Any] = {
+    "enabled": True, "source": "official_asset_only", "fit": "contain", "preserve_aspect_ratio": True,
+    "auto_contrast": True, "max_w": 150, "max_h": 46, "min_w": 110, "min_h": 34,
+    "preferred_positions": ["bottom_left", "bottom_right", "top_right"], "avoid_when_app_logo_same_area": True,
+}
+TEXT_FIT: Dict[str, Any] = {
+    "auto_shrink": True, "max_shrink_steps": 5, "prefer_reduce_body_before_title": True, "avoid_orphans": True,
+    "max_title_chars_cover": 48, "max_title_chars_content": 56, "max_body_chars_content": 230, "max_subtitle_chars": 90,
+}
+QUALITY_GUARD: Dict[str, Any] = {
+    "detect_text_collision": True, "detect_logo_collision": True, "detect_low_contrast": True, "detect_face_overlap": True,
+    "min_text_contrast_ratio": 4.5, "regenerate_if_logo_missing": True, "regenerate_if_fake_logo": True, "regenerate_if_text_inside_image": True,
+}
+
+# PADRÕES (templates) de imagem por TIPO. Cada um = estrutura FIXA de diagramação que vai no prompt
+# de TODAS as telas → identidade consistente. A IA cria a CENA livre; a ESTRUTURA é travada.
+# O cliente pode salvar os próprios (creative_config.templates) via "virar template padrão".
+_T_EDITORIAL_ESCURO = (
+    "ESTRUTURA FIXA (siga EXATAMENTE, IDÊNTICA em todas as telas): fundo ESCURO (preto/grafite) com leve brilho/textura laranja. "
+    "Topo (~16% da altura): área escura sólida e LIMPA, reservada para a logo (não desenhe nada nela). "
+    "TÍTULO: grande, negrito forte, alinhado À ESQUERDA, no terço superior; palavras-chave em laranja, o resto em branco. "
+    "TEXTO DE APOIO: menor, embaixo À ESQUERDA, com uma BARRA VERTICAL laranja à esquerda. "
+    "FOTO: cena fotográfica cinematográfica realista (pessoas/ambiente brasileiro real) ocupando o lado DIREITO e a parte de baixo, "
+    "fundida ao fundo escuro com gradiente. Diagramação IGUAL em todas as telas — muda só a foto e o texto."
+)
+_T_EDITORIAL_CLARO = (
+    "ESTRUTURA FIXA (siga EXATAMENTE, IDÊNTICA em todas as telas): fundo CLARO (branco/cinza-claro) limpo e premium. "
+    "Topo (~16% da altura): área clara LIMPA reservada para a logo (não desenhe nada nela). "
+    "TÍTULO: grande, negrito forte, À ESQUERDA, no terço superior; palavras-chave em laranja, o resto em grafite escuro. "
+    "TEXTO DE APOIO: menor, embaixo À ESQUERDA, com BARRA VERTICAL laranja. "
+    "FOTO: cena fotográfica cinematográfica realista (pessoas/ambiente brasileiro real) ocupando o lado DIREITO/baixo, com luz clara. "
+    "Diagramação IGUAL em todas as telas — muda só a foto e o texto."
+)
+_T_VIDEO_DINAMICO = (
+    "VÍDEO VERTICAL 9:16, ritmo dinâmico de agência. Gancho forte nos primeiros 3s. "
+    "Texto-chave GRANDE aparecendo em cena (palavras em laranja sobre fundo escuro). "
+    "Cortes rápidos, movimento de câmera suave, ambiente brasileiro real, color grading quente. "
+    "Faixa do topo reservada pra logo. Mesma identidade em todas as cenas."
+)
+_T_VIDEO_CLEAN = (
+    "VÍDEO VERTICAL 9:16, clean e premium. Fundo claro, tipografia forte, "
+    "transições suaves, foco no produto/benefício, cor de destaque laranja. "
+    "Faixa do topo reservada pra logo. Identidade consistente entre as cenas."
+)
+# Perfis (templates) por CONTEXTO. default + os salvos pelo cliente em creative_config.templates.
+IMAGE_TEMPLATES: Dict[str, Any] = {
+    "carrossel": [
+        {"id": "editorial-escuro", "name": "Editorial Escuro", "variant": "escuro", "structure": _T_EDITORIAL_ESCURO},
+        {"id": "editorial-claro", "name": "Editorial Claro", "variant": "claro", "structure": _T_EDITORIAL_CLARO},
+    ],
+    "post": [
+        {"id": "editorial-escuro", "name": "Editorial Escuro", "variant": "escuro", "structure": _T_EDITORIAL_ESCURO},
+        {"id": "editorial-claro", "name": "Editorial Claro", "variant": "claro", "structure": _T_EDITORIAL_CLARO},
+    ],
+    "video": [
+        {"id": "dinamico-escuro", "name": "Dinâmico Escuro", "variant": "escuro", "structure": _T_VIDEO_DINAMICO},
+        {"id": "clean-claro", "name": "Clean Claro", "variant": "claro", "structure": _T_VIDEO_CLEAN},
+    ],
+}
+
+
+def image_templates(company: Optional[Dict[str, Any]] = None, ctype: str = "carrossel") -> List[Dict[str, Any]]:
+    """Templates de imagem do tipo (default + os salvos pelo cliente em creative_config.templates)."""
+    out = list((IMAGE_TEMPLATES.get(ctype) or []))
+    ov = (((company or {}).get("brand_kit") or {}).get("creative_config") or {}).get("templates") or {}
+    for t in (ov.get(ctype) or []):
+        if isinstance(t, dict) and t.get("id") and t.get("structure"):
+            out = [x for x in out if x.get("id") != t["id"]] + [t]
+    return out
+
+
+def image_template_get(company, ctype, tid):
+    for t in image_templates(company, ctype):
+        if t.get("id") == tid:
+            return t
+    return None
+
+
+CREATIVE_DEFAULTS: Dict[str, Any] = {
+    "briefing": BRIEFING_GEN,        # geração de texto (carrossel/post/vídeo)
+    "image": IMAGE_GEN,              # prompt de imagem
+    "video": VIDEO_GEN,              # prompt de vídeo
+    "templates": IMAGE_TEMPLATES,    # padrões de diagramação por tipo
+    "layout_policy": LAYOUT_POLICY,  # liberdade controlada (a IA escolhe opções; código aplica)
+    "brand_logo": BRAND_LOGO,        # regras da logo da marca
+    "text_fit": TEXT_FIT,            # auto-ajuste de texto
+    "quality_guard": QUALITY_GUARD,  # checagens de qualidade/colisão
+}
+
+
+def _deep_merge(base: Dict[str, Any], ov: Dict[str, Any]) -> Dict[str, Any]:
+    out = {**base}
+    for k, v in (ov or {}).items():
+        out[k] = _deep_merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return out
+
+
+def creative_cfg(company: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Config criativa EFETIVA = defaults globais + override do CLIENTE (brand_kit.creative_config).
+    Nada fica travado no código: o cliente pode sobrescrever qualquer prompt/regra/design."""
+    ov = ((company or {}).get("brand_kit") or {}).get("creative_config") or {}
+    return _deep_merge(CREATIVE_DEFAULTS, ov if isinstance(ov, dict) else {})
+
+
+def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educar",
+                      formato: str = "carrossel", n_telas: int = 0) -> str:
+    """Plano de conteúdo COMPLETO a partir de um assunto, adaptado ao FORMATO e ao OBJETIVO.
+    carrossel → plano tela a tela; video → roteiro em cenas; post → pauta rica. Texto (não JSON)."""
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — configure o provedor de texto.")
+    G = creative_cfg(company)["briefing"]
+    bk = company.get("brand_kit") or {}
+    audience = (bk.get("audience") or "provedores de internet (ISPs)").strip()
+    rules = (bk.get("client_rules") or "").strip()
+    obj = (G.get("objetivos") or _OBJ_BRIEF).get((objetivo or "").lower(), objetivo or "educar")
+    fmt = (formato or "carrossel").lower()
+    system = G["brief_system"]
+    base = (f'Empresa: {company.get("name","")} — vende SVAs/apps para provedores de internet. '
+            f'Público (fale COM ele): {audience}. Assunto: "{theme}". Objetivo do conteúdo: {obj}. '
+            + (f'Regras do cliente (obedeça à risca): {rules}. ' if rules else ''))
+    # CARROSSEL → plano ESTRUTURADO (mesmas telas que o renderizador usa) + texto legível.
+    if fmt == "carrossel":
+        cr = generate_carousel(company, theme, n_telas)
+        telas = cr.get("slides") or []
+        linhas = [f"GRANDE IDEIA: {cr.get('theme') or theme}", ""]
+        for i, s in enumerate(telas, 1):
+            tipo = {"cover": "capa", "cta": "CTA"}.get(s.get("type"), "conteúdo")
+            linhas.append(f"Tela {i} — {tipo}: {s.get('title','')}")
+            corpo = (s.get("body") or s.get("subtitle") or "").strip()
+            if corpo:
+                linhas.append(f"  • {corpo}")
+            if s.get("visual"):
+                linhas.append(f"  • Visual: {s.get('visual')}")
+            linhas.append("")
+        return {"formato": "carrossel", "telas": telas, "text": "\n".join(linhas).strip()}
+    # POST / VÍDEO → texto em prosa.
+    if fmt in ("video", "vídeo", "reel", "reels"):
+        user = base + G["video_template"]
+    else:  # post fixo
+        user = base + G["post_template"]
+    return {"formato": fmt, "telas": [], "text": complete_ai(config, system, user, 1700).strip()}
+
+
+def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0) -> Dict[str, Any]:
+    """Gera um CARROSSEL editorial (estilo g4.business / v4company): capa com gancho,
+    slides de conteúdo de VALOR (sem cara de venda) e último slide com CTA de contratação.
+    n_slides=0 → a IA escolhe (6–9 no total). Texto via Claude (assinatura)."""
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — configure o provedor de texto.")
+    G = creative_cfg(company)["briefing"]
+    bk = company.get("brand_kit") or {}
+    audience = (bk.get("audience") or "provedores de internet (ISPs)").strip()
+    rules = (bk.get("client_rules") or "").strip()
+    if n_slides and int(n_slides) >= 3:
+        n_rule = G["n_exact"].format(n=int(n_slides))
+    else:
+        n_rule = G["n_default"]
+    system = G["carousel_system"]
+    # Apps REAIS cadastrados → a IA tagueia o campo 'app' por tela a partir DESTES (não inventa) e distribui.
+    try:
+        from ..db_companies import product_list as _plist
+        _apps = [(p.get("name") or "").strip() for p in (_plist(company.get("id")) or []) if (p.get("name") or "").strip()]
+    except Exception:
+        _apps = []
+    apps_line = ("APPS DISPONÍVEIS desta empresa (use SOMENTE estes no campo 'app', nome EXATO): "
+                 + ", ".join(_apps) + ". Em CADA slide de CONTEÚDO que trate de um app, preencha 'app' com o app "
+                 "MAIS relevante daquele slide e DISTRIBUA os apps citados no tema entre as telas (não deixe 'app' "
+                 "vazio quando a tela é sobre um app). Telas de conceito geral podem ficar com 'app' vazio. ") if _apps else ""
+    user = (
+        f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
+        f"Público (fale COM ele): {audience}. "
+        f"Tema do carrossel: {theme}. {n_rule} "
+        + apps_line
+        + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
+        + G["json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"]
+        + G.get("layout_rule", "") + G["content_rules"]
+    )
+    raw = complete_ai(config, system, user, 4096)
+    data = extract_json(raw) or {}
+    slides = data.get("slides") or []
+    if not slides:  # intermitência do modelo → 1 retry forçando JSON completo e fechado
+        raw = complete_ai(config, system + " Devolva o JSON COMPLETO e FECHADO (todas as chaves/colchetes), compacto.",
+                          user, 4096)
+        data = extract_json(raw) or {}
+        slides = data.get("slides") or []
+    if not slides:
+        raise ValueError("A IA não retornou as telas do carrossel (JSON inválido). Tente de novo.")
+    _LV = (creative_cfg(company).get("layout_policy") or {}).get("available_layout_variants") or ["editorial_left"]
+    _DEF_LV = (creative_cfg(company).get("layout_policy") or {}).get("default_layout") or "editorial_left"
+    # normaliza: numera os content, garante 1 cover no início e 1 cta no fim
+    if slides and slides[0].get("type") != "cover":
+        slides[0]["type"] = "cover"
+    if slides and slides[-1].get("type") != "cta":
+        slides[-1]["type"] = "cta"
+    n = 0
+    _alt = ["editorial_left", "editorial_right"]
+    for i, s in enumerate(slides):
+        tp = s.get("type") or "content"
+        # validação POR SISTEMA dos nomes de app (corrige acento/caixa/grafia)
+        for f in ("title", "body", "subtitle", "eyebrow", "cta"):
+            if s.get(f):
+                s[f] = _canon_app_names(s[f])
+        s["app"] = _canon_app_names((s.get("app") or "").strip())
+        if tp == "content":
+            n += 1
+            s["number"] = n
+        # layout_variant: valida contra os permitidos; default por tipo; alterna esquerda/direita se inválido
+        lv = (s.get("layout_variant") or "").strip()
+        if lv not in _LV:
+            lv = "center_statement" if tp == "cover" else ("cta_clean" if tp == "cta" else _alt[n % 2])
+        if lv in ("center_statement",) and tp == "content":
+            pass
+        s["layout_variant"] = lv if lv in _LV else _DEF_LV
+        s.setdefault("text_area", "left")
+        s.setdefault("app_logo_position", "top_right")
+        s.setdefault("brand_logo_position", "bottom_left")
+    return {"theme": _canon_app_names(data.get("theme") or theme), "slides": slides}
+
+
+def generate_social_strategy(
+    company: Dict[str, Any],
+    own_profile: Dict[str, Any],
+    competitor_profiles: List[Dict[str, Any]],
+    references: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Generate a practical social media strategy from profile/competitor signals."""
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        raise ValueError("IA não configurada — adicione sua chave em Configurações.")
+
+    brand_kit = company.get("brand_kit") or {}
+    system = (
+        "Você é um diretor de estratégia social media e diretor de arte brasileiro. "
+        "Transforme perfil da empresa, concorrentes e referências em um plano operacional. "
+        "Responda SOMENTE com JSON válido neste formato: "
+        '{"summary":"...","brand_identity":{"positioning":"...","voice":"...","persona":"...",'
+        '"visual_prompt_base":"...","style_keywords":["..."],"colors":["#..."],"do":["..."],"dont":["..."]},'
+        '"content_pillars":[{"name":"...","angle":"...","formats":["reels","carrossel"],"cadence":"..."}],'
+        '"competitor_insights":[{"competitor":"...","what_works":"...","gap":"...","adaptation":"..."}],'
+        '"post_ideas":[{"title":"...","caption":"...","format":"reels|carrossel|story|feed",'
+        '"network":"instagram","visual_prompt":"...","hashtags":["#..."],"why":"..."}],'
+        '"production_brief":["..."],"next_actions":["..."]} '
+        "Gere no mínimo 8 ideias de posts. Não invente números de métricas se não vierem nos dados. "
+        "OBRIGATÓRIO: baseie os pilares e as ideias nos PRODUTOS/APLICATIVOS reais que a empresa "
+        "vende (campo 'products'). Cada ideia deve promover um produto específico citando o nome e "
+        "seus benefícios — nada genérico, fora do que a empresa realmente vende. "
+        "Tudo em PT-BR, prático, sem markdown."
+    )
+    _audience = (brand_kit.get("audience") or "").strip()
+    if _audience:
+        system += " CONTEXTO DE NEGÓCIO (siga à risca, define público e posicionamento): " + _audience
+    _rules = (brand_kit.get("client_rules") or "").strip()
+    if _rules:
+        system += " REGRAS DESTE CLIENTE (correções já pedidas por ele — NUNCA repita estes erros): " + _rules
+    payload = {
+        "company": {
+            "name": company.get("name"),
+            "segment": company.get("segment"),
+            "city": company.get("city"),
+            "state": company.get("state"),
+            "website": company.get("website"),
+            "socials": company.get("socials") or {},
+        },
+        "current_brand_kit": {
+            "voice": brand_kit.get("voice"),
+            "persona": brand_kit.get("persona"),
+            "visual_prompt_base": brand_kit.get("visual_prompt_base"),
+            "colors": brand_kit.get("colors") or {},
+        },
+        "own_profile_analysis": own_profile or {},
+        "competitor_profiles": competitor_profiles or [],
+        "references": references or [],
+    }
+    # Inject the real products/apps the company sells so ideas talk about them.
+    try:
+        from ..db_companies import product_list
+        _prods = product_list(company.get("id") or "") or []
+    except Exception:
+        _prods = []
+    payload["products"] = [{"name": p.get("name"), "description": (p.get("description") or "")[:200], "objetivo": (p.get("objective") or "")[:300]} for p in _prods[:25]]
+    # Keep input small/cheap: cap the bulky Composio analysis + competitor dossiers.
+    def _cap(value: Any, limit: int) -> Any:
+        s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return s[:limit]
+
+    if payload.get("own_profile_analysis"):
+        payload["own_profile_analysis"] = _cap(payload["own_profile_analysis"], 2000)
+    payload["competitor_profiles"] = [
+        {"name": (c or {}).get("name"), "note": _cap(c, 1200)} for c in (payload.get("competitor_profiles") or [])[:5]
+    ]
+    payload["references"] = [(r or {}).get("url") for r in (payload.get("references") or [])[:5] if isinstance(r, dict)]
+
+    result = complete_ai(config, system, json.dumps(payload, ensure_ascii=False), 8000)
+    parsed = extract_json(result)
+    if not parsed:
+        raise ValueError("IA não retornou JSON válido para a estratégia social.")
+    if not isinstance(parsed.get("post_ideas"), list):
+        parsed["post_ideas"] = []
+    if not isinstance(parsed.get("content_pillars"), list):
+        parsed["content_pillars"] = []
+    if not isinstance(parsed.get("competitor_insights"), list):
+        parsed["competitor_insights"] = []
+    return parsed

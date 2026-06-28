@@ -1,12 +1,12 @@
 const DEFAULT_BRANDING = {
-  brand_name: "MetaPorn Agency",
+  brand_name: "Caripost Agency",
   headline: "Creator Portal",
   tagline: "Seu painel de performance, uploads, tendências e ganhos em um só lugar.",
-  primary_color: "#67e8f9",
-  secondary_color: "#8b5cf6",
-  accent_color: "#22d3ee",
-  surface_color: "#0f172a",
-  text_color: "#e2e8f0",
+  primary_color: "#ff7a18",
+  secondary_color: "#ed5f02",
+  accent_color: "#fb8c00",
+  surface_color: "#eef1f5",
+  text_color: "#1b2231",
   logo_b64: "",
 };
 

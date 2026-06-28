@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.23.3';
+const MP_OS_VERSION = 'v1.26.49';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -660,6 +660,78 @@ function DmcaApp() {
 }
 
 /* ── SETTINGS — tokens reais, versão e sistema ── */
+const IMG_PROVS = [
+  { id: 'omniroute', label: 'OmniRoute (grátis · assinatura)', ph: 'token do gateway (opcional)' },
+  { id: 'cometapi', label: 'CometAPI', ph: 'sk-...' },
+  { id: 'piapi', label: 'PiAPI', ph: 'chave PiAPI' },
+  { id: 'openrouter', label: 'OpenRouter', ph: 'sk-or-...' },
+];
+function ImageModelPicker() {
+  const [models, setModels] = React.useState([]);
+  const [current, setCurrent] = React.useState('');
+  const [sel, setSel] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+  const [keys, setKeys] = React.useState({});
+  const [masks, setMasks] = React.useState({});
+  const [savingP, setSavingP] = React.useState('');
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    window.mpApi.aiModels().then(r => {
+      const list = r.image || [];
+      setModels(list); setCurrent(r.image_current || '');
+      setSel(r.image_current || (list[0] && list[0].id) || '');
+      setLoading(false);
+    }).catch(() => setLoading(false));
+    window.mpApi.getAISettings().then(s => setMasks((s && s.image && s.image.keyMasks) || {})).catch(() => {});
+  }, []);
+  React.useEffect(() => { if (window.mpApi) load(); }, [load]);
+
+  async function saveKey(p) {
+    const v = (keys[p] || '').trim(); if (!v) return;
+    setSavingP(p);
+    try {
+      await window.mpApi.saveAISettings({ ['image.apiKey.' + p]: v });
+      setMsg('✓ Chave salva: ' + p); setKeys(k => ({ ...k, [p]: '' }));
+      const s = await window.mpApi.getAISettings(); setMasks((s && s.image && s.image.keyMasks) || {}); load();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setSavingP(''); }
+  }
+  async function save() {
+    setMsg('Salvando…');
+    try { const r = await window.mpApi.setAiModel({ image_model: sel }); setCurrent(r.image_current); setMsg('✓ Modelo padrão: ' + r.image_current); }
+    catch (e) { setMsg('Erro: ' + e.message); }
+  }
+  const price = m => m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '');
+  const PLAB = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
+  const groups = (() => { const g = {}; models.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
+
+  return <div className="panel stack">
+    <div className="sec"><Icon name="image" />Provedor de IA (imagem)</div>
+    <div className="hint">Conecte a chave de cada provedor. Na criação você escolhe provedor + modelo livremente (e compara preços).</div>
+    {IMG_PROVS.map(pr => <div key={pr.id} className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b style={{ minWidth: 210 }}>{pr.label}</b>
+      <Pill kind={masks[pr.id] ? 'good' : 'warn'} dot>{masks[pr.id] ? 'configurado' : 'configurar'}</Pill>
+      <input className="inp" type="password" value={keys[pr.id] || ''} onChange={e => setKeys(k => ({ ...k, [pr.id]: e.target.value }))} placeholder={pr.ph} style={{ flex: 1, minWidth: 160 }} />
+      <button className="btn sm pri" disabled={savingP === pr.id} onClick={() => saveKey(pr.id)}>{savingP === pr.id ? '…' : 'Salvar'}</button>
+    </div>)}
+    {current && <div className="row"><span className="k">Modelo padrão</span><span className="v mono" style={{ color: 'var(--cyan)' }}>{current}</span></div>}
+    <Field label="Modelo de imagem padrão (posts)">
+      <div className="rowx" style={{ gap: 8 }}>
+        <select className="inp" value={sel} onChange={e => setSel(e.target.value)}>
+          {groups.length ? groups.map(grp => <optgroup key={grp.provider} label={grp.label}>
+            {grp.models.map(m => <option key={m.id} value={m.id}>{(m.name || m.id) + price(m)}</option>)}
+          </optgroup>) : <option value="">{loading ? 'Carregando…' : 'Sem modelos (configure uma chave acima)'}</option>}
+        </select>
+        <button className="btn sm ghost" onClick={load}><Icon name="refresh" />Recarregar</button>
+      </div>
+    </Field>
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    <button className="btn sm pri" onClick={save}>Definir como padrão</button>
+  </div>;
+}
+
 function SettingsApp() {
   const [tab, setTab] = React.useState('tokens');
   const [tokens, setTokens] = React.useState([]);
@@ -774,6 +846,7 @@ function SettingsApp() {
         <div className="hint">Copy de posts, planos editoriais e briefings de tendência.</div>
         <Field label="Provedor">
           <select className="inp" value={aiProvider} onChange={e => { setAiProvider(e.target.value); setAiModel(''); setAiModels([]); setAiKeyMask(aiSettings?.ai?.keyMasks?.[e.target.value] || ''); }}>
+            <option value="cometapi">CometAPI (Claude/GPT/Gemini · preserva acentos)</option>
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI</option>
             <option value="openrouter">OpenRouter</option>
@@ -794,6 +867,7 @@ function SettingsApp() {
         {aiMsg && <div className={aiMsg.startsWith('✓') ? 'ok' : 'err'}>{aiMsg}</div>}
         <button className="btn sm pri" disabled={aiSaving} onClick={saveAISettings}>{aiSaving ? 'Salvando…' : 'Salvar configurações'}</button>
       </div>
+      <ImageModelPicker />
       <div className="panel stack">
         <div className="sec">Testar IA</div>
         <button className="btn sm" disabled={aiTesting} onClick={testAI}>{aiTesting ? 'Testando…' : 'Testar conexão'}</button>
