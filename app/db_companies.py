@@ -299,6 +299,8 @@ def init_companies_db() -> None:
         _ensure_column("products", "objective", "objective TEXT")
         _ensure_column("products", "functions", "functions TEXT")
         _ensure_column("products", "knowledge", "knowledge TEXT")   # base de conhecimento (PDF/TXT extraído) p/ briefing rico
+        _ensure_column("products", "web_brief", "web_brief TEXT")        # CACHE da pesquisa web (não busca ao vivo no request)
+        _ensure_column("products", "web_brief_at", "web_brief_at TEXT")  # quando o cache web foi atualizado
         _ensure_column("brand_kits", "audience", "audience TEXT")
         _ensure_column("posts", "review_comment", "review_comment TEXT")
         _ensure_column("posts", "review_decision", "review_decision TEXT")
@@ -1323,7 +1325,7 @@ def product_update(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
     now = _now()
     fields = []
     values: List[Any] = []
-    for key in ("name", "description", "category", "website", "objective", "knowledge"):
+    for key in ("name", "description", "category", "website", "objective", "knowledge", "web_brief", "web_brief_at"):
         if key in data:
             fields.append(f"{key} = ?")
             values.append(data[key])

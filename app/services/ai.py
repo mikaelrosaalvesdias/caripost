@@ -702,15 +702,19 @@ def web_research(query: str, max_tokens: int = 700) -> str:
     chain = []
     ok = _openrouter_key()
     if ok:
-        chain.append(("https://openrouter.ai/api/v1", ok, "perplexity/sonar-pro"))
-        chain.append(("https://openrouter.ai/api/v1", ok, "perplexity/sonar"))
+        chain.append(("https://openrouter.ai/api/v1", ok, "perplexity/sonar"))       # RÁPIDO (primário)
+        chain.append(("https://openrouter.ai/api/v1", ok, "perplexity/sonar-pro"))   # mais rico (fallback)
     ck = _cometapi_key()
     if ck:
         chain.append((_COMETAPI_BASE, ck, "perplexity/sonar"))           # fallback Comet
-        chain.append((_COMETAPI_BASE, ck, "gpt-4o-search-preview"))      # 2º fallback Comet (busca OpenAI)
+    import time as _t
+    _deadline = _t.time() + 16   # ORÇAMENTO TOTAL da busca (não soma timeouts dos fallbacks → nunca estoura o briefing)
     for base, key, model in chain:
+        if _t.time() > _deadline:
+            break
         try:
-            with httpx.Client(timeout=httpx.Timeout(75.0, connect=10.0)) as c:
+            # timeout CURTO: a busca NÃO pode estourar o tempo do briefing (gateway 502). Se demorar, pula → site+KB.
+            with httpx.Client(timeout=httpx.Timeout(14.0, connect=6.0)) as c:
                 r = c.post(base + "/chat/completions",
                            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
                            json={"model": model, "max_tokens": max_tokens, "temperature": 0.2,
@@ -724,6 +728,43 @@ def web_research(query: str, max_tokens: int = 700) -> str:
         except Exception:
             continue
     return ""
+
+
+def _web_brief_stale(prod: Dict[str, Any], max_age_days: int = 7) -> bool:
+    """Cache web do produto está velho/faltando? (decide se dispara refresh em background)."""
+    if not (prod.get("web_brief") or "").strip():
+        return True
+    at = (prod.get("web_brief_at") or "").strip()
+    if not at:
+        return True
+    try:
+        from datetime import datetime, timezone
+        d = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - d).days >= max_age_days
+    except Exception:
+        return True
+
+
+def refresh_web_briefs(company_id: str, prods: List[Dict[str, Any]], theme: str = "") -> None:
+    """BACKGROUND: busca web por app e GRAVA no cache (products.web_brief). NÃO bloqueia o briefing → sem 502."""
+    from datetime import datetime, timezone
+    try:
+        from ..db_companies import product_update
+    except Exception:
+        return
+    for p in (prods or []):
+        try:
+            name = (p.get("name") or "").strip()
+            if not name:
+                continue
+            q = ("Recursos, funções e novidades REAIS e ATUAIS de " + name
+                 + " (app/SVA para provedores de internet). Liste fatos concretos, específicos e recentes, com números quando houver.")
+            txt = web_research(q, 700)
+            if txt:
+                product_update(p.get("id"), {"web_brief": ("[" + name + "] " + txt)[:6000],
+                                             "web_brief_at": datetime.now(timezone.utc).isoformat()})
+        except Exception:
+            continue
 
 
 _COMETAPI_BASE = "https://api.cometapi.com/v1"
@@ -2284,24 +2325,24 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
     _focus = list(_prods) if _focus_names else [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tnorm]
     _kb_blocks = [b for b in (_app_brief(p) for p in _focus) if b]
     kb_line = (("CONHECIMENTO REAL DOS APPS EM FOCO (baseie o conteúdo NESTES fatos/funções — específico e profundo, "
-                "sem inventar recursos): " + " || ".join(f"[{n}] {t}" for n, t in _kb_blocks) + ". ") if _kb_blocks else "")
+                "sem inventar recursos): " + (" || ".join(f"[{n}] {t}" for n, t in _kb_blocks))[:7000] + ". ") if _kb_blocks else "")
     excl_line = (("FOCO EXCLUSIVO: este conteúdo é SOMENTE sobre " + ", ".join(_apps) + " — NÃO mencione, NÃO cite e NÃO "
                   "crie telas de NENHUM outro app/produto da empresa. ") if (_focus_names and _apps) else "")
-    # 3ª FONTE — INTERNET AO VIVO: SEMPRE ligada quando há assunto (query foca nos apps em foco; senão no tema).
+    # 3ª FONTE — INTERNET via CACHE por produto (rápido, NÃO bloqueia → adeus 502). Se o cache estiver velho/faltando,
+    # dispara refresh em BACKGROUND (o briefing não espera); o cache enriquece a partir do próximo briefing.
     web_line = ""
-    if (theme or "").strip():
-        _wnames = _apps if (_focus_names or themed) else _apps[:4]
-        if _wnames:
-            _wq = ("Recursos, funções e novidades REAIS e ATUAIS de " + ", ".join(_wnames)
-                   + " (apps/SVAs para provedores de internet). Tema do conteúdo: " + theme
-                   + ". Liste fatos concretos, específicos e recentes, com números quando houver.")
-        else:
-            _wq = ("Fatos, dados e novidades REAIS e ATUAIS sobre: " + theme
-                   + " (contexto: provedores de internet/ISPs no Brasil, SVAs/apps). Liste fatos concretos e recentes.")
-        _wr = web_research(_wq, 700)
-        if _wr:
-            web_line = ("PESQUISA WEB ATUAL (fatos REAIS da internet — combine com o conhecimento acima, NÃO invente): "
-                        + _wr[:4000] + ". ")
+    _wfocus = _focus or _prods[:3]
+    _wtexts = [(p.get("web_brief") or "").strip() for p in _wfocus if (p.get("web_brief") or "").strip()]
+    if _wtexts:
+        web_line = ("PESQUISA WEB (fatos REAIS da internet — combine com o acima, NÃO invente): "
+                    + (" || ".join(_wtexts))[:3000] + ". ")
+    try:
+        _stale = [p for p in _wfocus if _web_brief_stale(p)]
+        if _stale:
+            import threading as _th
+            _th.Thread(target=refresh_web_briefs, args=(company.get("id"), _stale, theme), daemon=True).start()
+    except Exception:
+        pass
     # MODO EVENTO: injeta os dados REAIS do evento (datas/local/stand) na instrução do briefing.
     event_line = ""
     if event:
