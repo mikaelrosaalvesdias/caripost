@@ -17,7 +17,7 @@ from ..db_companies import (
 )
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
-    generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, generate_image_with_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
+    generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, generate_image_with_person, verify_same_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
     openrouter_image_models, openrouter_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
 )
@@ -883,11 +883,12 @@ async def render_carousel(request: Request):
         # EVENTO: logos (carimba na capa/CTA) + info REAL (datas/local/stand do cadastro) que o CÓDIGO injeta no CTA.
         event_logo_variants = []
         event_cta_info = ""
+        _event = None   # evento carregado (usado no prompt do influencer p/ ambientar)
         _eid = (body.get("event_id") or "").strip()
         if _eid:
             try:
                 from ..db_companies import event_get, organizer_get
-                _ev = event_get(_eid)
+                _ev = event_get(_eid); _event = _ev
                 _eassets = list((_ev or {}).get("logos") or [])
                 if _ev and _ev.get("organizer_id"):
                     _org = organizer_get(_ev["organizer_id"])
@@ -949,18 +950,38 @@ async def render_carousel(request: Request):
                 used_inf_idx.add(_pi)
                 person = inf_photos[_pi]
                 _scene = (s.get("visual") or "").strip()
-                pprompt = ("Integre ESTA pessoa real na CENA DO BRIEFING (ela é a protagonista da cena): "
-                           + (_scene or ("cena publicitária premium da marca " + company.get("name", ""))) + ". "
-                           "Construa o AMBIENTE/FUNDO A PARTIR dessa cena (NÃO use fundo escuro genérico se a cena pede outro lugar). "
-                           "LIMPE a rebarba/borda do recorte e harmonize luz e cor da pessoa com a cena (parece fotografada ali). "
-                           "Deixe ESPAÇO NEGATIVO de um lado pro texto, com a pessoa no lado oposto. "
-                           "NÃO mude o rosto nem a expressão da pessoa. Vertical " + ("9:16" if fmt == "story" else "4:5") + ", alta produção, fotográfico premium. SEM texto, SEM logo.")
+                _evt_amb = bool(_event and _scene and stype in ("cover", "cta"))
+                pprompt = (
+                    "Integre ESTA pessoa real (a foto enviada) numa arte publicitária premium da marca " + company.get("name", "") + ". "
+                    "ROSTO — REGRA ABSOLUTA: mantenha o rosto e a EXPRESSÃO 100% IDÊNTICOS à foto; NÃO redesenhe, NÃO suavize, "
+                    "NÃO altere traço, formato, barba ou pele. É a MESMA pessoa — o rosto NÃO muda. "
+                    "RECORTE: contorno LIMPO e perfeito da pessoa, sem rebarba/serrilhado. NENHUMA outra pessoa na cena (só ela). "
+                    "FUNDO (consistência da marca, IGUAL às outras telas): grafite escuro cinematográfico próximo de #141418, "
+                    "com glow SUTIL na cor da marca " + brand_color + " e leve textura/profundidade — MESMA paleta e temperatura "
+                    "das telas de conteúdo (clima escuro premium). NÃO use fundo claro nem cena realista clara de feira. "
+                    + ("Pode SUGERIR sutilmente um ambiente de evento/estande ao fundo, mas SEMPRE nesse tratamento escuro cinematográfico. " if _evt_amb else "")
+                    + "COMPOSIÇÃO: deixe ~15% do TOPO totalmente livre (faixa da logo/barra). Pessoa de UM lado; do lado oposto, "
+                    "ESPAÇO NEGATIVO escuro pro texto — o texto NUNCA fica sobre a pessoa. "
+                    "Vertical " + ("9:16" if fmt == "story" else "4:5") + ", fotográfico premium, alta produção. SEM texto, SEM logo na imagem.")
+                _same = False
                 try:
-                    img, _pc = await asyncio.to_thread(generate_image_with_person, person, pprompt)
-                    img_ok = True; total_cost += (_pc or 0.0)
+                    for _att in range(3):   # o modelo às vezes GERA pessoa genérica em vez de usar a foto → verifica e regenera
+                        img, _pc = await asyncio.to_thread(generate_image_with_person, person, pprompt)
+                        total_cost += (_pc or 0.0)
+                        _same, _vc = await asyncio.to_thread(verify_same_person, person, img)
+                        total_cost += (_vc or 0.0)
+                        if _same:
+                            break
+                        spillovers.append((i, "influencer: rosto genérico → regerando (" + str(_att + 1) + ")"))
+                    if not _same:
+                        raise ValueError("rosto do influencer não bateu após 3 tentativas")
+                    img_ok = True
                     spillovers.append((i, "influencer: " + (influencer.get("name") or "")))
                 except Exception as pe:
-                    img_err = ("influencer: " + str(pe))[:160]   # falhou → cai pro fluxo normal (cena sem pessoa)
+                    img = None   # DESCARTA o composite com rosto errado (nunca publica pessoa genérica)
+                    img_err = ("influencer: " + str(pe))[:160]
+                    prompt = _photo_only_prompt(s, company.get("name", ""), (tmpl or {}).get("variant"), brand_color, design_ov, avoid_people=True)
+                    spillovers.append((i, "influencer falhou → cena SEM pessoa (não inventa rosto)"))
             if ai_bg and img is None:
                 # TRANSBORDO: retry no mesmo modelo p/ erro transitório; se o provedor morreu (saldo/cota),
                 # pula pra um modelo EQUIVALENTE de OUTRO provedor (grátis 1º). dead_providers é compartilhado

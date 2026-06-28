@@ -1,0 +1,7 @@
+{
+  "art_config": { "accent": "#ED5E1F", "margin": 48, "treatment": "column_solid" },
+  "blocks": [
+    { "text": "Distribua SVAs e fature mais com sua ISP", "role": "titulo", "max_font_size": 96, "color": "#FFFFFF" },
+    { "text": "Fale com a CARIAP hoje", "role": "cta", "max_font_size": 44, "color": "#FFFFFF" }
+  ]
+}

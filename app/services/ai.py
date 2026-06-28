@@ -776,6 +776,44 @@ def generate_image_with_person(person_bytes: bytes, prompt: str, model: str = "g
     raise ValueError("nano-banana edit não retornou imagem.")
 
 
+def verify_same_person(ref_bytes: bytes, gen_bytes: bytes):
+    """Confere por VISÃO (gpt-4o) se a pessoa da imagem GERADA é a MESMA da foto de referência.
+    Retorna (is_same: bool, custo). Em erro de API → (True, 0) — não regenera à toa quando a visão cai."""
+    import base64, io
+    from PIL import Image
+    def _thumb(b):
+        try:
+            im = Image.open(io.BytesIO(b)).convert("RGB"); im.thumbnail((360, 360))
+            o = io.BytesIO(); im.save(o, "JPEG", quality=82)
+            return "data:image/jpeg;base64," + base64.b64encode(o.getvalue()).decode()
+        except Exception:
+            return "data:image/png;base64," + base64.b64encode(b).decode()
+    txt = ("FOTO 1 = a pessoa REAL. IMAGEM 2 foi gerada a partir dela. A pessoa da IMAGEM 2 é a MESMA pessoa da FOTO 1 "
+           "(mesmo rosto, mesma identidade — considere formato do rosto, barba, traços, etnia, cabelo)? "
+           "Se for OUTRA pessoa / rosto claramente diferente, responda NAO. Responda SÓ: SIM ou NAO.")
+    parts = [{"type": "text", "text": txt},
+             {"type": "image_url", "image_url": {"url": _thumb(ref_bytes)}},
+             {"type": "image_url", "image_url": {"url": _thumb(gen_bytes)}}]
+    chain = []
+    if _cometapi_key():
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
+    if _openrouter_key():
+        chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    for base, key, model in chain:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
+                r = c.post(base + "/chat/completions",
+                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                           json={"model": model, "max_tokens": 4, "temperature": 0, "messages": [{"role": "user", "content": parts}]})
+            if r.status_code >= 400:
+                continue
+            t = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip().upper()
+            return (("NAO" not in t and "NÃO" not in t), 0.004)
+        except Exception:
+            continue
+    return (True, 0.0)
+
+
 def pick_influencer_photo(photos, headline: str = "", slide_type: str = "cover", exclude=None) -> int:
     """Escolhe, do PORTFÓLIO do influencer, a foto cuja EXPRESSÃO/EMOÇÃO combina com o tom da tela (visão).
     photos = lista de bytes. Retorna o ÍNDICE. Usa gpt-4o visão (CometAPI→OpenRouter). `exclude` = índices já usados
