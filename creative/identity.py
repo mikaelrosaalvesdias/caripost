@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageChops, ImageFilter
 
 
 _LOCK = threading.Lock()
@@ -61,7 +61,12 @@ def _alpha_from_selfie(img: Image.Image) -> Optional[Image.Image]:
         return None
     try:
         rgb = img.convert("RGB")
-        arr = np.asarray(rgb)
+        work = rgb
+        max_dim = max(work.size)
+        if max_dim > 1024:
+            scale = 1024 / float(max_dim)
+            work = work.resize((max(1, int(work.width * scale)), max(1, int(work.height * scale))), Image.LANCZOS)
+        arr = np.asarray(work)
         seg = model.process(arr)
         raw = getattr(seg, "segmentation_mask", None)
         if raw is None:
@@ -76,7 +81,10 @@ def _alpha_from_selfie(img: Image.Image) -> Optional[Image.Image]:
             mask = cv2.GaussianBlur(mask, (0, 0), 2.2)
         except Exception:
             pass
-        return Image.fromarray(mask, "L").point(lambda v: 255 if v > 96 else int(v * 1.35))
+        out = Image.fromarray(mask, "L").point(lambda v: 255 if v > 96 else int(v * 1.35))
+        if out.size != img.size:
+            out = out.resize(img.size, Image.LANCZOS)
+        return out
     except Exception:
         return None
 
@@ -91,13 +99,27 @@ def _solid_alpha_fallback(img: Image.Image) -> Image.Image:
     return Image.new("L", rgba.size, 255)
 
 
+def _bbox_area(alpha: Image.Image) -> int:
+    bbox = alpha.point(lambda v: 255 if v > 24 else 0).getbbox()
+    if not bbox:
+        return 0
+    return max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])
+
+
 def person_cutout(person_bytes: bytes) -> tuple[Image.Image, dict]:
     src = Image.open(io.BytesIO(person_bytes)).convert("RGBA")
     original_alpha = src.getchannel("A")
     selfie_alpha = _alpha_from_selfie(src)
     if original_alpha.getextrema()[0] < 245 and original_alpha.getbbox():
-        alpha = Image.composite(original_alpha, selfie_alpha or original_alpha, original_alpha)
+        alpha = original_alpha
         method = "uploaded-alpha"
+        if selfie_alpha is not None and selfie_alpha.getbbox():
+            refined = ImageChops.multiply(original_alpha, selfie_alpha)
+            # Refina fotos cadastradas com "placa" transparente/retangular, mas
+            # não aceita uma segmentação que coma a pessoa inteira.
+            if _bbox_area(refined) >= max(64, int(_bbox_area(original_alpha) * 0.28)):
+                alpha = refined
+                method = "uploaded-alpha+selfie-refine"
     elif selfie_alpha is not None and selfie_alpha.getbbox():
         alpha = selfie_alpha
         method = "mediapipe-selfie"
@@ -141,7 +163,9 @@ def compose_identity_cutout(
     cutout = cutout.resize((nw, nh), Image.LANCZOS)
 
     margin_x = int(w * 0.055)
-    bottom = int(h * 0.02)
+    # Deixa o corte inferior sair um pouco do canvas. Isso esconde borda dura de
+    # foto cadastrada sem pedir ao modelo para redesenhar roupa/corpo.
+    bottom = -int(h * 0.035)
     x = margin_x if side == "left" else w - margin_x - nw
     y = h - bottom - nh
     if y < int(h * 0.12):

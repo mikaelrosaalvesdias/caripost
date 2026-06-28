@@ -2,6 +2,14 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.26.60 - 2026-06-28
+
+- **fix: Contexto visual dos produtos.** Slides de produto voltam a permitir personagens e cenas de uso; a regra "sem pessoas" fica restrita à capa/CTA que recebem influencer cadastrado por recorte.
+- **fix: Evento com referência real.** Capa/CTA de evento usam imagens cadastradas como referência de cena e o prompt força pavilhão/estande real, reduzindo fundo genérico.
+- **fix: Logo oficial do evento.** O render usa o asset principal do evento como marca oficial e remove prancha branca grande antes de carimbar, evitando escolher patrocinador como variante por contraste.
+- **fix: Encaixe do influencer.** O recorte determinístico respeita o lado previsto pelo layout e baixa o corte inferior para encaixar melhor sem redesenhar rosto/roupa.
+- Versão: main.py 1.26.60, OS/UI cache bust v=12660.
+
 ## v1.26.59 - 2026-06-28
 
 - **fix: Influencer por recorte determinístico.** O fluxo com influencer agora gera o fundo sem pessoas e cola a foto cadastrada por máscara/recorte em código, sem pedir para a IA redesenhar rosto ou roupa.

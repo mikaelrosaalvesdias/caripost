@@ -534,6 +534,15 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.26.60', date: '2026-06-28',
+    items: [
+      { type: 'fix', text: 'Conteúdo: slides de produto voltam a permitir personagens e contexto de uso; modo sem pessoas fica restrito à capa/CTA com influencer recortado.' },
+      { type: 'fix', text: 'Eventos: imagens cadastradas do evento passam a guiar capa/CTA e o prompt força pavilhão/estande real em vez de fundo genérico.' },
+      { type: 'fix', text: 'Logos: evento usa o asset principal como marca oficial e remove prancha branca grande antes do carimbo, evitando escolher patrocinador como variante por contraste.' },
+      { type: 'fix', text: 'Influencer: recorte determinístico passa a respeitar o lado do layout e baixa o corte inferior para encaixar melhor sem redesenhar rosto ou roupa.' },
+    ],
+  },
+  {
     version: 'v1.26.59', date: '2026-06-28',
     items: [
       { type: 'fix', text: 'Conteúdo: influencer cadastrado passa a ser composto por recorte determinístico sobre cena sem pessoas, preservando rosto e roupa sem image-to-image.' },

@@ -108,10 +108,12 @@ def _remove_solid_logo_bg(lg: Image.Image) -> Image.Image:
                 if px[xx, yy] == sentinel:
                     mp[xx, yy] = 0
                     removed += 1
-        # Se quase nada saiu, provavelmente não era fundo sólido. Se saiu quase tudo,
-        # era uma arte sem recorte confiável; mantém original para não sumir o logo.
+        # Se quase nada saiu, provavelmente não era fundo sólido. Se saiu quase tudo
+        # mas ainda sobrou conteúdo visível, é exatamente o caso comum de logo em
+        # prancha branca gigante: remove a prancha e recorta o conteúdo.
         area = max(1, w * h)
-        if removed < area * 0.03 or removed > area * 0.92:
+        remaining = area - removed
+        if removed < area * 0.03 or remaining < max(64, area * 0.002):
             return lg
         mask = mask.filter(ImageFilter.GaussianBlur(radius=max(0.6, min(w, h) * 0.004)))
         lg.putalpha(mask)
