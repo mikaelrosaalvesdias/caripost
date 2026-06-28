@@ -2287,13 +2287,18 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
                 "sem inventar recursos): " + " || ".join(f"[{n}] {t}" for n, t in _kb_blocks) + ". ") if _kb_blocks else "")
     excl_line = (("FOCO EXCLUSIVO: este conteúdo é SOMENTE sobre " + ", ".join(_apps) + " — NÃO mencione, NÃO cite e NÃO "
                   "crie telas de NENHUM outro app/produto da empresa. ") if (_focus_names and _apps) else "")
-    # 3ª FONTE — INTERNET AO VIVO: só quando há app EM FOCO (selecionado/citado), p/ não gastar busca à toa.
+    # 3ª FONTE — INTERNET AO VIVO: SEMPRE ligada quando há assunto (query foca nos apps em foco; senão no tema).
     web_line = ""
-    if _focus_names or themed:
-        _wnames = _apps if _apps else themed
-        _wr = web_research("Recursos, funções e novidades REAIS e ATUAIS de " + ", ".join(_wnames)
-                           + " (apps/SVAs para provedores de internet). Tema do conteúdo: " + theme
-                           + ". Liste fatos concretos, específicos e recentes, com números quando houver.", 700)
+    if (theme or "").strip():
+        _wnames = _apps if (_focus_names or themed) else _apps[:4]
+        if _wnames:
+            _wq = ("Recursos, funções e novidades REAIS e ATUAIS de " + ", ".join(_wnames)
+                   + " (apps/SVAs para provedores de internet). Tema do conteúdo: " + theme
+                   + ". Liste fatos concretos, específicos e recentes, com números quando houver.")
+        else:
+            _wq = ("Fatos, dados e novidades REAIS e ATUAIS sobre: " + theme
+                   + " (contexto: provedores de internet/ISPs no Brasil, SVAs/apps). Liste fatos concretos e recentes.")
+        _wr = web_research(_wq, 700)
         if _wr:
             web_line = ("PESQUISA WEB ATUAL (fatos REAIS da internet — combine com o conhecimento acima, NÃO invente): "
                         + _wr[:4000] + ". ")
