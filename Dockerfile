@@ -52,10 +52,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpangocairo-1.0-0 \
     fonts-liberation \
     libglib2.0-0 \
-    libgl1 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
     libvulkan1 \
     wget \
     ca-certificates \
@@ -71,7 +67,6 @@ RUN mkdir -p /usr/share/fonts/truetype/brand \
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
-RUN pip install --no-cache-dir --no-deps "ultralytics==8.4.80"
 
 # Copy Video2X binary + Ubuntu 24.04 deps — isolated to avoid conflicts with Debian libs
 COPY --from=video2x-stage /video2x-deps /opt/video2x-deps
@@ -89,14 +84,9 @@ RUN python -m playwright install chromium 2>/dev/null || echo "[Dockerfile] Play
 
 ARG CACHE_BUST=1
 COPY app /app/app
-COPY creative /app/creative
-
-# Warm up YOLO weights when network is available. Failure is non-fatal; runtime can still download.
-RUN python -c "from ultralytics import YOLO; YOLO('yolo11n-seg.pt')" || true
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    YOLO_CONFIG_DIR=/tmp/ultralytics \
     ADULT_META_DB_PATH=/data/runs.db \
     ADULT_META_MEDIA_ROOT=/data/media \
     TMPDIR=/media/_tmp/system \

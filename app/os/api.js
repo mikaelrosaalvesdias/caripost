@@ -1085,9 +1085,6 @@
     async deleteInfluencerPhoto(companyId, infId, assetId) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/influencers/' + _enc(infId) + '/photo/' + _enc(assetId), { method: 'DELETE' });
     },
-    async setInfluencerPhotoEmotion(companyId, infId, assetId, emotion) {
-      return mpFetch('/api/companies/' + _enc(companyId) + '/influencers/' + _enc(infId) + '/photo/' + _enc(assetId) + '/emotion', { method: 'POST', body: JSON.stringify({ emotion }) });
-    },
     async listInfCompanies(companyId) {
       const r = await mpFetch('/api/companies/' + _enc(companyId) + '/influencer-companies').catch(() => ({ companies: [] }));
       return r.companies || [];

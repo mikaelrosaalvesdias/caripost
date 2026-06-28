@@ -534,34 +534,10 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
-    version: 'v1.26.60', date: '2026-06-28',
+    version: 'v1.26.61', date: '2026-06-28',
     items: [
-      { type: 'fix', text: 'Conteúdo: slides de produto voltam a permitir personagens e contexto de uso; modo sem pessoas fica restrito à capa/CTA com influencer recortado.' },
-      { type: 'fix', text: 'Eventos: imagens cadastradas do evento passam a guiar capa/CTA e o prompt força pavilhão/estande real em vez de fundo genérico.' },
-      { type: 'fix', text: 'Logos: evento usa o asset principal como marca oficial e remove prancha branca grande antes do carimbo, evitando escolher patrocinador como variante por contraste.' },
-      { type: 'fix', text: 'Influencer: recorte determinístico passa a respeitar o lado do layout e baixa o corte inferior para encaixar melhor sem redesenhar rosto ou roupa.' },
-    ],
-  },
-  {
-    version: 'v1.26.59', date: '2026-06-28',
-    items: [
-      { type: 'fix', text: 'Conteúdo: influencer cadastrado passa a ser composto por recorte determinístico sobre cena sem pessoas, preservando rosto e roupa sem image-to-image.' },
-      { type: 'fix', text: 'Criativos: logos raster são normalizadas com remoção de fundo sólido de borda, corte de sobra e escala visual consistente.' },
-      { type: 'fix', text: 'Briefing: guarda narrativa reforça evento real em capa/CTA e recursos reais dos produtos marcados quando a IA retorna texto genérico.' },
-    ],
-  },
-  {
-    version: 'v1.26.58', date: '2026-06-28',
-    items: [
-      { type: 'feat', text: 'Conteúdo: motor de proteção detecta pessoa, rosto, mão e objetos para posicionar texto no maior retângulo livre, evitando texto sobre personagem.' },
-      { type: 'feat', text: 'Criativos: pacote CLI `python -m creative` com debug overlay e tratamentos visuais determinísticos por seed.' },
-    ],
-  },
-  {
-    version: 'v1.26.54', date: '2026-06-27',
-    items: [
-      { type: 'fix', text: 'Conteúdo/evento: se a composição com influencer real falhar, a arte cai para cena sem pessoa em vez de gerar uma pessoa fake.' },
-      { type: 'fix', text: 'Conteúdo/evento: CTA com influencer prioriza expressão positiva e pode reutilizar a melhor foto para evitar rosto triste ou aflito em convite de visita.' },
+      { type: 'fix', text: 'Conteúdo: rollback do motor de proteção/recorte que deixou post fixo com cara de template e reduziu criatividade.' },
+      { type: 'fix', text: 'Post fixo: geração com IA volta ao modo criativo antigo por padrão; compositor com caixa fica apenas opt-in por render_mode.' },
     ],
   },
   {

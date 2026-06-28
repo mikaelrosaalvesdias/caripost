@@ -218,16 +218,15 @@ function CompanyInfluencers({ company }) {
     {!loading && !companies.length && <div className="hint">Nenhuma empresa influencer ainda.</div>}
     {companies.map(c => <InfCompanyCard key={c.id} company={company} infco={c} onChanged={load} />)}
     {orphans.length > 0 && <div className="stack" style={{ marginTop: 10 }}>
-      <div className="sec mut">Influenciadores sem empresa (cadastrados antes) — veja/edite as fotos e marque a emoção aqui mesmo, ou mova pra uma empresa</div>
-      {orphans.map(i => <div key={i.id} className="stack" style={{ gap: 4 }}>
-        {companies.length > 0 && <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="mut" style={{ fontSize: 12 }}>Mover "{i.name}" pra empresa:</span>
-          <select className="inp" style={{ maxWidth: 200 }} value="" onChange={e => mover(i.id, e.target.value)}>
-            <option value="">escolha…</option>
+      <div className="sec mut">Influenciadores sem empresa (cadastrados antes) — mova pra uma empresa (mantém as fotos)</div>
+      {orphans.map(i => <div key={i.id} className="card" style={{ padding: 10 }}>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div><b>{i.name}</b>{i.handle ? <span className="mut"> · @{i.handle}</span> : null} <span className="mut">· {(i.photos || []).length} foto(s)</span></div>
+          {companies.length > 0 && <select className="inp" style={{ maxWidth: 220 }} value="" onChange={e => mover(i.id, e.target.value)}>
+            <option value="">Mover pra empresa…</option>
             {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>}
-        <InfluencerCard company={company} inf={i} onChanged={load} />
+          </select>}
+        </div>
       </div>)}
     </div>}
   </div>;
@@ -292,7 +291,6 @@ function InfluencerCard({ company, inf, onChanged }) {
     catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
   }
   async function delPhoto(aid) { try { await window.mpApi.deleteInfluencerPhoto(company.id, inf.id, aid); onChanged && onChanged(); } catch (e) { setMsg('Erro: ' + e.message); } }
-  async function setEmo(aid, em) { try { await window.mpApi.setInfluencerPhotoEmotion(company.id, inf.id, aid, em); onChanged && onChanged(); } catch (e) { setMsg('Erro: ' + e.message); } }
   async function delInf() { if (!confirm('Excluir este influencer e as fotos?')) return; try { await window.mpApi.deleteInfluencer(company.id, inf.id); onChanged && onChanged(); } catch (e) { setMsg('Erro: ' + e.message); } }
   return <div className="card" style={{ padding: 12 }}>
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -300,18 +298,10 @@ function InfluencerCard({ company, inf, onChanged }) {
       <button className="btn sm ghost" onClick={delInf}>Excluir</button>
     </div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'} style={{ fontSize: 12 }}>{msg}</div>}
-    <div className="hint" style={{ fontSize: 11, marginTop: 6 }}>Marque a <b>emoção</b> de cada foto. O briefing pede a emoção certa por tela, o sistema busca no banco e <b>sorteia</b> entre as que batem (não repete sempre a mesma).</div>
-    <div className="row" style={{ gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
-      {photos.map(p => <div key={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ position: 'relative' }}>
-          <img loading="lazy" decoding="async" src={'/thumb?p=' + encodeURIComponent(p.url) + '&w=320'} onClick={() => window.open(p.url, '_blank')} title="Clique pra ver em tamanho grande" style={{ width: 150, height: 150, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', display: 'block' }} />
-          <button onClick={() => delPhoto(p.id)} title="Remover" style={{ position: 'absolute', top: -6, right: -6, background: '#fb2f68', color: '#fff', border: 'none', borderRadius: 999, width: 22, height: 22, cursor: 'pointer', fontSize: 13, lineHeight: '22px' }}>×</button>
-          {((p.meta || {}).emotion) && <span style={{ position: 'absolute', bottom: 6, left: 6, background: 'rgba(0,0,0,.72)', color: '#fff', fontSize: 11, padding: '2px 8px', borderRadius: 999 }}>{p.meta.emotion}</span>}
-        </div>
-        <select className="inp" style={{ width: 150, fontSize: 12 }} value={((p.meta || {}).emotion) || ''} onChange={e => setEmo(p.id, e.target.value)}>
-          <option value="">emoção…</option>
-          {['feliz', 'confiante', 'animado', 'sério', 'pensativo', 'surpreso', 'neutro'].map(em => <option key={em} value={em}>{em}</option>)}
-        </select>
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+      {photos.map(p => <div key={p.id} style={{ position: 'relative', display: 'inline-block' }}>
+        <img loading="lazy" decoding="async" src={p.url} style={{ width: 84, height: 84, objectFit: 'cover', borderRadius: 8 }} />
+        <button onClick={() => delPhoto(p.id)} title="Remover" style={{ position: 'absolute', top: -6, right: -6, background: '#fb2f68', color: '#fff', border: 'none', borderRadius: 999, width: 20, height: 20, cursor: 'pointer', fontSize: 12, lineHeight: '20px' }}>×</button>
       </div>)}
     </div>
     <label className="btn sm" style={{ marginTop: 8, display: 'inline-block', cursor: 'pointer' }}>

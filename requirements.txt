@@ -33,19 +33,3 @@ jinja2>=3.1,<4
 
 # Pillow (dependency of imagehash)
 Pillow>=10,<12
-
-# Creative protection engine (CPU-only): YOLO person/object + MediaPipe face/hand/silhouette.
-# Keep Torch on CPU wheels. Installing ultralytics with dependencies pulls CUDA wheels.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.12.1+cpu
-torchvision==0.27.1+cpu
-numpy>=1.26,<2
-mediapipe>=0.10,<1
-opencv-contrib-python>=4.9,<5
-matplotlib>=3.8,<4
-PyYAML>=6,<7
-requests>=2.32,<3
-scipy>=1.11,<2
-psutil>=5.9,<8
-polars>=1.0,<2
-ultralytics-thop==2.0.20

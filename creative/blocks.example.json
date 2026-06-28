@@ -1,7 +1,0 @@
-{
-  "art_config": { "accent": "#ED5E1F", "treatment": "column_glass", "margin": 48 },
-  "blocks": [
-    { "text": "A CARIAP estará na EXPO ISP RECIFE!", "role": "titulo", "max_font_size": 96, "color": "#FFFFFF" },
-    { "text": "15 a 17 de julho de 2026 · Recife, PE", "role": "subtitulo", "max_font_size": 42, "color": "#FFFFFF" }
-  ]
-}

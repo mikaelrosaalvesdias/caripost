@@ -2,33 +2,11 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
-## v1.26.60 - 2026-06-28
+## v1.26.61 - 2026-06-28
 
-- **fix: Contexto visual dos produtos.** Slides de produto voltam a permitir personagens e cenas de uso; a regra "sem pessoas" fica restrita à capa/CTA que recebem influencer cadastrado por recorte.
-- **fix: Evento com referência real.** Capa/CTA de evento usam imagens cadastradas como referência de cena e o prompt força pavilhão/estande real, reduzindo fundo genérico.
-- **fix: Logo oficial do evento.** O render usa o asset principal do evento como marca oficial e remove prancha branca grande antes de carimbar, evitando escolher patrocinador como variante por contraste.
-- **fix: Encaixe do influencer.** O recorte determinístico respeita o lado previsto pelo layout e baixa o corte inferior para encaixar melhor sem redesenhar rosto/roupa.
-- Versão: main.py 1.26.60, OS/UI cache bust v=12660.
-
-## v1.26.59 - 2026-06-28
-
-- **fix: Influencer por recorte determinístico.** O fluxo com influencer agora gera o fundo sem pessoas e cola a foto cadastrada por máscara/recorte em código, sem pedir para a IA redesenhar rosto ou roupa.
-- **fix: Normalização de logos.** Logos raster passam por remoção de fundo sólido conectado à borda, corte de sobra transparente e resize controlado para reduzir fundo branco e proporções inconsistentes.
-- **fix: Guarda narrativa do carrossel.** O plano final reforça evento real em capa/CTA e injeta recursos reais dos produtos marcados quando a IA devolve texto genérico.
-- Versão: main.py 1.26.59, OS/UI cache bust v=12659.
-
-## v1.26.58 - 2026-06-28
-
-- **feat: Motor de proteção para criativos.** Novo pacote `creative` com detecção de pessoa/rosto/mão/objetos, Maximal Empty Rectangle e CLI `python -m creative`.
-- **feat: Texto seguro no compositor.** `compose_card_slide` usa o mapa de proteção para posicionar cards no maior retângulo livre e encolher a largura quando o sujeito está no centro ou há dois sujeitos.
-- **fix: Barra de progresso segura.** A barra superior deixa de ser desenhada quando o detector aponta rosto/pessoa/mão naquela faixa, evitando atravessar cabeça/personagem.
-- Versão: main.py 1.26.58, OS/UI cache bust v=12658.
-
-## v1.26.54 - 2026-06-27
-
-- **fix: Influencer real em conteúdo de evento.** Se o image-to-image do influencer falhar, o render cai para uma cena sem pessoa; não transborda para uma geração com pessoa inventada.
-- **fix: Emoção do CTA.** A seleção de foto do influencer para CTA prioriza expressão positiva e pode reutilizar a melhor foto para evitar rosto triste/aflito em convite de visita.
-- Versão: main.py 1.26.54, OS/UI cache bust v=12654.
+- **fix: Rollback da engine visual recente.** Revertidos os commits do motor de proteção/recorte que deixaram post fixo com caixa de carrossel e reduziram criatividade visual.
+- **fix: Post fixo criativo por padrão.** O endpoint de post fixo com IA volta a usar o modo antigo em que a IA desenha a peça inteira; o compositor com caixa/card fica apenas opt-in por `render_mode`.
+- Versão: main.py 1.26.61, OS/UI cache bust v=12661.
 
 ## v1.23.4 - 2026-06-22
 

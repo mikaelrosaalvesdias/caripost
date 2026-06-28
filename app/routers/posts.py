@@ -17,7 +17,7 @@ from ..db_companies import (
 )
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
-    generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
+    generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, generate_image_with_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
     openrouter_image_models, openrouter_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
 )
@@ -77,25 +77,6 @@ def _all_raster_logos(assets) -> List[str]:
     return clean or out                               # tem recorte? usa só elas. senão degrada com o que há.
 
 
-def _raster_asset_path(asset: dict) -> Optional[str]:
-    u = (asset or {}).get("url") or ""
-    if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
-        return None
-    p = os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/"))
-    return p if os.path.exists(p) else None
-
-
-def _primary_raster_asset(assets) -> Optional[str]:
-    """Escolhe UM asset principal. Para evento, múltiplos uploads podem ser logos
-    diferentes (evento, patrocinador, organizador), não variantes equivalentes."""
-    ordered = sorted(assets or [], key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1)
-    for a in ordered:
-        p = _raster_asset_path(a)
-        if p:
-            return p
-    return None
-
-
 def _png_ref(path: str) -> Optional[bytes]:
     """Normalize any image file to a clean RGBA PNG (<=1024px) for the image-edit API."""
     try:
@@ -108,15 +89,6 @@ def _png_ref(path: str) -> Optional[bytes]:
         return out.getvalue()
     except Exception:
         return None
-
-
-def _person_side_for_slide(s: dict) -> str:
-    """Cola o influencer no lado onde o prompt colocou o sujeito, não por sorteio."""
-    lv = (s.get("layout_variant") or "").lower()
-    ta = (s.get("text_area") or "").lower()
-    if lv == "editorial_right" or ta == "right":
-        return "left"
-    return "right"
 
 
 def _logo_cutout(logo):
@@ -443,9 +415,10 @@ async def generate_post_image(request: Request):
         import asyncio
         from ..services.template_composer import compose_logos_only, compose_cta_footer, compose_carousel_slide
         cost, model = 0.0, model_override or "editorial"
-        # Mesmo bug do carrossel: o post único também invertia (IA desenhava tudo). Agora photo_ai_composer
-        # é o padrão; o legacy (IA desenha a arte inteira) fica ISOLADO atrás de render_mode.
-        rm = (body.get("render_mode") or ("legacy_ai_full_art" if body.get("composer") is False else "photo_ai_composer")).strip().lower()
+        # POST FIXO: por padrão a IA desenha a peça inteira (modo criativo antigo).
+        # O compositor com caixa/card fica opt-in, porque no post fixo ele mata a
+        # direção de arte e deixa a peça com cara de template.
+        rm = (body.get("render_mode") or "legacy_ai_full_art").strip().lower()
         handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@")
         if ai_bg:
             # Transbordo inteligente também no post único (mesmo cérebro do carrossel): se o provedor cair, usa equivalente.
@@ -509,20 +482,9 @@ async def generate_briefing_ep(request: Request):
         if intent == "evento" and not event:
             # modo evento SEM evento real = prompt de evento sem dados → cai pra produtos (evita invenção).
             intent = "produtos"
-        # CreativeContext: produtos SELECIONADOS (sources) com objetivo/recursos REAIS + tom + CTA do cadastro/briefing.
-        _srcs = body.get("sources") or {}
-        # SÓ os produtos MARCADOS (true). set(keys) pegava os desmarcados (false) também → quebrava o controle do usuário.
-        _sel = {k for k, v in _srcs.items() if v} if isinstance(_srcs, dict) else set(_srcs or [])
-        _prods = [p for p in (product_list(company.get("id")) or []) if (not _sel or p.get("id") in _sel)]
-        ctx = {
-            "tom": (body.get("tom") or "").strip(),
-            "cta": (body.get("cta") or "").strip(),
-            "products": [{"name": p.get("name"), "objective": p.get("objective"),
-                          "functions": p.get("functions"), "description": p.get("description")} for p in _prods],
-        }
         res = await asyncio.to_thread(generate_briefing, company, theme,
                                       body.get("objetivo") or "educar",
-                                      body.get("formato") or "carrossel", n, intent, event, ctx)
+                                      body.get("formato") or "carrossel", n, intent, event)
         return {"briefing": res.get("text", ""), "telas": res.get("telas", []), "formato": res.get("formato")}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)
@@ -688,16 +650,7 @@ def _product_dna(app_name: str, design: dict = None) -> str:
     return _PRODUCT_DNA["cariap"]
 
 
-def _is_event_visual(s: dict) -> bool:
-    txt = " ".join(str(s.get(k) or "") for k in ("title", "body", "subtitle", "cta", "visual")).lower()
-    return any(k in txt for k in (
-        "expo", "feira", "evento", "estande", "stand", "pavilhão", "pavilhao",
-        "convenções", "convencoes", "credenciamento", "recife",
-    ))
-
-
-def _photo_only_prompt(s: dict, brand: str, variant: str = None, brand_hex: str = "",
-                       design: dict = None, avoid_people: bool = False) -> str:
+def _photo_only_prompt(s: dict, brand: str, variant: str = None, brand_hex: str = "", design: dict = None) -> str:
     """Marco 3 (photo_ai_composer): a IA gera SÓ a IMAGEM — sem texto/logo/marca; o código desenha o resto.
     A instrução é TEMPERADA pela PERSONALIDADE do produto (3D/neon/cinema/clean) → qualidade + variação,
     não padronice. Mantém ESPAÇO NEGATIVO p/ o texto e a proibição de texto/logo na imagem."""
@@ -713,43 +666,18 @@ def _photo_only_prompt(s: dict, brand: str, variant: str = None, brand_hex: str 
     dna = _product_dna((s.get("app") or "").strip() or "cariap", design)
     grade = (f"Grade de cor puxando para a COR DA MARCA ({brand_hex}) " if brand_hex
              else "Grade de cor cinematográfica de campanha ")
-    event_visual = _is_event_visual(s)
-    event_rule = (
-        "CONTEXTO DE EVENTO OBRIGATÓRIO: a cena deve parecer feira B2B real em centro de convenções/pavilhão, "
-        "com estandes modulares, corredor de expo, telas tecnológicas, credenciamento ou arquitetura de feira. "
-        "Não transforme evento em escritório, setup gamer, roteador isolado, laptop parado ou sala genérica. "
-        if event_visual else ""
-    )
-    if avoid_people:
-        subject_rule = (
-            "CENA SEM PESSOAS: não inclua rosto, corpo, mão, silhueta, público, apresentador ou influencer. "
-            "Se a cena base mencionar pessoa/influencer, use apenas o ambiente onde ela estaria. "
-            "O foco visual deve ser arquitetura, estande, corredor, luz e atmosfera do evento. "
-        )
-        composition_rule = (
-            f"COMPOSIÇÃO OBRIGATÓRIA: deixe a região {empty} como ESPAÇO TOTALMENTE VAZIO — superfície simples e mais "
-            f"escura (parede, sombra ou bokeh), com ABSOLUTAMENTE nenhum rosto, nenhuma pessoa, nenhuma mão e nenhum "
-            f"objeto. O foco de ambiente/estande fica {subject}, sem pessoas. Regra RÍGIDA (o texto entra no lado vazio). "
-        )
-    else:
-        subject_rule = (
-            "UM sujeito humano FORTE, expressivo e art-directed (brasileiro real, olhar marcante), com RECORTE nítido "
-            "e separação clara do fundo. A pessoa precisa estar USANDO ou vivendo o serviço da cena base; "
-            "não troque por ambiente vazio, objeto solto, laptop parado ou still life genérico. "
-        )
-        composition_rule = (
-            f"COMPOSIÇÃO: construa uma cena completa e natural, com o sujeito predominantemente {subject}, "
-            f"e reserve uma região calma {empty} para texto. Essa região pode ter textura/luz, mas não pode ter rosto, "
-            f"mãos, corpo ou objeto principal. O detector do app fará o encaixe final do texto. "
-        )
     return (
         "IMAGEM PUBLICITÁRIA premium para Instagram, nível AGÊNCIA de propaganda — estética de CAMPANHA, "
         "NÃO foto de banco de imagem, NÃO cara de IA/cartoon/render barato. Vertical 4:5, altíssima produção. "
         f"Marca: {brand}. " + dna + " " + grade + ". "
         "ILUMINAÇÃO dramática e direcional (rim light, contraluz, glow), PROFUNDIDADE real em camadas e TEXTURA "
         "rica (partículas, bokeh, atmosfera) — nada de fundo chapado. "
-        + event_rule + subject_rule + "Composição premium, contraste alto. " + composition_rule
-        + "PROIBIDO em QUALQUER lugar: texto, letra, número, palavra, legenda, marca d'água, logo ou símbolo de marca. "
+        "UM sujeito humano FORTE, expressivo e art-directed (brasileiro real, olhar marcante), com RECORTE nítido "
+        "e separação clara do fundo. Composição premium, contraste alto. "
+        f"COMPOSIÇÃO OBRIGATÓRIA: deixe a região {empty} como ESPAÇO TOTALMENTE VAZIO — superfície simples e mais "
+        f"escura (parede, sombra ou bokeh), com ABSOLUTAMENTE nenhum rosto, nenhuma pessoa, nenhuma mão e nenhum "
+        f"objeto. O sujeito fica INTEIRO {subject}, sem invadir o lado vazio. Regra RÍGIDA (o texto entra no lado vazio). "
+        "PROIBIDO em QUALQUER lugar: texto, letra, número, palavra, legenda, marca d'água, logo ou símbolo de marca. "
         "Telas (TV/celular/notebook) só com brilho ABSTRATO — sem interface legível, sem ícone de app, sem logo. "
         "Linguagem visual e clima coesos entre as telas (cara de campanha), mas CADA tela com composição própria. "
         + (f"Cena base (REINTERPRETE com a personalidade acima, não literal): {visual}. " if visual else "")
@@ -937,7 +865,6 @@ async def render_carousel(request: Request):
         dead_providers, spillovers = set(), []
         # INFLUENCER (OPT-IN): só entra se o briefing pediu (use_influencer). Compõe SÓ na CAPA e no CTA (nano-banana). @ p/ collab.
         influencer, inf_photos, inf_handle, used_inf_idx = None, [], "", set()
-        inf_emotions = []   # emoção (tag do cadastro) por foto, paralelo a inf_photos
         if ai_bg and use_composer and body.get("use_influencer"):
             try:
                 from ..db_companies import influencer_list, influencer_get
@@ -949,17 +876,12 @@ async def render_carousel(request: Request):
                     _infs = [x for x in (influencer_list(company_id) or []) if (x.get("photos") or [])]
                 if _infs:
                     influencer = _infs[0]
-                    _pairs = [(_load_upload_bytes(p.get("url")), ((p.get("meta") or {}).get("emotion") or "").strip().lower()) for p in influencer["photos"]]
-                    _pairs = [(b, e) for (b, e) in _pairs if b]
-                    inf_photos = [b for b, e in _pairs]
-                    inf_emotions = [e for b, e in _pairs]
+                    inf_photos = [b for b in (_load_upload_bytes(p.get("url")) for p in influencer["photos"]) if b]
                     inf_handle = (influencer.get("handle") or "").strip()
             except Exception:
                 influencer = None
         # EVENTO: logos (carimba na capa/CTA) + info REAL (datas/local/stand do cadastro) que o CÓDIGO injeta no CTA.
         event_logo_variants = []
-        event_ref_images = []
-        event_ref_urls = []
         event_cta_info = ""
         _eid = (body.get("event_id") or "").strip()
         if _eid:
@@ -971,22 +893,9 @@ async def render_carousel(request: Request):
                     _org = organizer_get(_ev["organizer_id"])
                     if _org:
                         _eassets += list(_org.get("logos") or [])
-                # Evento não usa "melhor contraste entre todos" porque uploads múltiplos
-                # podem ser marcas diferentes (evento, patrocinador, organizador).
-                # Usa um asset principal e o compositor recorta/contrasta esse logo.
-                _ev_logo = _primary_raster_asset(_eassets)
-                event_logo_variants = [_ev_logo] if _ev_logo else []
+                event_logo_variants = _all_raster_logos(_eassets)
                 if _ev:
                     event_cta_info = _format_event_info(_ev)   # REAL — substitui o que a IA tiver inventado
-                    for _a in list((_ev or {}).get("images") or [])[:3]:
-                        _p = _raster_asset_path(_a)
-                        if _p:
-                            _rb = _png_ref(_p)
-                            if _rb:
-                                event_ref_images.append(_rb)
-                            _u = _a.get("url") or ""
-                            if _u:
-                                event_ref_urls.append((base + _u) if _u.startswith("/") else _u)
                     # SANEIA TODAS as telas (datas/stand inventados em qualquer campo, incl. visual) ANTES do render E da legenda.
                     from ..services.ai import sanitize_event_plan
                     telas = sanitize_event_plan(_ev, telas)
@@ -1000,7 +909,6 @@ async def render_carousel(request: Request):
         carousel_style = (_ds or _styles[_seed % len(_styles)])
         for i, s in enumerate(telas, 1):
             app_name = (s.get("app") or "").strip().lower()
-            stype = (s.get("type") or "").lower()
             # MALEÁVEL: coleta TODOS os apps relevantes da tela (taguead​o + citados no título/corpo),
             # não só um. O nº de logos por tela é limitado pelo token app_logo.max_per_slide no composer.
             tl = ((s.get("app") or "") + " " + (s.get("title") or "") + " " + (s.get("body") or "")).lower()
@@ -1022,53 +930,44 @@ async def render_carousel(request: Request):
             # photo_ai_composer: a IA gera SÓ a foto (_photo_only_prompt); o código desenha o resto.
             # legacy: a IA desenha a arte inteira (_full_slide_prompt) e o código só carimba logo/rodapé.
             if use_composer:
-                # INFLUENCER LIGADO: SÓ capa/CTA exigem cena sem pessoas, porque recebem a foto cadastrada
-                # por recorte determinístico. Slides de produto continuam podendo ter personagens/contexto de uso.
-                _inf_active = bool(influencer and inf_photos)
-                _avoid = _inf_active and stype in ("cover", "cta")
-                prompt = _photo_only_prompt(s, company.get("name", ""), (tmpl or {}).get("variant"), brand_color, design_ov, avoid_people=_avoid)
+                prompt = _photo_only_prompt(s, company.get("name", ""), (tmpl or {}).get("variant"), brand_color, design_ov)
             else:
                 prompt = _full_slide_prompt(s, brand_color, company.get("name", ""), structure, (tmpl or {}).get("variant"))
             app_legacy = app_variants[0] if app_variants else None   # legacy usa 1 só
             img_ok, img_err, png, img, used_model = False, "", None, None, model
-            used_real_influencer = False
-            fallback_without_people = False
-            identity_meta = None
-            person_for_cutout = None
             # 1) GERAÇÃO da foto — do CACHE (base salva, custo 0) OU da IA com TRANSBORDO inteligente.
             reuse_url = reuse_bases[i - 1] if i - 1 < len(reuse_bases) else None
             if ai_bg and reuse_url:
                 img = _load_upload_bytes(reuse_url)            # CACHE: reusa a foto, NÃO paga IA
                 img_ok = img is not None
-            # INFLUENCER na CAPA/CTA: escolhe a foto real, mas NÃO chama image-to-image.
-            # A pessoa é recortada e colada por código depois que a cena sem pessoas é gerada.
+            # INFLUENCER na CAPA/CTA: compõe a pessoa real na cena (nano-banana), em vez da cena vazia.
+            stype = (s.get("type") or "").lower()
             if ai_bg and img is None and influencer and inf_photos and stype in ("cover", "cta"):
-                # EMOÇÃO + VARIAÇÃO: capa varia; CTA pode reutilizar a melhor foto para não usar expressão triste/aflita.
-                # EMOÇÃO POR TAG (cadastro) + SORTEIO: o briefing pede s['emotion']; busca as fotos com essa tag e sorteia
-                # (variedade — não repete a mesma). Sem tag batendo → sorteia entre não-usadas. Sem NENHUMA tag → juiz de visão (compat).
-                import hashlib as _id_hash
-                _req = (s.get("emotion") or "").strip().lower()
-                _cands = [j for j, e in enumerate(inf_emotions) if e and e == _req]
-                if not _cands:
-                    if any(inf_emotions):
-                        _cands = [j for j in range(len(inf_photos)) if j not in used_inf_idx] or list(range(len(inf_photos)))
-                    else:
-                        photo_exclude = set() if stype == "cta" else used_inf_idx
-                        _cands = [await asyncio.to_thread(pick_influencer_photo, inf_photos, s.get("title", ""), stype, photo_exclude)]
-                _pick_seed = f"{company_id}:{i}:{stype}:{s.get('title','')}:{_req}"
-                _pi = _cands[int(_id_hash.md5(_pick_seed.encode("utf-8", "ignore")).hexdigest(), 16) % len(_cands)]
+                # EMOÇÃO + VARIAÇÃO: a IA (visão) escolhe do PORTFÓLIO a foto cuja expressão combina com o texto da tela;
+                # exclui as já usadas (capa e CTA pegam fotos diferentes → não fica repetitivo).
+                _pi = await asyncio.to_thread(pick_influencer_photo, inf_photos, s.get("title", ""), stype, used_inf_idx)
                 used_inf_idx.add(_pi)
-                person_for_cutout = inf_photos[_pi]
-                fallback_without_people = True
+                person = inf_photos[_pi]
+                _scene = (s.get("visual") or "").strip()
+                pprompt = ("Integre ESTA pessoa real na CENA DO BRIEFING (ela é a protagonista da cena): "
+                           + (_scene or ("cena publicitária premium da marca " + company.get("name", ""))) + ". "
+                           "Construa o AMBIENTE/FUNDO A PARTIR dessa cena (NÃO use fundo escuro genérico se a cena pede outro lugar). "
+                           "LIMPE a rebarba/borda do recorte e harmonize luz e cor da pessoa com a cena (parece fotografada ali). "
+                           "Deixe ESPAÇO NEGATIVO de um lado pro texto, com a pessoa no lado oposto. "
+                           "NÃO mude o rosto nem a expressão da pessoa. Vertical " + ("9:16" if fmt == "story" else "4:5") + ", alta produção, fotográfico premium. SEM texto, SEM logo.")
+                try:
+                    img, _pc = await asyncio.to_thread(generate_image_with_person, person, pprompt)
+                    img_ok = True; total_cost += (_pc or 0.0)
+                    spillovers.append((i, "influencer: " + (influencer.get("name") or "")))
+                except Exception as pe:
+                    img_err = ("influencer: " + str(pe))[:160]   # falhou → cai pro fluxo normal (cena sem pessoa)
             if ai_bg and img is None:
                 # TRANSBORDO: retry no mesmo modelo p/ erro transitório; se o provedor morreu (saldo/cota),
                 # pula pra um modelo EQUIVALENTE de OUTRO provedor (grátis 1º). dead_providers é compartilhado
                 # entre as telas → não insiste num provedor morto. Editorial só se a cadeia INTEIRA falhar.
                 try:
-                    refs_bytes = event_ref_images if (_eid and stype in ("cover", "cta") and event_ref_images) else None
-                    refs_urls = event_ref_urls if (_eid and stype in ("cover", "cta") and event_ref_urls) else None
                     img, cost, used_model = await asyncio.to_thread(
-                        generate_image_resilient, prompt, img_size, refs_bytes, model, refs_urls, dead_providers, img_registry)
+                        generate_image_resilient, prompt, img_size, None, model, None, dead_providers, img_registry)
                     img_ok = True
                     total_cost += (cost or 0.0)
                     if used_model and used_model != model:
@@ -1076,21 +975,6 @@ async def render_carousel(request: Request):
                 except Exception as ie:
                     img_err = str(ie)[:180]
                     fails.append(img_err)
-            if img is not None and person_for_cutout:
-                try:
-                    import hashlib as _id_hash
-                    from creative.identity import compose_identity_cutout
-                    side_seed = int(_id_hash.md5(f"{company_id}:{i}:{s.get('title','')}".encode("utf-8", "ignore")).hexdigest(), 16)
-                    person_side = _person_side_for_slide(s)
-                    img, identity_meta = await asyncio.to_thread(
-                        compose_identity_cutout, img, person_for_cutout, canvas_size, person_side, side_seed)
-                    used_real_influencer = True
-                    img_ok = True
-                    fallback_without_people = False
-                    spillovers.append((i, "influencer recortado: " + (influencer.get("name") or "")))
-                except Exception as pe:
-                    img_err = ("identity-cutout: " + str(pe))[:180]
-                    spillovers.append((i, "influencer recorte falhou: cena sem pessoa"))
             # 1b) JUIZ POR VISÃO: confirma a metade LIVRE de pessoa p/ o texto; se NENHUMA, regenera (teto 1).
             #     Só no modo card e com foto NOVA (não no cache). Define text_side; em erro cai pra heurística.
             if img is not None and use_composer and reuse_url is None:
@@ -1104,15 +988,11 @@ async def render_carousel(request: Request):
                     if cs in ("left", "right"):
                         slide_for_render["text_side"] = cs
                         break
-                    if used_real_influencer:
-                        break                                  # nunca troca influencer real por pessoa inventada
                     if _regen < 2:                            # none/sem resposta → gera OUTRA foto (o texto não pode cobrir pessoa/objeto)
                         try:
-                            refs_bytes = event_ref_images if (_eid and stype in ("cover", "cta") and event_ref_images) else None
-                            refs_urls = event_ref_urls if (_eid and stype in ("cover", "cta") and event_ref_urls) else None
-                            img, _vc, _vm = await asyncio.to_thread(generate_image_resilient, prompt, img_size, refs_bytes, model, refs_urls, dead_providers, img_registry)
+                            img, _vc, _vm = await asyncio.to_thread(generate_image_resilient, prompt, img_size, None, model, None, dead_providers, img_registry)
                             total_cost += (_vc or 0.0)
-                            spillovers.append((i, "regerada: sem lado limpo" + (" (sem pessoa)" if fallback_without_people else "")))
+                            spillovers.append((i, "regerada: sem lado limpo"))
                         except Exception:
                             break
             # 2) COMPOSIÇÃO (separada da geração; erro aqui degrada pro editorial, nunca derruba o lote).
@@ -1151,7 +1031,7 @@ async def render_carousel(request: Request):
             out.append({"url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{fn}",
                         "type": s.get("type"), "title": s.get("title", ""), "app": s.get("app") or "",
                         "prompt": prompt, "image_ok": img_ok, "image_error": img_err, "base_url": base_out,
-                        "model_used": used_model, "identity": identity_meta})
+                        "model_used": used_model})
         # Persiste o carrossel como POST DRAFT (não some ao navegar; aparece em Arquivos/Acervo).
         post_id = None
         if out:

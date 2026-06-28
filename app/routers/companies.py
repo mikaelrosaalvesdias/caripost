@@ -434,29 +434,6 @@ def delete_influencer_photo(company_id: str, inf_id: str, asset_id: str, request
     return {"ok": asset_delete(asset_id)}
 
 
-@router.post("/{company_id}/influencers/{inf_id}/photo/{asset_id}/emotion")
-async def set_influencer_photo_emotion(company_id: str, inf_id: str, asset_id: str, request: Request):
-    """TAG de emoção da foto (humano marca no cadastro) → o render busca por emoção + sorteia. Preserva o resto do meta."""
-    err = _api_key_required(request)
-    if err:
-        return err
-    body = await request.json()
-    import json as _json
-    from ..db_companies import asset_get, asset_update_meta
-    a = asset_get(asset_id)
-    if not a:
-        return JSONResponse({"detail": "Foto não encontrada"}, status_code=404)
-    meta = a.get("meta") or {}
-    if isinstance(meta, str):
-        try:
-            meta = _json.loads(meta or "{}")
-        except Exception:
-            meta = {}
-    meta["emotion"] = (body.get("emotion") or "").strip().lower()
-    asset_update_meta(asset_id, meta)
-    return {"ok": True, "emotion": meta["emotion"]}
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Organizador do evento (empresa do evento, ex.: ExPSP) — IG + site + logo
 # ─────────────────────────────────────────────────────────────────────────────
