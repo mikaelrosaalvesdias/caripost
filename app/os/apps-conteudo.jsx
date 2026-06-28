@@ -241,7 +241,7 @@ function StepBriefing({ company }) {
         setMsg(`Montando ${fmtLabel} sobre "${seed}" (objetivo: ${objetivo}, formato: ${formato})…`);
         // post/story = 1 arte RICA (capa pela máquina do carrossel, no backend); carrossel = plano completo.
         const isSingle = formato === 'post' || formato === 'story';
-        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId });
+        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name) });
         const text = ((r && r.briefing) || '').trim();
         if (!text) { setMsg('Não consegui gerar agora. Tente de novo.'); return; }
         let tl = (r && r.telas) || [];

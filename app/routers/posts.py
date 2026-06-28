@@ -499,7 +499,8 @@ async def generate_briefing_ep(request: Request):
             intent = "produtos"
         res = await asyncio.to_thread(generate_briefing, company, theme,
                                       body.get("objetivo") or "educar",
-                                      body.get("formato") or "carrossel", n, intent, event)
+                                      body.get("formato") or "carrossel", n, intent, event,
+                                      [a for a in (body.get("apps") or []) if (a or "").strip()])
         return {"briefing": res.get("text", ""), "telas": res.get("telas", []), "formato": res.get("formato")}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)
@@ -665,7 +666,7 @@ def _product_dna(app_name: str, design: dict = None) -> str:
     return _PRODUCT_DNA["cariap"]
 
 
-def _photo_only_prompt(s: dict, brand: str, variant: str = None, brand_hex: str = "", design: dict = None) -> str:
+def _photo_only_prompt(s: dict, brand: str, variant: str = None, brand_hex: str = "", design: dict = None, avoid_people: bool = False) -> str:
     """Marco 3 (photo_ai_composer): a IA gera SÓ a IMAGEM — sem texto/logo/marca; o código desenha o resto.
     A instrução é TEMPERADA pela PERSONALIDADE do produto (3D/neon/cinema/clean) → qualidade + variação,
     não padronice. Mantém ESPAÇO NEGATIVO p/ o texto e a proibição de texto/logo na imagem."""
@@ -681,14 +682,20 @@ def _photo_only_prompt(s: dict, brand: str, variant: str = None, brand_hex: str 
     dna = _product_dna((s.get("app") or "").strip() or "cariap", design)
     grade = (f"Grade de cor puxando para a COR DA MARCA ({brand_hex}) " if brand_hex
              else "Grade de cor cinematográfica de campanha ")
+    # PROTAGONISTA orientado a CONTEÚDO (não trava pessoa em toda arte): pessoa, elemento/produto, ou os dois.
+    if avoid_people:
+        protag = ("CENA SEM PESSOAS: nenhuma figura humana, nenhum rosto, nenhuma mão — o PROTAGONISTA é o produto/elemento "
+                  "(dispositivo, objeto, cenário, atmosfera tech, telas com brilho ABSTRATO), recorte nítido. ")
+    else:
+        protag = ("PROTAGONISTA conforme a cena base: pode ser uma PESSOA (brasileira real, expressiva, art-directed), um "
+                  "ELEMENTO/produto (dispositivo, objeto, símbolo visual do recurso/função) ou os DOIS juntos — escolha o que "
+                  "MELHOR ilustra ESTE conteúdo; NÃO force pessoa se a cena não pede. Recorte nítido, separação clara do fundo. ")
     return (
         "IMAGEM PUBLICITÁRIA premium para Instagram, nível AGÊNCIA de propaganda — estética de CAMPANHA, "
         "NÃO foto de banco de imagem, NÃO cara de IA/cartoon/render barato. Vertical 4:5, altíssima produção. "
         f"Marca: {brand}. " + dna + " " + grade + ". "
         "ILUMINAÇÃO dramática e direcional (rim light, contraluz, glow), PROFUNDIDADE real em camadas e TEXTURA "
-        "rica (partículas, bokeh, atmosfera) — nada de fundo chapado. "
-        "UM sujeito humano FORTE, expressivo e art-directed (brasileiro real, olhar marcante), com RECORTE nítido "
-        "e separação clara do fundo. Composição premium, contraste alto. "
+        "rica (partículas, bokeh, atmosfera) — nada de fundo chapado. " + protag + "Composição premium, contraste alto. "
         f"COMPOSIÇÃO OBRIGATÓRIA: deixe a região {empty} como ESPAÇO TOTALMENTE VAZIO — superfície simples e mais "
         f"escura (parede, sombra ou bokeh), com ABSOLUTAMENTE nenhum rosto, nenhuma pessoa, nenhuma mão e nenhum "
         f"objeto. O sujeito fica INTEIRO {subject}, sem invadir o lado vazio. Regra RÍGIDA (o texto entra no lado vazio). "

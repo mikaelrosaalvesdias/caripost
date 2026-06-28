@@ -1866,9 +1866,11 @@ BRIEFING_GEN: Dict[str, Any] = {
                     "O sistema aplica tamanhos/posições finais, contraste, a logo OFICIAL e ajustes de colisão. "
                     "NUNCA peça pra desenhar logo/texto/marca DENTRO da imagem. VARIE o layout_variant entre as telas (não repita o mesmo). "
                     "Se a tela for sobre um app, use a logo oficial via o campo 'app'. "),
-    "visual_rule": ("Em \"visual\" descreva uma CENA fotográfica REALISTA, cinematográfica e premium "
-                    "(ambiente brasileiro real, pessoas naturais, luz e clima) que apoie o texto — "
-                    "SEM texto na imagem, SEM logo, SEM clichê de banco de imagem. "),
+    "visual_rule": ("Em \"visual\" descreva a CENA que MELHOR ilustra ESTE conteúdo — VOCÊ escolhe livremente entre: "
+                    "(a) PESSOAS (brasileiras reais, naturais), (b) só ELEMENTOS (o app/produto, tela ou device em uso, objeto, "
+                    "cenário, símbolo visual da FUNÇÃO/recurso) ou (c) PESSOAS + ELEMENTOS juntos. Para funções/recursos técnicos, "
+                    "prefira MOSTRAR a função (device/elemento), com ou sem pessoa. NÃO ponha pessoa em TODA tela — varie conforme "
+                    "o conteúdo rico. Cinematográfico, premium, realista — SEM texto na imagem, SEM logo, SEM clichê de banco de imagem. "),
     "app_rule": "Em \"app\": se a tela falar de um app específico, escreva o nome EXATO; senão deixe vazio. ",
     "name_rule": "NOMES EXATOS E OBRIGATÓRIOS (nunca abrevie/erre): E-Saúde, Looke (NUNCA \"Look\"), Deezer, ExitLag, CARIAP. ",
     "content_rules": ("REGRAS: sem preços; nada de 'compre/contrate/assine' nos slides de conteúdo (só no CTA); "
@@ -2067,7 +2069,8 @@ def generate_carousel_caption(company: Dict[str, Any], telas: list, theme: str =
 
 def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educar",
                       formato: str = "carrossel", n_telas: int = 0,
-                      intent: str = "produtos", event: Optional[Dict[str, Any]] = None) -> str:
+                      intent: str = "produtos", event: Optional[Dict[str, Any]] = None,
+                      apps_focus: Optional[List[str]] = None) -> str:
     """Plano de conteúdo COMPLETO a partir de um assunto, adaptado ao FORMATO e ao OBJETIVO.
     carrossel → plano tela a tela; video → roteiro em cenas; post → pauta rica. Texto (não JSON)."""
     config = cheap_text_config(get_ai_config())
@@ -2085,7 +2088,7 @@ def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educ
             + (f'Regras do cliente (obedeça à risca): {rules}. ' if rules else ''))
     # CARROSSEL → plano ESTRUTURADO (mesmas telas que o renderizador usa) + texto legível.
     if fmt == "carrossel":
-        cr = generate_carousel(company, theme, n_telas, intent=intent, event=event)
+        cr = generate_carousel(company, theme, n_telas, intent=intent, event=event, formato="carrossel", apps_focus=apps_focus)
         telas = cr.get("slides") or []
         linhas = [f"GRANDE IDEIA: {cr.get('theme') or theme}", ""]
         for i, s in enumerate(telas, 1):
@@ -2101,7 +2104,7 @@ def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educ
     # POST / STORY → 1 ARTE RICA: reusa a MESMA máquina do carrossel e pega a CAPA (forte, standalone,
     # com visual concreto + app → mesma qualidade do carrossel; type=cover → influencer entra). NÃO é pauta pelada.
     if fmt in ("post", "story", "stories", "storie"):
-        cr = generate_carousel(company, theme, 1, intent=intent, event=event, formato=fmt)
+        cr = generate_carousel(company, theme, 1, intent=intent, event=event, formato=fmt, apps_focus=apps_focus)
         slides = cr.get("slides") or []
         tela = dict(slides[0]) if slides else {"type": "cover", "title": theme, "eyebrow": obj}
         tela["type"] = "cover"   # influencer/sanitize tratam como capa; o composer detecta arte única por total==1
@@ -2184,7 +2187,7 @@ def sanitize_event_plan(event: Optional[Dict[str, Any]], slides: list) -> list:
     return slides
 
 
-def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, intent: str = "produtos", event: Optional[Dict[str, Any]] = None, formato: str = "carrossel") -> Dict[str, Any]:
+def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, intent: str = "produtos", event: Optional[Dict[str, Any]] = None, formato: str = "carrossel", apps_focus: Optional[List[str]] = None) -> Dict[str, Any]:
     """Gera um CARROSSEL editorial (estilo g4.business / v4company): capa com gancho,
     slides de conteúdo de VALOR (sem cara de venda) e último slide com CTA de contratação.
     n_slides=0 → a IA escolhe (6–9 no total). Texto via Claude (assinatura)."""
@@ -2203,9 +2206,16 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
     # Apps REAIS cadastrados → a IA tagueia o campo 'app' por tela a partir DESTES (não inventa) e distribui.
     try:
         from ..db_companies import product_list as _plist
-        _apps = [(p.get("name") or "").strip() for p in (_plist(company.get("id")) or []) if (p.get("name") or "").strip()]
+        _prods = _plist(company.get("id")) or []
+        _apps = [(p.get("name") or "").strip() for p in _prods if (p.get("name") or "").strip()]
     except Exception:
-        _apps = []
+        _prods, _apps = [], []
+    # FOCO EXCLUSIVO: se o usuário marcou só certos apps (caixinhas), restringe o universo a eles (case-insensitive, nome exato do banco).
+    _focus_names = [a.strip() for a in (apps_focus or []) if (a or "").strip()]
+    if _focus_names:
+        _fset = {a.lower() for a in _focus_names}
+        _prods = [p for p in _prods if (p.get("name") or "").strip().lower() in _fset]
+        _apps = [(p.get("name") or "").strip() for p in _prods if (p.get("name") or "").strip()]
     # Apps CITADOS no tema → TODOS precisam aparecer (1 slide cada). Piso de telas = capa + 1 por app + CTA
     # (teto 10 = limite do Instagram). Cobertura completa vence até a contagem exata pedida.
     import unicodedata as _ud
@@ -2213,8 +2223,34 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         s = _ud.normalize("NFKD", (s or "").lower())
         return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
     _tnorm = _norm(theme)
-    themed = [a for a in _apps if _norm(a) and _norm(a) in _tnorm] if intent == "produtos" else []
+    themed = list(_apps) if _focus_names else ([a for a in _apps if _norm(a) and _norm(a) in _tnorm] if intent == "produtos" else [])
     floor = min(len(themed) + 2, 10) if themed else 0
+    # BASE DE CONHECIMENTO: junta site(functions) + objetivo + docs(knowledge) dos apps EM FOCO (citados no tema)
+    # → briefing PROFUNDO e específico, baseado em fatos REAIS (não raso, não inventado).
+    def _app_brief(p):
+        fns = p.get("functions") or []
+        if isinstance(fns, str):
+            try:
+                import json as _j; fns = _j.loads(fns)
+            except Exception:
+                fns = [fns] if fns else []
+        fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:2000]
+        kb = (p.get("knowledge") or "").strip()
+        obj = (p.get("objective") or "").strip()
+        seg = []
+        if obj:
+            seg.append("Objetivo: " + obj)
+        if fns_t:
+            seg.append("Funções: " + fns_t)
+        if kb:
+            seg.append("Base de conhecimento (fatos REAIS — use SÓ o que está aqui, não invente recursos):\n" + kb[:8000])
+        return (p.get("name"), " | ".join(seg)) if seg else None
+    _focus = list(_prods) if _focus_names else [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tnorm]
+    _kb_blocks = [b for b in (_app_brief(p) for p in _focus) if b]
+    kb_line = (("CONHECIMENTO REAL DOS APPS EM FOCO (baseie o conteúdo NESTES fatos/funções — específico e profundo, "
+                "sem inventar recursos): " + " || ".join(f"[{n}] {t}" for n, t in _kb_blocks) + ". ") if _kb_blocks else "")
+    excl_line = (("FOCO EXCLUSIVO: este conteúdo é SOMENTE sobre " + ", ".join(_apps) + " — NÃO mencione, NÃO cite e NÃO "
+                  "crie telas de NENHUM outro app/produto da empresa. ") if (_focus_names and _apps) else "")
     # MODO EVENTO: injeta os dados REAIS do evento (datas/local/stand) na instrução do briefing.
     event_line = ""
     if event:
@@ -2246,7 +2282,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         user = (
             f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
             f"Público (fale COM ele): {audience}. Tema: {theme}. "
-            + event_line + apps_line
+            + event_line + apps_line + kb_line + excl_line
             + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
             + G["single_json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"] + G["content_rules"]
         )
@@ -2255,7 +2291,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
             f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
             f"Público (fale COM ele): {audience}. "
             f"Tema do carrossel: {theme}. {n_rule} "
-            + event_line + apps_line + cover_line
+            + event_line + apps_line + cover_line + kb_line + excl_line
             + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
             + G["json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"]
             + G.get("layout_rule", "") + G["content_rules"]

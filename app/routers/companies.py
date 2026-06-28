@@ -773,6 +773,65 @@ async def update_product(company_id: str, product_id: str, request: Request):
     return {"product": product}
 
 
+def _extract_doc_text(name: str, raw: bytes) -> str:
+    """Extrai texto de PDF/TXT/MD/CSV. PDF via pypdf; resto decodifica UTF-8."""
+    ext = os.path.splitext(name or "")[1].lower()
+    if ext == ".pdf":
+        import io as _io
+        from pypdf import PdfReader
+        rd = PdfReader(_io.BytesIO(raw))
+        return "\n".join((pg.extract_text() or "") for pg in rd.pages)
+    return raw.decode("utf-8", "ignore")
+
+
+@router.post("/{company_id}/products/{product_id}/kb")
+async def upload_product_kb(company_id: str, product_id: str, request: Request, file: UploadFile = File(...)):
+    """BASE DE CONHECIMENTO do produto: sobe PDF/TXT/MD, EXTRAI o texto e ACUMULA em product.knowledge.
+    O briefing usa esse texto (funções/fatos REAIS) p/ não ficar raso. Junta com o site (functions) e a internet."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    prod = product_get(product_id)
+    if not prod or prod.get("company_id") != company_id:
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    raw = await file.read()
+    name = file.filename or "doc.txt"
+    try:
+        text = (_extract_doc_text(name, raw) or "").strip()
+    except Exception as e:
+        return JSONResponse({"detail": f"Falha ao ler '{name}': {e}"}, status_code=400)
+    if not text:
+        return JSONResponse({"detail": "Não consegui extrair texto desse arquivo (PDF pode ser imagem escaneada)."}, status_code=400)
+    prev = (prod.get("knowledge") or "").strip()
+    merged = (prev + f"\n\n===== {name} =====\n" + text).strip()[:60000]   # teto p/ não estourar o prompt
+    product_update(product_id, {"knowledge": merged})
+    return {"ok": True, "file": name, "chars": len(text), "total_chars": len(merged)}
+
+
+@router.get("/{company_id}/products/{product_id}/kb")
+def get_product_kb(company_id: str, product_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    prod = product_get(product_id)
+    if not prod or prod.get("company_id") != company_id:
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    kb = (prod.get("knowledge") or "")
+    return {"chars": len(kb), "preview": kb[:2000]}
+
+
+@router.delete("/{company_id}/products/{product_id}/kb")
+def clear_product_kb(company_id: str, product_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    prod = product_get(product_id)
+    if not prod or prod.get("company_id") != company_id:
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    product_update(product_id, {"knowledge": ""})
+    return {"ok": True}
+
+
 def _dominant_colors(path: str, n: int = 3) -> List[str]:
     """Top vivid colors from a logo image, as #RRGGBB. Skips near-white/black/gray."""
     try:

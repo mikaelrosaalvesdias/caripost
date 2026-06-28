@@ -298,6 +298,7 @@ def init_companies_db() -> None:
         # Briefing/positioning fields (added later; tables already exist on prod).
         _ensure_column("products", "objective", "objective TEXT")
         _ensure_column("products", "functions", "functions TEXT")
+        _ensure_column("products", "knowledge", "knowledge TEXT")   # base de conhecimento (PDF/TXT extraído) p/ briefing rico
         _ensure_column("brand_kits", "audience", "audience TEXT")
         _ensure_column("posts", "review_comment", "review_comment TEXT")
         _ensure_column("posts", "review_decision", "review_decision TEXT")
@@ -1322,7 +1323,7 @@ def product_update(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
     now = _now()
     fields = []
     values: List[Any] = []
-    for key in ("name", "description", "category", "website", "objective"):
+    for key in ("name", "description", "category", "website", "objective", "knowledge"):
         if key in data:
             fields.append(f"{key} = ?")
             values.append(data[key])
