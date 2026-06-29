@@ -11,19 +11,25 @@ function imgGroups(list) {
 function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '')); }
 
 function BrandedVideoPanel({ company, theme }) {
-  const [seconds, setSeconds] = React.useState(8);
   const [pf, setPf] = React.useState(null);
   const [status, setStatus] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [loadingPf, setLoadingPf] = React.useState(false);
   const [msg, setMsg] = React.useState('');
-  React.useEffect(() => { window.mpApi.videoPreflight(company.id, seconds).then(setPf).catch(() => {}); }, [seconds]);
+  React.useEffect(() => { setPf(null); setStatus(null); setMsg(''); }, [theme]);
   const brl = (usd) => 'R$ ' + (Number(usd || 0) * 5.4).toFixed(2);
+  async function plan() {
+    setLoadingPf(true); setMsg('');
+    try { setPf(await window.mpApi.videoPreflight(company.id, theme)); }
+    catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setLoadingPf(false); }
+  }
   async function gerar() {
     if (!pf || !pf.configured) { setMsg('Erro: configure o modelo de vídeo no painel de IA (Configurações) primeiro.'); return; }
-    if (!window.confirm('Gerar vídeo de ' + seconds + 's (' + pf.scenes + ' cena(s)) ≈ R$ ' + pf.total_brl + '?\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
+    if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ≈ R$ ' + pf.total_brl + '.\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
     setBusy(true); setMsg('Iniciando…'); setStatus(null);
     try {
-      const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, seconds_total: seconds });
+      const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, storyboard: pf.storyboard });
       if (!r || !r.job) { setMsg('Erro: ' + ((r && r.detail) || 'não consegui iniciar')); setBusy(false); return; }
       for (let i = 0; i < 90; i++) {
         await new Promise(res => setTimeout(res, 8000));
@@ -37,17 +43,15 @@ function BrandedVideoPanel({ company, theme }) {
   }
   return <div className="panel stack" style={{ marginTop: 10 }}>
     <div className="sec"><Icon name="video" />Gerar vídeo branded (9:16, com áudio)</div>
-    <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-      <span className="hint">Duração:</span>
-      {[8, 15, 30].map(s => <button key={s} className={'btn sm' + (seconds === s ? ' pri' : ' ghost')} onClick={() => setSeconds(s)}>{s}s</button>)}
-    </div>
-    {pf && pf.configured && <div className="hint">Modelo <b>{pf.model}</b> · {pf.scenes} cena(s) · custo estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(o custo REAL aparece ao final)</span></div>}
+    <div className="hint">A <b>duração vem do briefing</b> (ele decide quantas cenas) — você não escolhe. Calcule antes de gerar:</div>
+    {!pf && <button className="btn sm ghost" disabled={loadingPf || !theme} onClick={plan}>{loadingPf ? 'Montando roteiro…' : 'Calcular cenas e custo'}</button>}
+    {pf && pf.configured && <div className="hint">O briefing virou <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) no modelo <b>{pf.model}</b> · estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(real ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
     {pf && !pf.configured && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha o modelo de vídeo no painel de IA (Configurações) antes.</div>}
     {status && status.status === 'generating' && <div className="hint">Gerando cena {status.scene}/{status.total}… · gasto até agora {brl(status.cost_usd)}</div>}
-    {status && status.status === 'composing' && <div className="hint">Montando o vídeo com a marca (logo, CTA)…</div>}
+    {status && status.status === 'composing' && <div className="hint">Juntando as cenas num vídeo só + marca/CTA…</div>}
     {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 280, borderRadius: 12 }} />}
     {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
-    <button className="btn pri" disabled={busy || !theme || (pf && !pf.configured)} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.configured ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
+    {pf && pf.configured && <button className="btn pri" disabled={busy} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo (≈ R$ ' + pf.total_brl + ')')}</button>}
   </div>;
 }
 

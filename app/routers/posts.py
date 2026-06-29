@@ -1262,23 +1262,22 @@ async def generate_branded_video(request: Request):
     company = company_get(body.get("company_id"))
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
-    from ..services.ai import (get_video_config, video_cost_estimate, video_model_max_seconds,
-                               video_scene_count, build_video_storyboard, get_setting)
+    from ..services.ai import get_video_config, build_video_storyboard
     if not get_video_config():
         return JSONResponse({"detail": "Escolha o modelo de vídeo no painel de IA antes."}, status_code=400)
     cid = company["id"]
     theme = (body.get("theme") or body.get("briefing") or "").strip()
     video_prompt = (body.get("video_prompt") or body.get("visual_prompt") or "").strip()
-    target = max(4, min(int(body.get("seconds_total") or 8), 60))
-    mx = video_model_max_seconds()
-    n = video_scene_count(target, mx)
-    try:
-        sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt)
-    except Exception:
-        sb = []
-    prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")][:n]
-    while len(prompts) < n:                                       # garante n cenas
-        prompts.append(video_prompt or theme or f"Cena {len(prompts)+1} da marca {company.get('name','')}")
+    # O BRIEFING dita o nº de cenas/duração. Usa o roteiro vindo do preflight; senão monta na hora. Teto 8 (custo).
+    prompts = [p for p in (body.get("storyboard") or []) if isinstance(p, str) and p.strip()]
+    if not prompts:
+        try:
+            sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt)
+        except Exception:
+            sb = []
+        prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
+    prompts = prompts[:8] or [video_prompt or theme or f"Cena da marca {company.get('name','')}"]
+    n = len(prompts)
     colors = (company.get("brand_kit") or {}).get("colors") or {}
     logo = (_all_raster_logos(asset_list_logos(cid)) or [None])[0]
     site = (company.get("website") or "").strip()
@@ -1293,25 +1292,41 @@ async def generate_branded_video(request: Request):
     _th.Thread(target=_render_branded_video_job,
                args=(cid, jid, prompts, body.get("seconds") or "", cta, colors, logo, site, handle, base_url),
                daemon=True).start()
-    return {"job": jid, "scenes": n, "estimate": video_cost_estimate(target)}
+    return {"job": jid, "scenes": n}
 
 
 @router.post("/video-preflight")
 async def video_preflight(request: Request):
-    """Custo ESTIMADO do vídeo (cenas + R$) SEM gerar nada — pro front mostrar antes de confirmar.
-    POST (não GET) p/ não cair na rota coringa /{post_id}."""
+    """Monta o ROTEIRO (o BRIEFING decide quantas cenas/segundos) e devolve o custo estimado — SEM gerar vídeo.
+    O usuário NÃO escolhe a duração: o briefing dita. POST p/ não cair na rota coringa /{post_id}."""
     err = _api_key_required(request)
     if err:
         return err
     body = await request.json()
-    from ..services.ai import video_cost_estimate, get_video_config, get_setting
+    from ..services.ai import (build_video_storyboard, get_video_config, get_setting,
+                               video_model_max_seconds, _video_catalog_entry, usd_to_brl)
     if not get_video_config():
         return {"configured": False}
+    company = company_get(body.get("company_id"))
+    theme = (body.get("theme") or "").strip()
+    vp = (body.get("video_prompt") or "").strip()
     try:
-        s = int(body.get("seconds") or 8)
+        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp) if company else []
     except Exception:
-        s = 8
-    return {"configured": True, "model_id": get_setting("video.model"), **video_cost_estimate(s)}
+        sb = []
+    mx = video_model_max_seconds()
+    prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")][:8]    # briefing decide o nº (teto 8 = custo)
+    secs = [min(int(s.get("seconds") or 8), mx) for s in (sb or [])][:len(prompts)]
+    if not prompts:
+        prompts, secs = [vp or theme or "cena"], [mx]
+    n = len(prompts)
+    ent = _video_catalog_entry(get_setting("video.model") or "")
+    price = ent[0] if ent else 0.40
+    name = ent[2] if ent else (get_setting("video.model") or "modelo")
+    total_usd = round(price * n, 2)
+    return {"configured": True, "model": name, "scenes": n, "total_seconds": sum(secs),
+            "price_per_clip_usd": price, "total_usd": total_usd, "total_brl": round(usd_to_brl(total_usd), 2),
+            "storyboard": prompts}
 
 
 @router.post("/branded-video-status")
