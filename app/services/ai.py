@@ -1716,16 +1716,26 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
                     f"NÃO repita cenas — cada uma avança a narrativa. ")
     else:
         dur_rule = ("DECIDA a duração ideal do reel (o que performa melhor — normalmente 15 a 60s) e quebre em cenas. ")
+    bk = company.get("brand_kit") or {}
+    if not bk:
+        try:
+            from ..db_companies import brand_kit_get
+            bk = brand_kit_get(company.get("id")) or {}
+        except Exception:
+            bk = {}
+    voice = (bk.get("voice") or bk.get("persona") or "").strip()
+    tom_rule = (f"TOM/VOZ DA MARCA (mantenha CONSISTENTE em todo vídeo — define o clima, o ritmo e a energia das cenas): {voice}. " if voice else
+                "TOM consistente, brasileiro, premium e confiante. ")
     system = (
         "Você é DIRETOR de reels/vídeo publicitário no nível das agências g4.business e v4company. A partir do briefing, "
-        + dur_rule +
+        + dur_rule + tom_rule +
         "Monte um ROTEIRO CINEMATOGRÁFICO com ARCO: (1) GANCHO visual forte nos primeiros segundos (prende o olho), "
         "(2) DESENVOLVIMENTO mostrando o VALOR/benefício de forma concreta e emocional, (3) CLÍMAX/virada que deixa o gancho "
         "pro CTA. NÃO crie cena de CTA nem de logo — o sistema desenha CTA, logo, texto e marca DEPOIS. "
         "Cada cena é uma CENA VISUAL REAL e cinematográfica: ambiente brasileiro real, sujeito (PESSOA natural OU produto/elemento "
-        "— o que MELHOR ilustrar), AÇÃO, EMOÇÃO e MOVIMENTO de câmera. CONTINUIDADE entre as cenas (mesmo personagem/clima/paleta). "
-        "MOSTRE a sensação/benefício, NÃO a tela do app. "
-        'Responda SOMENTE JSON válido e compacto: {"scenes":[{"desc":"cena visual cinematográfica concreta + movimento","seconds":8}, ...]} . '
+        "— o que MELHOR ilustrar), com NO MÁXIMO 1 AÇÃO principal e 1 MOVIMENTO de câmera por cena (clareza). EMOÇÃO clara. "
+        "CONTINUIDADE entre as cenas (mesmo personagem/clima/paleta da marca). MOSTRE a sensação/benefício, NÃO a tela do app. "
+        'Responda SOMENTE JSON válido e compacto: {"scenes":[{"desc":"cena visual concreta: sujeito + 1 ação + 1 movimento de câmera + luz/clima","seconds":8}, ...]} . '
         "PROIBIDO em 'desc': qualquer TEXTO, letra, legenda, número; LOGO, marca, nome de marca; TELA/interface de app/celular com "
         "conteúdo legível, ícones ou nomes. Só a CENA fotográfica em movimento, em PT-BR."
     )
