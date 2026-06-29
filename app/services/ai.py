@@ -1629,6 +1629,33 @@ def video_scene_count(target_seconds: int, max_seconds: int, cap: int = 8) -> in
     return max(1, min(cap, math.ceil(t / m)))
 
 
+def _video_catalog_entry(model_id: str):
+    """Acha (preço, max_seconds, nome) do modelo no catálogo (OpenRouter+Comet). None se não achar."""
+    mid = (model_id or "").strip()
+    raw = mid[len("cometapi:"):] if mid.startswith("cometapi:") else mid
+    for s, nm, q, p, sec in CURATED_VIDEO:
+        if mid in (s, nm):
+            return (p, sec, nm)
+    for s, nm, q, p, sec in CURATED_VIDEO_COMET:
+        if mid == ("cometapi:" + s) or raw in (s, nm):
+            return (p, sec, nm)
+    return None
+
+
+def video_cost_estimate(target_seconds: int, model_id: str = "") -> Dict[str, Any]:
+    """PREFLIGHT: nº de cenas + custo ESTIMADO (catálogo) p/ a duração no modelo. O custo REAL vem depois
+    em usage.cost por clipe. Mostrar isto ANTES de gerar (controle de gasto)."""
+    mid = model_id or get_setting("video.model") or ""
+    ent = _video_catalog_entry(mid)
+    price = ent[0] if ent else 0.40
+    mx = ent[1] if ent else 8
+    name = ent[2] if ent else (mid or "modelo")
+    n = video_scene_count(target_seconds, mx)
+    total = round(price * n, 2)
+    return {"model": name, "model_id": mid, "max_seconds": mx, "scenes": n,
+            "price_per_clip_usd": price, "total_usd": total, "total_brl": round(usd_to_brl(total), 2)}
+
+
 def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
     """Compose a brand-aware prompt for a short social video."""
     parts = [
