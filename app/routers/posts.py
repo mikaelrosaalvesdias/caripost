@@ -18,7 +18,7 @@ from ..db_companies import (
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
     generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, generate_image_with_person, verify_same_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
-    openrouter_image_models, openrouter_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
+    openrouter_image_models, openrouter_video_models, cometapi_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
 )
 
@@ -243,7 +243,7 @@ def ai_models(request: Request):
            + _prov(cometapi_image_models(), "cometapi")
            + _prov(piapi_image_models(), "piapi")
            + _prov(openrouter_image_models(), "openrouter"))
-    vid = openrouter_video_models()
+    vid = (_prov(openrouter_video_models(), "openrouter") + _prov(cometapi_video_models(), "cometapi"))
     for m in img:
         m["price_brl"] = usd_to_brl(m.get("price_per_image") or 0)
     for m in vid:
@@ -1145,7 +1145,14 @@ async def set_ai_model(request: Request):
         settings_set(key="image.model", value=m, updated_at=now)
         # an OpenRouter slug has a "/"; otherwise it's OpenAI
         settings_set(key="image.provider", value=("openrouter" if "/" in m else "openai"), updated_at=now)
-    return {"ok": True, "image_current": get_setting("image.model")}
+    if "video_model" in body:
+        vm = (body.get("video_model") or "").strip()
+        settings_set(key="video.model", value=vm, updated_at=now)
+        # 'cometapi:' → CometAPI · slug com '/' → OpenRouter · senão OpenAI (Sora)
+        settings_set(key="video.provider",
+                     value=("cometapi" if vm.startswith("cometapi:") else ("openrouter" if "/" in vm else "openai")),
+                     updated_at=now)
+    return {"ok": True, "image_current": get_setting("image.model"), "video_current": get_setting("video.model")}
 
 
 @router.post("/generate-video")

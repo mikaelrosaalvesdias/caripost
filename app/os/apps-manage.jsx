@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.26.71';
+const MP_OS_VERSION = 'v1.26.72';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -675,6 +675,9 @@ function ImageModelPicker() {
   const [keys, setKeys] = React.useState({});
   const [masks, setMasks] = React.useState({});
   const [savingP, setSavingP] = React.useState('');
+  const [vmodels, setVmodels] = React.useState([]);
+  const [vcurrent, setVcurrent] = React.useState('');
+  const [vsel, setVsel] = React.useState('');
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -682,6 +685,9 @@ function ImageModelPicker() {
       const list = r.image || [];
       setModels(list); setCurrent(r.image_current || '');
       setSel(r.image_current || (list[0] && list[0].id) || '');
+      const vlist = r.video || [];
+      setVmodels(vlist); setVcurrent(r.video_current || '');
+      setVsel(r.video_current || (vlist[0] && vlist[0].id) || '');
       setLoading(false);
     }).catch(() => setLoading(false));
     window.mpApi.getAISettings().then(s => setMasks((s && s.image && s.image.keyMasks) || {})).catch(() => {});
@@ -703,9 +709,15 @@ function ImageModelPicker() {
     try { const r = await window.mpApi.setAiModel({ image_model: sel }); setCurrent(r.image_current); setMsg('✓ Modelo padrão: ' + r.image_current); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
+  async function saveVideo() {
+    setMsg('Salvando…');
+    try { const r = await window.mpApi.setAiModel({ video_model: vsel }); setVcurrent(r.video_current); setMsg('✓ Modelo de vídeo padrão: ' + r.video_current); }
+    catch (e) { setMsg('Erro: ' + e.message); }
+  }
   const price = m => m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '');
   const PLAB = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
   const groups = (() => { const g = {}; models.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
+  const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
 
   return <div className="panel stack">
     <div className="sec"><Icon name="image" />Provedor de IA (imagem)</div>
@@ -727,8 +739,23 @@ function ImageModelPicker() {
         <button className="btn sm ghost" onClick={load}><Icon name="refresh" />Recarregar</button>
       </div>
     </Field>
-    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <button className="btn sm pri" onClick={save}>Definir como padrão</button>
+
+    <div className="sec" style={{ marginTop: 14 }}><Icon name="video" />Modelos de VÍDEO (CometAPI + OpenRouter)</div>
+    <div className="hint">{vmodels.length} modelos disponíveis. Preços aproximados de mercado por clipe (~5-8s). Escolha o padrão; depois ligamos a geração nele.</div>
+    {vcurrent && <div className="row"><span className="k">Vídeo padrão</span><span className="v mono" style={{ color: 'var(--cyan)' }}>{vcurrent}</span></div>}
+    <Field label="Modelo de vídeo padrão">
+      <div className="rowx" style={{ gap: 8 }}>
+        <select className="inp" value={vsel} onChange={e => setVsel(e.target.value)}>
+          {vgroups.length ? vgroups.map(grp => <optgroup key={grp.provider} label={grp.label}>
+            {grp.models.map(m => <option key={m.id} value={m.id}>{(m.name || m.id) + (m.quality ? ' (' + m.quality + ')' : '') + (m.max_seconds ? ' · até ' + m.max_seconds + 's/clipe' : '') + price(m)}</option>)}
+          </optgroup>) : <option value="">{loading ? 'Carregando…' : 'Sem modelos (configure CometAPI/OpenRouter acima)'}</option>}
+        </select>
+        <button className="btn sm ghost" onClick={load}><Icon name="refresh" />Recarregar</button>
+      </div>
+    </Field>
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    <button className="btn sm pri" onClick={saveVideo}>Definir vídeo como padrão</button>
   </div>;
 }
 

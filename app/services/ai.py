@@ -609,17 +609,40 @@ CURATED_IMAGE = [
 ]
 
 # Top-10 vídeo (slug real do OpenRouter). gemini-omni-flash/happyhorse NÃO existem lá.
+# Modelos de VÍDEO do OpenRouter (id real do /videos/models). (id, nome, qualidade, preço USD/clipe, MAX_SEGUNDOS por clipe da doc).
 CURATED_VIDEO = [
-    ("bytedance/seedance-2.0", "seedance-2.0", "Top", 0.40),
-    ("google/veo-3.1", "veo-3.1", "Top", 0.50),
-    ("alibaba/wan-2.7", "wan-2.7", "Top", 0.40),
-    ("openai/sora-2-pro", "sora-2-pro", "Top", 0.50),
-    ("google/veo-3.1-fast", "veo-3.1-fast", "Alta", 0.30),
-    ("x-ai/grok-imagine-video", "grok-imagine-video", "Alta", 0.30),
-    ("kwaivgi/kling-v3.0-pro", "kling-v3.0-pro", "Alta", 0.35),
-    ("minimax/hailuo-2.3", "hailuo-2.3", "Alta", 0.30),
-    ("bytedance/seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30),
-    ("google/veo-3.1-lite", "veo-3.1-lite", "Boa", 0.20),
+    ("google/veo-3.1", "veo-3.1", "Top", 0.50, 8),
+    ("openai/sora-2-pro", "sora-2-pro", "Top", 0.50, 12),
+    ("bytedance/seedance-2.0", "seedance-2.0", "Top", 0.40, 12),
+    ("kwaivgi/kling-v3.0-pro", "kling-v3.0-pro", "Top", 0.40, 10),
+    ("alibaba/wan-2.7", "wan-2.7", "Top", 0.40, 5),
+    ("google/veo-3.1-fast", "veo-3.1-fast", "Alta", 0.30, 8),
+    ("bytedance/seedance-2.0-fast", "seedance-2.0-fast", "Alta", 0.25, 12),
+    ("bytedance/seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30, 10),
+    ("kwaivgi/kling-v3.0-std", "kling-v3.0-std", "Alta", 0.25, 10),
+    ("kwaivgi/kling-video-o1", "kling-video-o1", "Alta", 0.30, 10),
+    ("minimax/hailuo-2.3", "hailuo-2.3", "Alta", 0.30, 10),
+    ("x-ai/grok-imagine-video", "grok-imagine-video", "Alta", 0.25, 6),
+    ("alibaba/wan-2.6", "wan-2.6", "Alta", 0.25, 5),
+    ("google/veo-3.1-lite", "veo-3.1-lite", "Boa", 0.18, 8),
+]
+
+# Modelos de VÍDEO da CometAPI (id real do /v1/models). (id, nome, qualidade, preço USD/clipe, MAX_SEGUNDOS).
+CURATED_VIDEO_COMET = [
+    ("veo3.1-pro", "veo3.1-pro", "Top", 0.50, 8),
+    ("veo3.1", "veo3.1", "Top", 0.45, 8),
+    ("sora-2-pro", "sora-2-pro", "Top", 0.50, 12),
+    ("doubao-seedance-2-0", "seedance-2.0", "Top", 0.40, 12),
+    ("kling_video", "kling-video", "Top", 0.40, 10),
+    ("veo3.1-fast", "veo3.1-fast", "Alta", 0.30, 8),
+    ("sora-2", "sora-2", "Alta", 0.30, 12),
+    ("doubao-seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30, 10),
+    ("minimax-hailuo-02", "hailuo-02", "Alta", 0.28, 10),
+    ("luma-video", "luma-video", "Alta", 0.30, 9),
+    ("viduq3", "viduq3", "Alta", 0.28, 8),
+    ("wan2.7", "wan-2.7", "Alta", 0.25, 5),
+    ("veo3", "veo3", "Alta", 0.30, 8),
+    ("runway_video", "runway-video", "Alta", 0.40, 10),
 ]
 
 
@@ -650,10 +673,18 @@ def openrouter_image_models() -> List[Dict[str, Any]]:
 def openrouter_video_models() -> List[Dict[str, Any]]:
     """Top-10 modelos de vídeo curados (ranking), só os disponíveis no OpenRouter."""
     avail = _openrouter_avail("https://openrouter.ai/api/v1/videos/models")
-    out = [{"id": s, "name": n, "quality": q, "price_per_video": p, "rank": i}
-           for i, (s, n, q, p) in enumerate(CURATED_VIDEO) if not avail or s in avail]
-    return out or [{"id": s, "name": n, "quality": q, "price_per_video": p, "rank": i}
-                   for i, (s, n, q, p) in enumerate(CURATED_VIDEO)]
+    out = [{"id": s, "name": n, "quality": q, "price_per_video": p, "max_seconds": sec, "rank": i}
+           for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO) if not avail or s in avail]
+    return out or [{"id": s, "name": n, "quality": q, "price_per_video": p, "max_seconds": sec, "rank": i}
+                   for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO)]
+
+
+def cometapi_video_models() -> List[Dict[str, Any]]:
+    """Modelos de VÍDEO da CometAPI (curados). id prefixado 'cometapi:'. Preço aprox. de mercado por clipe."""
+    if not _cometapi_key():
+        return []
+    return [{"id": "cometapi:" + s, "name": n, "quality": q, "price_per_video": p, "max_seconds": sec, "rank": i}
+            for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO_COMET)]
 
 
 def omniroute_image_models() -> List[Dict[str, Any]]:
