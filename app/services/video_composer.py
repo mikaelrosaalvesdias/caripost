@@ -26,6 +26,14 @@ def _ff(args: List[str], timeout: int = 240) -> bool:
         return False
 
 
+def last_frame_png(clip_path: str, out_path: str) -> bool:
+    """Extrai o ÚLTIMO frame do clipe → PNG. Vira o first_frame da próxima cena (CONTINUIDADE). True/False.
+    O PNG precisa ficar numa URL pública (sem cookie/redirect) p/ a OpenRouter baixar."""
+    if not clip_path or not os.path.exists(clip_path):
+        return False
+    return _ff(["-sseof", "-0.2", "-i", clip_path, "-vframes", "1", "-q:v", "2", out_path]) and os.path.exists(out_path)
+
+
 def _logo_img(logo_path: Optional[str], target_w: int) -> Optional[Image.Image]:
     if not logo_path or not os.path.exists(logo_path):
         return None
