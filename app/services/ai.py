@@ -1696,6 +1696,8 @@ def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = 
         "PROIBIDO ABSOLUTO em QUALQUER frame e QUALQUER lugar do quadro: TEXTO, letra, palavra, número, legenda, título; "
         "LOGO, marca, logotipo, watermark; INTERFACE/TELA de app ou celular com ícones/nomes/texto legível; nota musical com texto. "
         "Telas de aparelhos só com brilho ABSTRATO. NADA escrito em lugar nenhum — o texto e a marca entram DEPOIS pelo sistema. "
+        "ÁUDIO: APENAS som ambiente natural da cena e/ou trilha instrumental SUTIL — SEM fala, SEM narração, SEM vozes humanas, "
+        "SEM canto/letras (nada de pessoa falando; voz inventada pelo modelo sai garbled e acelerada). "
         "Acabamento de revista: foco nítido, micro-contraste, grão fino, zero aspecto amador."
     )
 
@@ -1715,12 +1717,17 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     else:
         dur_rule = ("DECIDA a duração ideal do reel (o que performa melhor — normalmente 15 a 60s) e quebre em cenas. ")
     system = (
-        "Você é roteirista/estrategista de reels. A partir do briefing, " + dur_rule +
-        "Cada cena dura 4, 8 ou 12 segundos. "
-        'Responda SOMENTE JSON: {"total_seconds": N, "scenes":[{"desc":"cena visual","seconds":8}, ...]} . '
-        "Cada 'desc': uma CENA REAL e cinematográfica (pessoas, ambiente, EMOÇÃO/benefício, ação, movimento de câmera). "
-        "MOSTRE a sensação/benefício do produto, NÃO a tela do app. PROIBIDO: descrever telas de celular/app, "
-        "interfaces, ícones, textos, logos ou nomes de marca. Só cena fotográfica em movimento. PT-BR."
+        "Você é DIRETOR de reels/vídeo publicitário no nível das agências g4.business e v4company. A partir do briefing, "
+        + dur_rule +
+        "Monte um ROTEIRO CINEMATOGRÁFICO com ARCO: (1) GANCHO visual forte nos primeiros segundos (prende o olho), "
+        "(2) DESENVOLVIMENTO mostrando o VALOR/benefício de forma concreta e emocional, (3) CLÍMAX/virada que deixa o gancho "
+        "pro CTA. NÃO crie cena de CTA nem de logo — o sistema desenha CTA, logo, texto e marca DEPOIS. "
+        "Cada cena é uma CENA VISUAL REAL e cinematográfica: ambiente brasileiro real, sujeito (PESSOA natural OU produto/elemento "
+        "— o que MELHOR ilustrar), AÇÃO, EMOÇÃO e MOVIMENTO de câmera. CONTINUIDADE entre as cenas (mesmo personagem/clima/paleta). "
+        "MOSTRE a sensação/benefício, NÃO a tela do app. "
+        'Responda SOMENTE JSON válido e compacto: {"scenes":[{"desc":"cena visual cinematográfica concreta + movimento","seconds":8}, ...]} . '
+        "PROIBIDO em 'desc': qualquer TEXTO, letra, legenda, número; LOGO, marca, nome de marca; TELA/interface de app/celular com "
+        "conteúdo legível, ícones ou nomes. Só a CENA fotográfica em movimento, em PT-BR."
     )
     user = f"Empresa: {company.get('name','')} ({company.get('segment','')}). Briefing/tema: {theme}. Direção visual: {video_prompt}"
     allowed = [4, 8, 12]
