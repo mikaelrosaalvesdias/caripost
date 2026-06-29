@@ -1176,11 +1176,19 @@ async def generate_post_video(request: Request):
     size = body.get("size") or "720x1280"
     try:
         import asyncio
-        prompts = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt, scenes)
+        try:
+            per_seconds = max(1, int(float(seconds)))
+        except Exception:
+            per_seconds = 8
+        storyboard = await asyncio.to_thread(
+            build_video_storyboard, company, theme, video_prompt, scenes * per_seconds, scenes, per_seconds
+        )
+        prompts = [s.get("prompt") for s in (storyboard or []) if isinstance(s, dict) and s.get("prompt")]
+        prompts = prompts[:scenes] or [build_video_prompt(company, theme, video_prompt)]
         jobs = []
         for sp in prompts:
             j = await asyncio.to_thread(create_video_job, sp, seconds, size)
-            jid = j.get("id")
+            jid = j.get("id") or j.get("job_id") or j.get("task_id")
             if jid:
                 jobs.append(jid)
         if not jobs:
@@ -1222,18 +1230,22 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
         for i, sp in enumerate(scene_prompts):
             _w({"status": "generating", "scene": i + 1, "total": total, "cost_usd": round(cost, 2)})
             job = create_video_job(sp, str(seconds or ""), "720x1280", first_frame_url, None)
-            jid2 = job.get("id") or job.get("job_id")
+            jid2 = job.get("id") or job.get("job_id") or job.get("task_id")
             if not jid2:
                 raise ValueError(f"sem job id na cena {i + 1}")
-            done = False
-            for _ in range(45):                                  # ~11min teto por cena
-                _time.sleep(15)
-                st = get_video_job(jid2)
-                status = str(st.get("status") or "").lower()
-                if status in ("completed", "succeeded", "success", "done"):
-                    cost += float((st.get("usage") or {}).get("cost") or 0); done = True; break
-                if status in ("failed", "error", "canceled", "cancelled"):
-                    raise ValueError(f"cena {i + 1} falhou no provedor")
+            status0 = str(job.get("status") or "").lower()
+            done = status0 in ("completed", "succeeded", "success", "done")
+            if done:
+                cost += float((job.get("usage") or {}).get("cost") or 0)
+            else:
+                for _ in range(45):                              # ~11min teto por cena
+                    _time.sleep(15)
+                    st = get_video_job(jid2)
+                    status = str(st.get("status") or "").lower()
+                    if status in ("completed", "succeeded", "success", "done"):
+                        cost += float((st.get("usage") or {}).get("cost") or 0); done = True; break
+                    if status in ("failed", "error", "canceled", "cancelled"):
+                        raise ValueError(f"cena {i + 1} falhou no provedor")
             if not done:
                 raise ValueError(f"cena {i + 1} demorou demais")
             cp = os.path.join(jdir, f"{jid}_c{i}.mp4")
@@ -1315,7 +1327,8 @@ async def video_preflight(request: Request):
         return err
     body = await request.json()
     from ..services.ai import (build_video_storyboard, get_video_config, get_setting,
-                               video_model_max_seconds, _video_catalog_entry, usd_to_brl, video_clip_price)
+                               video_model_max_seconds, _video_catalog_entry, usd_to_brl, video_clip_price,
+                               video_price_per_second)
     if not get_video_config():
         return {"configured": False}
     company = company_get(body.get("company_id"))
@@ -1348,12 +1361,21 @@ async def video_preflight(request: Request):
     n = len(prompts)
     _vm = get_setting("video.model") or ""
     ent = _video_catalog_entry(_vm)
-    price = video_clip_price(_vm)                  # preço REAL aprendido se já houver; senão catálogo
     name = ent[2] if ent else (_vm or "modelo")
-    total_usd = round(price * n, 2)
-    return {"configured": True, "model": name, "scenes": n, "total_seconds": sum(secs),
+    total_s = sum(secs)
+    persec = video_price_per_second(_vm)           # preço REAL por segundo (OpenRouter) → custo bate 100%
+    if persec > 0:
+        total_usd = round(persec * total_s, 2)
+        price = round(persec * (secs[0] if secs else 8), 2)
+        real = True
+    else:
+        price = video_clip_price(_vm)
+        total_usd = round(price * n, 2)
+        real = bool(get_setting("video.price." + _vm))
+    return {"configured": True, "model": name, "scenes": n, "total_seconds": total_s,
+            "seconds_per_scene": (secs[0] if secs else 8), "scene_seconds": secs,
             "price_per_clip_usd": price, "total_usd": total_usd, "total_brl": round(usd_to_brl(total_usd), 2),
-            "price_learned": bool(get_setting("video.price." + _vm)), "storyboard": prompts}
+            "price_real": real, "storyboard": prompts}
 
 
 @router.post("/branded-video-status")
@@ -1414,9 +1436,9 @@ async def video_status(request: Request, jobs: str = "", company_id: str = ""):
         import asyncio
         states = await asyncio.gather(*[asyncio.to_thread(get_video_job, i) for i in ids])
         norm = [(s.get("status") or s.get("state") or "").lower() for s in states]
-        if any(n in ("failed", "error", "cancelled") for n in norm):
-            return {"status": "failed", "error": "Um dos clipes falhou no Sora."}
-        done = [n in ("completed", "succeeded", "success") for n in norm]
+        if any(n in ("failed", "error", "canceled", "cancelled") for n in norm):
+            return {"status": "failed", "error": "Um dos clipes falhou no provedor de vídeo."}
+        done = [n in ("completed", "succeeded", "success", "done") for n in norm]
         if not all(done):
             return {"status": "processing", "done": sum(done), "total": len(ids)}
         if not company_id:

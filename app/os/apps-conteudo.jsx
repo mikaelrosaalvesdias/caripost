@@ -39,7 +39,8 @@ function VideoCreator({ company }) {
     setBusy(true); setMsg(''); setStatus(null);
     setProc({ open: true, pct: 3, detail: 'Iniciando a geração do vídeo…', phase: '' });
     try {
-      const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, storyboard: pf.storyboard });
+      const sceneSeconds = pf.seconds_per_scene || ((pf.scene_seconds || [])[0]) || 8;
+      const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, storyboard: pf.storyboard, seconds: sceneSeconds });
       if (!r || !r.job) { setProc({ open: true, phase: 'error', detail: ((r && r.detail) || 'não consegui iniciar') }); setBusy(false); return; }
       const tot = r.scenes || pf.scenes || 1;
       for (let i = 0; i < 160; i++) {

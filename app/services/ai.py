@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 SETTINGS_WHITELIST: Dict[str, List[str]] = {
     "ai": ["anthropic", "openai", "openrouter", "cometapi"],
     "image": ["openai", "openrouter", "fal", "cometapi", "piapi", "omniroute"],
-    "video": ["fal", "openai", "openrouter"],
+    "video": ["fal", "openai", "openrouter", "cometapi"],
 }
 
 EXTRA_KEYS = {"postiz.url", "postiz.apiKey", "ai.apiKey"}
@@ -627,22 +627,20 @@ CURATED_VIDEO = [
     ("google/veo-3.1-lite", "veo-3.1-lite", "Boa", 0.18, 8),
 ]
 
-# Modelos de VÍDEO da CometAPI (id real do /v1/models). (id, nome, qualidade, preço USD/clipe, MAX_SEGUNDOS).
+# Modelos de VÍDEO da CometAPI que usam o contrato documentado POST/GET /v1/videos.
+# Kling/Runway/xAI ficam fora daqui porque usam rotas próprias; listar esses ids no mesmo
+# seletor fazia o app cobrar tentativa em endpoint errado.
 CURATED_VIDEO_COMET = [
-    ("veo3.1-pro", "veo3.1-pro", "Top", 0.50, 8),
     ("veo3.1", "veo3.1", "Top", 0.45, 8),
     ("sora-2-pro", "sora-2-pro", "Top", 0.50, 12),
     ("doubao-seedance-2-0", "seedance-2.0", "Top", 0.40, 12),
-    ("kling_video", "kling-video", "Top", 0.40, 10),
     ("veo3.1-fast", "veo3.1-fast", "Alta", 0.30, 8),
     ("sora-2", "sora-2", "Alta", 0.30, 12),
     ("doubao-seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30, 10),
-    ("minimax-hailuo-02", "hailuo-02", "Alta", 0.28, 10),
-    ("luma-video", "luma-video", "Alta", 0.30, 9),
-    ("viduq3", "viduq3", "Alta", 0.28, 8),
     ("wan2.7", "wan-2.7", "Alta", 0.25, 5),
+    ("viduq3", "viduq3", "Alta", 0.28, 8),
     ("veo3", "veo3", "Alta", 0.30, 8),
-    ("runway_video", "runway-video", "Alta", 0.40, 10),
+    ("omni-fast", "omni-fast", "Boa", 0.20, 4),
 ]
 
 
@@ -1658,6 +1656,35 @@ def video_clip_price(model_id: str = "") -> float:
     return ent[0] if ent else 0.40
 
 
+def video_price_per_second(model_id: str = "") -> float:
+    """Preço REAL por SEGUNDO (pricing_skus do OpenRouter, 720p c/ áudio) — custo bate 100%. Cacheia em settings.
+    Só OpenRouter; Comet/OpenAI retornam 0 (cai no preço de catálogo)."""
+    mid = (model_id or get_setting("video.model") or "").strip()
+    if not mid or mid.startswith("cometapi:") or "/" not in mid:
+        return 0.0
+    cached = get_setting("video.persec." + mid)
+    if cached:
+        try:
+            return float(cached)
+        except Exception:
+            pass
+    try:
+        ok = _openrouter_key()
+        data = httpx.get("https://openrouter.ai/api/v1/videos/models",
+                         headers={"Authorization": "Bearer " + ok}, timeout=20).json().get("data") or []
+        sk = (next((x for x in data if x.get("id") == mid), {}) or {}).get("pricing_skus") or {}
+        ps = float(sk.get("per-video-second") or sk.get("per-video-second-720p")
+                   or sk.get("duration_seconds_with_audio_720p") or sk.get("duration_seconds_with_audio")
+                   or sk.get("text_to_video_duration_seconds_720p") or sk.get("duration_seconds") or 0)
+        if ps > 0:
+            from datetime import datetime, timezone
+            from ..db import settings_set
+            settings_set(key="video.persec." + mid, value=str(ps), updated_at=datetime.now(timezone.utc).isoformat())
+        return ps
+    except Exception:
+        return 0.0
+
+
 def video_cost_estimate(target_seconds: int, model_id: str = "") -> Dict[str, Any]:
     """PREFLIGHT: nº de cenas + custo p/ a duração no modelo. Usa preço APRENDIDO (real) se já houver; senão catálogo."""
     mid = model_id or get_setting("video.model") or ""
@@ -1670,6 +1697,14 @@ def video_cost_estimate(target_seconds: int, model_id: str = "") -> Dict[str, An
     return {"model": name, "model_id": mid, "max_seconds": mx, "scenes": n,
             "price_per_clip_usd": price, "total_usd": total, "total_brl": round(usd_to_brl(total), 2),
             "price_learned": bool(get_setting("video.price." + (mid or "")))}
+
+
+def _video_seconds_value(seconds: str, default: int = 8) -> int:
+    try:
+        val = int(float(seconds)) if seconds is not None and str(seconds).strip() else default
+    except Exception:
+        val = default
+    return max(1, val)
 
 
 def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
@@ -1775,21 +1810,22 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
     prov = config["provider"]
     mdl = model or config["model"]
     if prov == "openrouter":
-        # OpenRouter: POST /api/v1/videos (async). frame_images=first_frame emenda as cenas (recurso OFICIAL).
-        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000]}
+        # OpenRouter POST /api/v1/videos: duration inteiro + frame_images tipado.
+        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000], "generate_audio": True}
         if aspect_ratio:
-            body["aspect_ratio"] = aspect_ratio          # 9:16 vertical (senão sai 16:9 — verificado no teste)
-        if seconds:
-            body["seconds"] = str(seconds)
+            body["aspect_ratio"] = aspect_ratio
+        body["duration"] = _video_seconds_value(seconds)
+        body["resolution"] = "720p"
         if first_frame_url:
-            body["frame_images"] = [{"frame_type": "first_frame", "image_url": first_frame_url}]
+            # OpenRouter exige type=image_url; sem isso retorna ZodError em frame_images[0].type.
+            body["frame_images"] = [{"type": "image_url", "image_url": {"url": first_frame_url}, "frame_type": "first_frame"}]
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
             res = client.post(config["base"] + "/videos",
                               headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
                               json=body)
         if res.status_code >= 400:
             raise ValueError(f"Falha ao criar vídeo OpenRouter (HTTP {res.status_code}): {res.text[:300]}")
-        return res.json()    # {id, status, ...} — VERIFICAR shape no 1º teste real
+        return res.json()
     if prov == "openai":
         body = {"model": mdl or "sora-2", "prompt": prompt[:4000], "seconds": str(seconds), "size": size}
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
@@ -1804,19 +1840,21 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
             raise ValueError(f"Falha ao criar vídeo (HTTP {res.status_code}): {detail}")
         return res.json()
     if prov == "cometapi":
-        # CometAPI é OpenAI-compat → tenta /videos (async, igual Sora). first_frame não suportado aqui.
-        body = {"model": mdl, "prompt": prompt[:4000]}
-        if seconds:
-            body["seconds"] = str(seconds)
-        if size:
-            body["size"] = size
+        # CometAPI vídeo documentado: POST /v1/videos multipart/form-data, retorna task id;
+        # polling em GET /v1/videos/{id}; download em /content ou video_url.
+        fields = [
+            ("model", (None, mdl)),
+            ("prompt", (None, prompt[:4000])),
+            ("seconds", (None, str(_video_seconds_value(seconds, 4)))),
+            ("aspect_ratio", (None, aspect_ratio or "9:16")),
+            ("resolution", (None, "720p")),
+        ]
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
             res = client.post(config["base"] + "/videos",
-                              headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
-                              json=body)
+                              headers={"Authorization": f"Bearer {config['apiKey']}"},
+                              files=fields)
         if res.status_code >= 400:
-            raise ValueError(f"CometAPI não aceitou esse modelo de vídeo (HTTP {res.status_code}). "
-                             f"Tente um modelo OpenRouter (veo/seedance/kling). Detalhe: {res.text[:200]}")
+            raise ValueError(f"Falha ao criar vídeo CometAPI (HTTP {res.status_code}): {res.text[:300]}")
         return res.json()
     raise ValueError(f"Provedor de vídeo '{prov}' não suportado.")
 
@@ -1827,6 +1865,8 @@ def get_video_job(job_id: str) -> Dict[str, Any]:
     key = config["apiKey"] if config else ""
     with httpx.Client(timeout=60) as client:
         res = client.get(f"{base}/videos/{job_id}", headers={"Authorization": f"Bearer {key}"})
+    if res.status_code >= 400:
+        raise ValueError(f"Falha ao consultar vídeo (HTTP {res.status_code}): {res.text[:300]}")
     return res.json()
 
 
@@ -1848,6 +1888,16 @@ def _video_url_from_job(job: Dict[str, Any]) -> str:
     return ""
 
 
+def _download_video_url(url: str, headers: Dict[str, str]) -> bytes:
+    parsed_host = url.split("/", 3)[2] if "://" in url else ""
+    needs_auth = parsed_host.endswith("openrouter.ai") or parsed_host.endswith("cometapi.com")
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+        res = client.get(url, headers=(headers if needs_auth else {}))
+    if res.status_code >= 400:
+        raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
+    return res.content
+
+
 def download_video(job_id: str) -> bytes:
     config = get_video_config()
     if not config:
@@ -1860,12 +1910,13 @@ def download_video(job_id: str) -> bytes:
         if res.status_code >= 400:
             raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
         return res.content
-    # OpenRouter/Comet: o job concluído traz a URL do vídeo → baixa de lá.
-    vurl = _video_url_from_job(get_video_job(job_id))
-    if not vurl:
-        raise ValueError("Vídeo pronto mas sem URL no job (verificar shape do provedor no 1º teste real).")
+    job = get_video_job(job_id)
+    vurl = _video_url_from_job(job)
+    if vurl:
+        return _download_video_url(vurl, H)
+    suffix = "/content?index=0" if prov == "openrouter" else "/content"
     with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
-        res = client.get(vurl, headers=H)
+        res = client.get(f"{base}/videos/{job_id}{suffix}", headers=H)
     if res.status_code >= 400:
         raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
     return res.content

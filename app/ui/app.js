@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.26.98', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: OpenRouter agora usa duration e frame_images no schema oficial, evitando erro Zod em first frame.' },
+      { type: 'fix', text: 'Vídeo: CometAPI usa POST /v1/videos multipart + polling/download documentados; modelos Comet com rotas próprias saíram do seletor para evitar cobrança em endpoint errado.' },
+      { type: 'fix', text: 'Vídeo: geração branded usa segundos por cena do preflight e endpoints legados passam prompt string, não objeto de storyboard.' },
+    ],
+  },
+  {
     version: 'v1.26.61', date: '2026-06-28',
     items: [
       { type: 'fix', text: 'Conteúdo: rollback do motor de proteção/recorte que deixou post fixo com cara de template e reduziu criatividade.' },

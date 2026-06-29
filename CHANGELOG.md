@@ -2,6 +2,14 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.26.98 - 2026-06-29
+
+- **fix: Vídeo OpenRouter sem cobrança por payload inválido.** `create_video_job` agora manda `duration` inteiro, `resolution`, `aspect_ratio` e `frame_images` no schema oficial (`type=image_url`, `image_url.url`, `frame_type`), eliminando o erro Zod em `frame_images[0].type`.
+- **fix: Vídeo CometAPI pelo contrato documentado.** Comet volta para `POST /v1/videos` com `multipart/form-data`, polling em `GET /v1/videos/{id}` e download por `video_url` ou `/content`; modelos Comet com rotas próprias foram removidos do seletor genérico para evitar tentativa cobrada em endpoint errado.
+- **fix: Fluxo branded/legado de vídeo.** O frontend envia segundos por cena do preflight, o backend aceita `task_id`, centraliza o download e o endpoint legado passa prompt string para o provider.
+- **teste: Validação sem custo.** Adicionado `scripts/test_video_providers_no_api.py`, que intercepta HTTP e prova os payloads de OpenRouter/Comet sem chamar APIs reais.
+- Versão: main.py 1.26.98, OS/UI cache bust v=12698.
+
 ## v1.26.61 - 2026-06-28
 
 - **fix: Rollback da engine visual recente.** Revertidos os commits do motor de proteção/recorte que deixaram post fixo com caixa de carrossel e reduziram criatividade visual.
