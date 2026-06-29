@@ -1390,11 +1390,19 @@ async def generate_branded_video(request: Request):
     handle = ((company.get("socials") or {}).get("instagram") or "").strip()
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
     phone = (f"({phone_raw[:2]}) {phone_raw[2:7]}-{phone_raw[7:]}" if len(phone_raw) == 11 else (company.get("phone") or "")).strip()
-    # CTA NÃO usa o briefing/theme cru como título (vira texto estranho no card). Headline = nome da marca
-    # (curto e on-brand); botão e telefone vêm do cadastro. Eyebrow opcional do segmento.
-    cta = {"eyebrow": (company.get("segment") or "").strip(),
-           "title": (body.get("cta_title") or company.get("name") or "Fale com a gente").strip(),
-           "cta": (body.get("cta") or "Fale com a gente").strip(), "phone": phone}
+    # CTA GERADO pelo briefing (igual carrossel: NADA fixo, com ESTRUTURA) — eyebrow + headline de valor +
+    # subtítulo + botão, ancorado no produto/KB. Render usa o MESMO motor do carrossel (compose_card_slide).
+    from ..services.ai import build_video_cta
+    try:
+        cta = await asyncio.to_thread(build_video_cta, company, theme, None)
+    except Exception:
+        cta = {"eyebrow": (company.get("segment") or "").strip(),
+               "title": company.get("name") or "Fale com a gente", "subtitle": "", "cta": "Fale com a gente"}
+    if body.get("cta_title"):                 # override manual do usuário, se mandar
+        cta["title"] = str(body.get("cta_title")).strip()
+    if body.get("cta"):
+        cta["cta"] = str(body.get("cta")).strip()
+    cta["phone"] = phone                      # telefone só p/ fallback do card PIL
     jid = _uuid.uuid4().hex
     base_url = str(request.base_url).rstrip("/")
     # Os provedores de vídeo (OpenRouter/Comet) BAIXAM o frame de continuidade por HTTP externo.

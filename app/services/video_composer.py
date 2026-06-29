@@ -58,7 +58,7 @@ def _wrap(d: ImageDraw.ImageDraw, text: str, font, max_w: int) -> List[str]:
     return out
 
 
-def _grade_filter(colors: Dict[str, Any], strength: float = 0.18) -> str:
+def _grade_filter(colors: Dict[str, Any], strength: float = 0.30) -> str:
     """Grade de cor da MARCA p/ TODO clipe (ffmpeg, determinístico): empurra sombras/midtones pra cor de acento
     + leve punch (contraste/saturação). Dá identidade de cor consistente mesmo com footage variado do modelo.
     'strength' é design token (default sutil); dá pra mover pra creative_config.design depois."""
@@ -145,8 +145,22 @@ def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[
 
 def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Optional[str],
                   site: str, handle: str, path: str) -> None:
-    """Card de CTA 9:16 desenhado direto em PIL no ESTILO da arte (eyebrow + título + botão + contato +
-    logo embaixo à esquerda). Controle total → sem resquício de carrossel, sempre 9:16."""
+    """CTA 9:16. PRIMEIRO tenta o MESMO motor do carrossel (compose_card_slide → identidade IDÊNTICA: cor, fonte,
+    layout editorial, eyebrow+headline+subtítulo+botão). Só cai no PIL local se o motor falhar (degradação graciosa)."""
+    try:
+        from .template_composer import compose_card_slide
+        slide = {"type": "cta", "eyebrow": (cta.get("eyebrow") or "").strip(),
+                 "title": (cta.get("title") or "Fale com a gente").strip(),
+                 "subtitle": (cta.get("subtitle") or cta.get("phone") or "").strip(),
+                 "cta": (cta.get("cta") or "Fale com a gente").strip()}
+        png = compose_card_slide(slide, 1, 1, colors, logo_path, site, handle,
+                                 _brand_bg_bytes(colors), None, None, None, (VW, VH))
+        if png and len(png) > 2000:
+            with open(path, "wb") as f:
+                f.write(png)
+            return
+    except Exception:
+        pass
     acc = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
     canvas = Image.open(io.BytesIO(_brand_bg_bytes(colors))).convert("RGBA")
     d = ImageDraw.Draw(canvas)
@@ -182,6 +196,16 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     # rodapé igual ao do clipe (logo embaixo-esq + site embaixo-dir alinhados) → transição limpa + 2ª logo (a grande no topo)
     _brand_frame(canvas, d, colors, logo_path, site)
     canvas.convert("RGB").save(path)
+
+
+def _has_audio(path: str) -> bool:
+    """True se o arquivo tem faixa de áudio (p/ preservar o áudio NATIVO do clipe, ex.: trilha da Comet)."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+                            "stream=index", "-of", "csv=p=0", path], capture_output=True, text=True, timeout=20)
+        return bool((r.stdout or "").strip())
+    except Exception:
+        return False
 
 
 def _media_dur(path: str) -> float:
@@ -246,12 +270,15 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
         seg = os.path.join(tmp, f"seg{i}.mp4")
         fc = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
               f"{_grade_filter(colors)}[v];[v][1:v]overlay=0:0[vout]")
-        # input 2 = áudio silencioso: com generate_audio=False o clipe vem MUDO; garante faixa de áudio
-        # uniforme em TODO segmento p/ o concat final não falhar (a=1 exige áudio em todos os inputs).
-        ok = _ff(["-i", cp, "-i", ov, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                  "-filter_complex", fc, "-map", "[vout]", "-map", "2:a",
-                  "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-                  "-ar", "44100", "-shortest", seg])
+        # PRESERVA o áudio NATIVO do clipe (ex.: trilha gerada pela Comet). Só injeta faixa silenciosa se o clipe
+        # vier MUDO (ex.: Veo c/ generate_audio=False) → o concat final exige áudio uniforme em todos os segmentos.
+        if _has_audio(cp):
+            cmd = ["-i", cp, "-i", ov, "-filter_complex", fc, "-map", "[vout]", "-map", "0:a"]
+        else:
+            cmd = ["-i", cp, "-i", ov, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                   "-filter_complex", fc, "-map", "[vout]", "-map", "2:a"]
+        ok = _ff(cmd + ["-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        "-ar", "44100", "-shortest", seg])
         if ok:
             segs.append(seg)
     if not segs:

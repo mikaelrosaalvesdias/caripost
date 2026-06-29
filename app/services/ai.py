@@ -2065,6 +2065,41 @@ def build_video_audio_plan(company: Dict[str, Any], theme: str, video_prompt: st
         return safe
 
 
+def build_video_cta(company: Dict[str, Any], theme: str, event: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """CTA do VÍDEO GERADO pelo briefing (igual carrossel: NADA fixo, mas com ESTRUTURA). Retorna
+    {eyebrow,title,subtitle,cta} ancorado no produto/KB real. Custo-seguro: sem IA → CTA institucional simples.
+    O render usa o MESMO motor do carrossel (compose_card_slide)."""
+    name = (company.get("name") or "").strip()
+    seg = (company.get("segment") or "").strip()
+    safe = {"eyebrow": seg.upper(), "title": (name or "Fale com a gente"), "subtitle": "", "cta": "Fale com a gente"}
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        return safe
+    ctx = _video_brief_context(company, theme)
+    info = event_cta_info(event)
+    system = (
+        "Você escreve o CARD DE CTA de um reel publicitário — MESMA régua do carrossel: estrutura forte, copy de "
+        "agência, ESPECÍFICO (nada genérico). A partir do briefing e do produto, gere um CTA curto que fecha o vídeo. "
+        "PROIBIDO inventar preço ou datas. "
+        'Responda SOMENTE JSON: {"eyebrow":"<rótulo curto em MAIÚSCULAS (segmento/produto)>",'
+        '"title":"<headline de VALOR, 2-5 palavras, forte>","subtitle":"<1 frase de benefício/oferta>",'
+        '"cta":"<texto do botão (ex.: Fale com a gente / Quero contratar)>"}'
+    )
+    user = (f"Marca: {name} ({seg}). " + ctx + f"Briefing/tema: {theme}. "
+            + (f"Dado REAL do evento (use exatamente, não invente): {info}. " if info else ""))
+    try:
+        p = extract_json(complete_ai(config, system, user, 400)) or {}
+        out = {"eyebrow": (p.get("eyebrow") or seg).strip(),
+               "title": (p.get("title") or name or "Fale com a gente").strip(),
+               "subtitle": (p.get("subtitle") or "").strip(),
+               "cta": (p.get("cta") or "Fale com a gente").strip()}
+        if info:                                  # dado REAL do evento manda no subtítulo (fonte única)
+            out["subtitle"] = info
+        return out
+    except Exception:
+        return safe
+
+
 def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
                      first_frame_url: Optional[str] = None, model: Optional[str] = None,
                      aspect_ratio: str = "9:16") -> Dict[str, Any]:
