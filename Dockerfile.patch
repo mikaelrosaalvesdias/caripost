@@ -1,2 +1,0 @@
-FROM metaporn-new:1.26.79
-COPY app /app/app
