@@ -1277,13 +1277,13 @@
       return mpFetch('/api/posts/video-status?jobs=' + _enc(jobsCsv) + '&company_id=' + _enc(companyId || ''));
     },
     async videoPreflight(companyId, seconds) {
-      return mpFetch('/api/posts/video-preflight?company_id=' + _enc(companyId || '') + '&seconds=' + _enc(seconds || 8)).catch(() => ({ configured: false }));
+      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, seconds: seconds || 8 }) }).catch(() => ({ configured: false }));
     },
     async generateBrandedVideo(payload) {
       return mpFetch('/api/posts/generate-branded-video', { method: 'POST', body: JSON.stringify(payload) });
     },
     async brandedVideoStatus(companyId, job) {
-      return mpFetch('/api/posts/branded-video-status?company_id=' + _enc(companyId || '') + '&job=' + _enc(job || '')).catch(() => ({ status: 'unknown' }));
+      return mpFetch('/api/posts/branded-video-status', { method: 'POST', body: JSON.stringify({ company_id: companyId, job: job }) }).catch(() => ({ status: 'unknown' }));
     },
     async postStats() {
       return mpFetch('/api/posts/stats');

@@ -1296,29 +1296,32 @@ async def generate_branded_video(request: Request):
     return {"job": jid, "scenes": n, "estimate": video_cost_estimate(target)}
 
 
-@router.get("/video-preflight")
-def video_preflight(request: Request, company_id: str = "", seconds: int = 8):
-    """Custo ESTIMADO do vídeo (cenas + R$) SEM gerar nada — pro front mostrar antes de confirmar."""
+@router.post("/video-preflight")
+async def video_preflight(request: Request):
+    """Custo ESTIMADO do vídeo (cenas + R$) SEM gerar nada — pro front mostrar antes de confirmar.
+    POST (não GET) p/ não cair na rota coringa /{post_id}."""
     err = _api_key_required(request)
     if err:
         return err
+    body = await request.json()
     from ..services.ai import video_cost_estimate, get_video_config, get_setting
     if not get_video_config():
         return {"configured": False}
     try:
-        s = int(seconds)
+        s = int(body.get("seconds") or 8)
     except Exception:
         s = 8
     return {"configured": True, "model_id": get_setting("video.model"), **video_cost_estimate(s)}
 
 
-@router.get("/branded-video-status")
-def branded_video_status(request: Request, company_id: str = "", job: str = ""):
+@router.post("/branded-video-status")
+async def branded_video_status(request: Request):
     err = _api_key_required(request)
     if err:
         return err
     import json as _json
-    p = os.path.join(UPLOAD_DIR, company_id, "video", job + ".json")
+    body = await request.json()
+    p = os.path.join(UPLOAD_DIR, body.get("company_id") or "", "video", (body.get("job") or "") + ".json")
     if not os.path.exists(p):
         return {"status": "unknown"}
     try:
