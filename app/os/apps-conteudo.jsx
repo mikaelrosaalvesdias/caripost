@@ -43,7 +43,7 @@ function VideoCreator({ company }) {
       const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, storyboard: pf.storyboard, seconds: sceneSeconds });
       if (!r || !r.job) { setProc({ open: true, phase: 'error', detail: ((r && r.detail) || 'não consegui iniciar') }); setBusy(false); return; }
       const tot = r.scenes || pf.scenes || 1;
-      for (let i = 0; i < 160; i++) {
+      for (let i = 0; i < 360; i++) {
         await new Promise(res => setTimeout(res, 6000));
         const s = await window.mpApi.brandedVideoStatus(company.id, r.job);
         setStatus(s);

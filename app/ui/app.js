@@ -534,6 +534,28 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.1', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: CometAPI entregue sem usage.cost agora registra custo pelo catálogo/preflight, em vez de finalizar como R$ 0.' },
+      { type: 'fix', text: 'Vídeo: download final usa a configuração congelada do job, sem depender do modelo global durante jobs longos.' },
+    ],
+  },
+  {
+    version: 'v1.27.0', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: jobs agora congelam o provedor usado na criação, então trocar modelo durante a geração não quebra polling/download.' },
+      { type: 'fix', text: 'Vídeo: status mostra provider_job_id, status e progresso do provedor; CometAPI ganha janela maior de polling.' },
+      { type: 'fix', text: 'Vídeo: UI aguarda jobs longos sem declarar timeout antes do backend.' },
+    ],
+  },
+  {
+    version: 'v1.26.99', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: preços do seletor e do preflight agora vêm dos catálogos OpenRouter/CometAPI quando disponíveis.' },
+      { type: 'fix', text: 'Vídeo: duração travada respeita os segundos escolhidos quando o modelo permite, evitando cobrar/gerar clipe maior que o pedido.' },
+    ],
+  },
+  {
     version: 'v1.26.98', date: '2026-06-29',
     items: [
       { type: 'fix', text: 'Vídeo: OpenRouter agora usa duration e frame_images no schema oficial, evitando erro Zod em first frame.' },

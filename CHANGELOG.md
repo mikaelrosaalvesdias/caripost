@@ -2,6 +2,26 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.1 - 2026-06-29
+
+- **fix: Custo de vídeo CometAPI entregue.** Quando a CometAPI conclui o vídeo mas não devolve `usage.cost`, o job agora registra o custo pelo catálogo/preflight (`per_second` ou `per_request`) em vez de finalizar como `0.0`.
+- **fix: Download com provedor congelado.** O download final também usa a configuração congelada do job ao buscar a URL pronta, evitando dependência do modelo global durante jobs longos.
+- Versão: main.py 1.27.1, OS/UI cache bust v=12701.
+
+## v1.27.0 - 2026-06-29
+
+- **fix: Jobs de vídeo com provedor congelado.** O background captura a configuração do provedor no início e usa a mesma base/key para criar, pollar e baixar, evitando quebra se o usuário trocar modelo enquanto o job roda.
+- **fix: Observabilidade do provedor.** O status do vídeo agora grava `provider`, `provider_job_id`, `provider_status` e `provider_progress`, permitindo depurar jobs lentos da CometAPI sem perder o ID remoto.
+- **fix: Timeout realista para CometAPI.** Comet ganha janela maior de polling no backend, e a UI aguarda jobs longos sem declarar timeout antes da plataforma.
+- Versão: main.py 1.27.0, OS/UI cache bust v=12700.
+
+## v1.26.99 - 2026-06-29
+
+- **fix: Preços reais no vídeo.** O seletor e o preflight agora consultam catálogos dos provedores quando disponíveis: OpenRouter `/api/v1/videos/models` (`pricing_skus`) e CometAPI `/api/models` (`pricing.per_second`/`per_request`), com cache em settings.
+- **fix: Duração cobrada/gerada.** Quando o usuário trava uma duração menor que o máximo do modelo, o backend usa a duração escolhida por cena em vez de sempre usar o máximo do modelo.
+- **fix: Catálogo CometAPI.** Adicionado `viduq3-turbo` e corrigidos preços fallback dos modelos Comet compatíveis com `/v1/videos`.
+- Versão: main.py 1.26.99, OS/UI cache bust v=12699.
+
 ## v1.26.98 - 2026-06-29
 
 - **fix: Vídeo OpenRouter sem cobrança por payload inválido.** `create_video_job` agora manda `duration` inteiro, `resolution`, `aspect_ratio` e `frame_images` no schema oficial (`type=image_url`, `image_url.url`, `frame_type`), eliminando o erro Zod em `frame_images[0].type`.

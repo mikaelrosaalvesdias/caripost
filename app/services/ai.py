@@ -631,17 +631,84 @@ CURATED_VIDEO = [
 # Kling/Runway/xAI ficam fora daqui porque usam rotas próprias; listar esses ids no mesmo
 # seletor fazia o app cobrar tentativa em endpoint errado.
 CURATED_VIDEO_COMET = [
-    ("veo3.1", "veo3.1", "Top", 0.45, 8),
-    ("sora-2-pro", "sora-2-pro", "Top", 0.50, 12),
+    ("veo3.1", "veo3.1", "Top", 2.56, 8),
+    ("sora-2-pro", "sora-2-pro", "Top", 2.88, 12),
     ("doubao-seedance-2-0", "seedance-2.0", "Top", 0.40, 12),
-    ("veo3.1-fast", "veo3.1-fast", "Alta", 0.30, 8),
-    ("sora-2", "sora-2", "Alta", 0.30, 12),
+    ("veo3.1-fast", "veo3.1-fast", "Alta", 0.64, 8),
+    ("sora-2", "sora-2", "Alta", 0.96, 12),
     ("doubao-seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30, 10),
-    ("wan2.7", "wan-2.7", "Alta", 0.25, 5),
-    ("viduq3", "viduq3", "Alta", 0.28, 8),
-    ("veo3", "veo3", "Alta", 0.30, 8),
-    ("omni-fast", "omni-fast", "Boa", 0.20, 4),
+    ("wan2.7", "wan-2.7", "Alta", 0.40, 5),
+    ("viduq3", "viduq3", "Alta", 0.448, 8),
+    ("viduq3-turbo", "viduq3-turbo", "Boa", 0.224, 8),
+    ("veo3", "veo3", "Alta", 2.56, 8),
+    ("omni-fast", "omni-fast", "Boa", 0.40, 4),
 ]
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def _openrouter_video_per_second(pricing_skus: Dict[str, Any]) -> float:
+    """USD/s for the 720p text/video path we request. Returns 0 when the API exposes token pricing only."""
+    if not isinstance(pricing_skus, dict):
+        return 0.0
+    for key in (
+        "duration_seconds_with_audio_720p",
+        "text_to_video_duration_seconds_720p",
+        "duration_seconds_720p",
+        "per-video-second-720p",
+        "per-video-second",
+        "duration_seconds_with_audio",
+        "text_to_video_duration_seconds",
+        "duration_seconds",
+    ):
+        val = _safe_float(pricing_skus.get(key))
+        if val > 0:
+            return val
+    for key in ("cents_per_video_output_second_720p", "cents_per_video_output_second_480p"):
+        val = _safe_float(pricing_skus.get(key))
+        if val > 0:
+            return val / 100.0
+    return 0.0
+
+
+def _openrouter_video_catalog() -> Dict[str, Dict[str, Any]]:
+    key = _openrouter_key()
+    if not key:
+        return {}
+    try:
+        with httpx.Client(timeout=20) as c:
+            res = c.get("https://openrouter.ai/api/v1/videos/models", headers={"Authorization": f"Bearer {key}"})
+        if res.status_code >= 400:
+            return {}
+        return {m.get("id"): m for m in (res.json().get("data") or []) if m.get("id")}
+    except Exception:
+        return {}
+
+
+def _cometapi_model_catalog() -> Dict[str, Dict[str, Any]]:
+    key = _cometapi_key()
+    if not key:
+        return {}
+    try:
+        with httpx.Client(timeout=20) as c:
+            res = c.get("https://api.cometapi.com/api/models", headers={"Authorization": f"Bearer {key}"})
+        if res.status_code >= 400:
+            return {}
+        return {m.get("id"): m for m in (res.json().get("data") or []) if m.get("id")}
+    except Exception:
+        return {}
+
+
+def _cometapi_video_prices(model: Dict[str, Any]) -> Tuple[float, float]:
+    pricing = model.get("pricing") or {}
+    if not isinstance(pricing, dict):
+        return 0.0, 0.0
+    return _safe_float(pricing.get("per_second")), _safe_float(pricing.get("per_request"))
 
 
 def _openrouter_avail(url: str) -> set:
@@ -670,9 +737,16 @@ def openrouter_image_models() -> List[Dict[str, Any]]:
 
 def openrouter_video_models() -> List[Dict[str, Any]]:
     """Top-10 modelos de vídeo curados (ranking), só os disponíveis no OpenRouter."""
-    avail = _openrouter_avail("https://openrouter.ai/api/v1/videos/models")
-    out = [{"id": s, "name": n, "quality": q, "price_per_video": p, "max_seconds": sec, "rank": i}
-           for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO) if not avail or s in avail]
+    catalog = _openrouter_video_catalog()
+    avail = set(catalog)
+    out = []
+    for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO):
+        if avail and s not in avail:
+            continue
+        per_second = _openrouter_video_per_second((catalog.get(s) or {}).get("pricing_skus") or {})
+        price = round(per_second * sec, 4) if per_second > 0 else p
+        out.append({"id": s, "name": n, "quality": q, "price_per_video": price, "price_per_second": per_second,
+                    "max_seconds": sec, "rank": i, "price_source": "catalog_api" if per_second > 0 else "fallback"})
     return out or [{"id": s, "name": n, "quality": q, "price_per_video": p, "max_seconds": sec, "rank": i}
                    for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO)]
 
@@ -681,8 +755,15 @@ def cometapi_video_models() -> List[Dict[str, Any]]:
     """Modelos de VÍDEO da CometAPI (curados). id prefixado 'cometapi:'. Preço aprox. de mercado por clipe."""
     if not _cometapi_key():
         return []
-    return [{"id": "cometapi:" + s, "name": n, "quality": q, "price_per_video": p, "max_seconds": sec, "rank": i}
-            for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO_COMET)]
+    catalog = _cometapi_model_catalog()
+    out = []
+    for i, (s, n, q, p, sec) in enumerate(CURATED_VIDEO_COMET):
+        per_second, per_request = _cometapi_video_prices(catalog.get(s) or {})
+        price = round(per_second * sec, 4) if per_second > 0 else (round(per_request, 4) if per_request > 0 else p)
+        out.append({"id": "cometapi:" + s, "name": n, "quality": q, "price_per_video": price,
+                    "price_per_second": per_second, "price_per_request": per_request,
+                    "max_seconds": sec, "rank": i, "price_source": "catalog_api" if (per_second > 0 or per_request > 0) else "fallback"})
+    return out
 
 
 def omniroute_image_models() -> List[Dict[str, Any]]:
@@ -1657,10 +1738,9 @@ def video_clip_price(model_id: str = "") -> float:
 
 
 def video_price_per_second(model_id: str = "") -> float:
-    """Preço REAL por SEGUNDO (pricing_skus do OpenRouter, 720p c/ áudio) — custo bate 100%. Cacheia em settings.
-    Só OpenRouter; Comet/OpenAI retornam 0 (cai no preço de catálogo)."""
+    """Preço real por segundo via catálogo do provedor, quando disponível. Cacheia em settings."""
     mid = (model_id or get_setting("video.model") or "").strip()
-    if not mid or mid.startswith("cometapi:") or "/" not in mid:
+    if not mid:
         return 0.0
     cached = get_setting("video.persec." + mid)
     if cached:
@@ -1669,13 +1749,13 @@ def video_price_per_second(model_id: str = "") -> float:
         except Exception:
             pass
     try:
-        ok = _openrouter_key()
-        data = httpx.get("https://openrouter.ai/api/v1/videos/models",
-                         headers={"Authorization": "Bearer " + ok}, timeout=20).json().get("data") or []
-        sk = (next((x for x in data if x.get("id") == mid), {}) or {}).get("pricing_skus") or {}
-        ps = float(sk.get("per-video-second") or sk.get("per-video-second-720p")
-                   or sk.get("duration_seconds_with_audio_720p") or sk.get("duration_seconds_with_audio")
-                   or sk.get("text_to_video_duration_seconds_720p") or sk.get("duration_seconds") or 0)
+        if mid.startswith("cometapi:"):
+            raw = mid[len("cometapi:"):]
+            ps, _per_request = _cometapi_video_prices(_cometapi_model_catalog().get(raw) or {})
+        elif "/" in mid:
+            ps = _openrouter_video_per_second((_openrouter_video_catalog().get(mid) or {}).get("pricing_skus") or {})
+        else:
+            ps = 0.0
         if ps > 0:
             from datetime import datetime, timezone
             from ..db import settings_set
@@ -1683,6 +1763,29 @@ def video_price_per_second(model_id: str = "") -> float:
         return ps
     except Exception:
         return 0.0
+
+
+def video_model_id_from_config(config: Optional[Dict[str, Any]]) -> str:
+    """Reconstrói o id do catálogo a partir da config congelada do job."""
+    if not config:
+        return (get_setting("video.model") or "").strip()
+    provider = (config.get("provider") or "").strip()
+    model = (config.get("model") or "").strip()
+    if provider == "cometapi" and model and not model.startswith("cometapi:"):
+        return "cometapi:" + model
+    return model or (get_setting("video.model") or "").strip()
+
+
+def video_estimated_clip_cost(model_id: str = "", seconds: Any = None) -> float:
+    """Custo estimado de uma cena quando o provedor nao retorna usage.cost."""
+    mid = (model_id or get_setting("video.model") or "").strip()
+    if not mid:
+        return 0.0
+    sec = _video_seconds_value(str(seconds or ""), video_model_max_seconds(mid))
+    persec = video_price_per_second(mid)
+    if persec > 0:
+        return round(persec * sec, 4)
+    return round(video_clip_price(mid), 4)
 
 
 def video_cost_estimate(target_seconds: int, model_id: str = "") -> Dict[str, Any]:
@@ -1859,8 +1962,8 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
     raise ValueError(f"Provedor de vídeo '{prov}' não suportado.")
 
 
-def get_video_job(job_id: str) -> Dict[str, Any]:
-    config = get_video_config()
+def get_video_job(job_id: str, config_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    config = config_override or get_video_config()
     base = config["base"] if config else "https://api.openai.com/v1"
     key = config["apiKey"] if config else ""
     with httpx.Client(timeout=60) as client:
@@ -1898,8 +2001,8 @@ def _download_video_url(url: str, headers: Dict[str, str]) -> bytes:
     return res.content
 
 
-def download_video(job_id: str) -> bytes:
-    config = get_video_config()
+def download_video(job_id: str, config_override: Optional[Dict[str, Any]] = None) -> bytes:
+    config = config_override or get_video_config()
     if not config:
         raise ValueError("Geração de vídeo não configurada.")
     prov, base = config["provider"], config["base"]
@@ -1910,7 +2013,7 @@ def download_video(job_id: str) -> bytes:
         if res.status_code >= 400:
             raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
         return res.content
-    job = get_video_job(job_id)
+    job = get_video_job(job_id, config)
     vurl = _video_url_from_job(job)
     if vurl:
         return _download_video_url(vurl, H)

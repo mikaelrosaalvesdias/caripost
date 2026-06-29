@@ -94,6 +94,27 @@ def test_openrouter_download_content_url():
     assert FakeClient.calls[-1]["headers"]["Authorization"] == "Bearer test-key"
 
 
+def test_price_parsers():
+    assert ai._openrouter_video_per_second({"duration_seconds_with_audio_720p": "0.05"}) == 0.05
+    assert ai._openrouter_video_per_second({"cents_per_video_output_second_720p": "7"}) == 0.07
+    assert ai._openrouter_video_per_second({"video_tokens": "0.0000012"}) == 0.0
+    assert ai._cometapi_video_prices({"pricing": {"per_second": 0.028, "per_request": 0.4}}) == (0.028, 0.4)
+
+
+def test_cost_fallback_helpers():
+    original_per_second = ai.video_price_per_second
+    original_clip_price = ai.video_clip_price
+    try:
+        ai.video_price_per_second = lambda mid="": 0.028 if mid == "cometapi:viduq3-turbo" else 0.0
+        ai.video_clip_price = lambda mid="": 0.40
+        assert ai.video_model_id_from_config({"provider": "cometapi", "model": "viduq3-turbo"}) == "cometapi:viduq3-turbo"
+        assert ai.video_estimated_clip_cost("cometapi:viduq3-turbo", "4") == 0.112
+        assert ai.video_estimated_clip_cost("cometapi:omni-fast", "4") == 0.40
+    finally:
+        ai.video_price_per_second = original_per_second
+        ai.video_clip_price = original_clip_price
+
+
 if __name__ == "__main__":
     original_config = ai.get_video_config
     original_client = ai.httpx.Client
@@ -101,6 +122,8 @@ if __name__ == "__main__":
         test_openrouter_payload()
         test_comet_payload()
         test_openrouter_download_content_url()
+        test_price_parsers()
+        test_cost_fallback_helpers()
     finally:
         ai.get_video_config = original_config
         ai.httpx.Client = original_client

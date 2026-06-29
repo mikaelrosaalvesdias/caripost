@@ -1209,7 +1209,8 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
     """BACKGROUND: gera as cenas EM SEQUÊNCIA com continuidade (último frame → first_frame da próxima),
     baixa, e monta o vídeo branded. Escreve o progresso/custo num .json. SÓ roda quando o usuário confirma."""
     import json as _json, time as _time
-    from ..services.ai import create_video_job, get_video_job, download_video
+    from ..services.ai import (create_video_job, get_video_job, download_video, get_video_config,
+                               video_model_id_from_config, video_estimated_clip_cost)
     from ..services.video_composer import compose_branded_video, last_frame_png
     jdir = _video_job_dir(company_id)
     sp_path = os.path.join(jdir, jid + ".json")
@@ -1225,53 +1226,92 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
         return base_url + UPLOAD_URL_PREFIX + p[len(UPLOAD_DIR):]
 
     total = len(scene_prompts)
-    clips, cost, first_frame_url = [], 0.0, None
+    clips, cost, usage_cost, first_frame_url = [], 0.0, 0.0, None
+    cost_source = "provider_usage"
     try:
+        provider_config = get_video_config() or {}
+        provider_name = provider_config.get("provider") or "video"
+        provider_model_id = video_model_id_from_config(provider_config)
+        max_polls = 120 if provider_name == "cometapi" else 60
+
+        def _usage_or_estimated(payload):
+            nonlocal cost_source
+            raw = (payload.get("usage") or {}).get("cost") if isinstance(payload, dict) else None
+            try:
+                val = float(raw or 0)
+            except Exception:
+                val = 0.0
+            if val > 0:
+                return val, "provider_usage"
+            est = video_estimated_clip_cost(provider_model_id, seconds)
+            if est > 0:
+                cost_source = "catalog_estimate"
+            return est, "catalog_estimate"
+
         for i, sp in enumerate(scene_prompts):
-            _w({"status": "generating", "scene": i + 1, "total": total, "cost_usd": round(cost, 2)})
+            _w({"status": "generating", "scene": i + 1, "total": total, "provider": provider_name,
+                "provider_model": provider_model_id, "cost_usd": round(cost, 2), "cost_source": cost_source})
             job = create_video_job(sp, str(seconds or ""), "720x1280", first_frame_url, None)
             jid2 = job.get("id") or job.get("job_id") or job.get("task_id")
             if not jid2:
                 raise ValueError(f"sem job id na cena {i + 1}")
             status0 = str(job.get("status") or "").lower()
+            _w({"status": "generating", "scene": i + 1, "total": total, "provider": provider_name,
+                "provider_job_id": jid2, "provider_status": status0 or "created",
+                "provider_progress": job.get("progress"), "provider_model": provider_model_id,
+                "cost_usd": round(cost, 2), "cost_source": cost_source})
             done = status0 in ("completed", "succeeded", "success", "done")
             if done:
-                cost += float((job.get("usage") or {}).get("cost") or 0)
+                scene_cost, src = _usage_or_estimated(job)
+                cost += scene_cost
+                if src == "provider_usage":
+                    usage_cost += scene_cost
             else:
-                for _ in range(45):                              # ~11min teto por cena
+                for _ in range(max_polls):                       # OpenRouter ~15min; CometAPI pode demorar mais
                     _time.sleep(15)
-                    st = get_video_job(jid2)
+                    st = get_video_job(jid2, provider_config)
                     status = str(st.get("status") or "").lower()
+                    _w({"status": "generating", "scene": i + 1, "total": total, "provider": provider_name,
+                        "provider_job_id": jid2, "provider_status": status,
+                        "provider_progress": st.get("progress"), "provider_model": provider_model_id,
+                        "cost_usd": round(cost, 2), "cost_source": cost_source})
                     if status in ("completed", "succeeded", "success", "done"):
-                        cost += float((st.get("usage") or {}).get("cost") or 0); done = True; break
+                        scene_cost, src = _usage_or_estimated(st)
+                        cost += scene_cost
+                        if src == "provider_usage":
+                            usage_cost += scene_cost
+                        done = True; break
                     if status in ("failed", "error", "canceled", "cancelled"):
                         raise ValueError(f"cena {i + 1} falhou no provedor")
             if not done:
                 raise ValueError(f"cena {i + 1} demorou demais")
             cp = os.path.join(jdir, f"{jid}_c{i}.mp4")
             with open(cp, "wb") as f:
-                f.write(download_video(jid2))
+                f.write(download_video(jid2, provider_config))
             clips.append({"path": cp})
             lf = os.path.join(jdir, f"{jid}_f{i}.png")           # último frame → first_frame da próxima (continuidade)
             first_frame_url = _pub(lf) if last_frame_png(cp, lf) else None
-        _w({"status": "composing", "scene": total, "total": total, "cost_usd": round(cost, 2)})
+        _w({"status": "composing", "scene": total, "total": total,
+            "cost_usd": round(cost, 2), "cost_source": cost_source})
         out = os.path.join(jdir, jid + ".mp4")
         if not compose_branded_video(clips, out, colors, logo_path, cta, site, handle):
             raise ValueError("falha ao montar o vídeo final")
         try:                                          # APRENDE o preço real (usage.cost/cena) p/ a próxima previsão bater
-            if total and cost > 0:
+            if total and usage_cost > 0:
                 from ..services.ai import get_setting as _gs
                 from ..db import settings_set as _ss
                 from datetime import datetime, timezone
                 _m = _gs("video.model") or ""
                 if _m:
-                    _ss(key="video.price." + _m, value=str(round(cost / total, 4)),
+                    _ss(key="video.price." + _m, value=str(round(usage_cost / total, 4)),
                         updated_at=datetime.now(timezone.utc).isoformat())
         except Exception:
             pass
-        _w({"status": "done", "url": _pub(out), "cost_usd": round(cost, 2), "scenes": total})
+        _w({"status": "done", "url": _pub(out), "cost_usd": round(cost, 2),
+            "cost_source": cost_source, "scenes": total})
     except Exception as e:
-        _w({"status": "error", "detail": str(e)[:300], "cost_usd": round(cost, 2)})
+        _w({"status": "error", "detail": str(e)[:300],
+            "cost_usd": round(cost, 2), "cost_source": cost_source})
 
 
 @router.post("/generate-branded-video")
@@ -1341,7 +1381,7 @@ async def video_preflight(request: Request):
         target = 0
     mx = video_model_max_seconds()
     if target > 0:
-        per = min(mx, 12)
+        per = max(1, min(mx, target, 12))
         n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = custo)
     else:
         per, n_want = mx, 0
