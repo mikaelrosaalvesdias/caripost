@@ -500,7 +500,8 @@ async def generate_briefing_ep(request: Request):
         res = await asyncio.to_thread(generate_briefing, company, theme,
                                       body.get("objetivo") or "educar",
                                       body.get("formato") or "carrossel", n, intent, event,
-                                      [a for a in (body.get("apps") or []) if (a or "").strip()])
+                                      [a for a in (body.get("apps") or []) if (a or "").strip()],
+                                      body.get("seconds") or 0)
         return {"briefing": res.get("text", ""), "telas": res.get("telas", []), "formato": res.get("formato")}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)

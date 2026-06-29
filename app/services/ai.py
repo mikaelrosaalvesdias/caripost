@@ -1894,7 +1894,7 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
                            target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8) -> List[Dict[str, str]]:
     """Roteiro em CENAS. Se n_scenes>0 (usuário TRAVOU a duração) gera EXATAMENTE n_scenes cenas distintas de
     per_seconds cada; senão a IA decide (modo LIVRE). Retorna [{prompt, seconds}]."""
-    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": str(per_seconds or 8)}]
+    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": str(per_seconds or 8), "desc": (video_prompt or theme or "").strip()}]
     config = cheap_text_config(get_ai_config())
     if not config:
         return fallback
@@ -1953,7 +1953,7 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
             except Exception:
                 sec = 8
             sec = min(allowed, key=lambda a: abs(a - sec))  # snap to 4/8/12
-            out.append({"prompt": build_video_prompt(company, theme, desc), "seconds": str(sec)})
+            out.append({"prompt": build_video_prompt(company, theme, desc), "seconds": str(sec), "desc": desc})
         if out:
             return out
     except Exception:
@@ -2679,7 +2679,7 @@ def generate_carousel_caption(company: Dict[str, Any], telas: list, theme: str =
 def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educar",
                       formato: str = "carrossel", n_telas: int = 0,
                       intent: str = "produtos", event: Optional[Dict[str, Any]] = None,
-                      apps_focus: Optional[List[str]] = None) -> str:
+                      apps_focus: Optional[List[str]] = None, seconds: int = 0) -> str:
     """Plano de conteúdo COMPLETO a partir de um assunto, adaptado ao FORMATO e ao OBJETIVO.
     carrossel → plano tela a tela; video → roteiro em cenas; post → pauta rica. Texto (não JSON)."""
     config = cheap_text_config(get_ai_config())
@@ -2725,11 +2725,29 @@ def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educ
                           (f"  • CTA: {cta}" if cta else ""),
                           (f"  • Visual: {tela.get('visual')}" if tela.get('visual') else "")]).strip()
         return {"formato": fmt, "telas": [tela], "text": text}
-    # VÍDEO → roteiro em prosa.
+    # VÍDEO → MESMA engine da GERAÇÃO (build_video_storyboard): respeita a duração escolhida (8/15/30/60s),
+    # SÓ cena visual (sem texto na tela), ancorada no produto/KB real. O roteiro mostrado = o que VAI gerar.
     if fmt in ("video", "vídeo", "reel", "reels"):
-        user = base + G["video_template"]
-    else:  # fallback (pauta em prosa)
-        user = base + G["post_template"]
+        import math as _m
+        mx = video_model_max_seconds()
+        try:
+            target = int(float(seconds or 0))
+        except Exception:
+            target = 0
+        if target > 0:
+            per = max(1, min(mx, target, 12)); n_want = max(1, min(8, _m.ceil(target / per)))
+        else:
+            per, n_want = (mx or 8), 1            # sem duração → 1 cena concisa (custo mínimo no preview)
+        sb = build_video_storyboard(company, theme, theme, target, n_want, per)
+        linhas = [f"GRANDE IDEIA: {theme}",
+                  (f"Roteiro p/ ~{target or per}s · {len(sb)} cena(s) · SÓ imagem em movimento — "
+                   "texto, locução, marca e CTA entram na PÓS (o modelo de vídeo NÃO escreve)."), ""]
+        for i, s in enumerate(sb, 1):
+            linhas.append(f"Cena {i} ({s.get('seconds','')}s): {(s.get('desc') or '').strip()}")
+        return {"formato": fmt, "telas": [], "storyboard": [s.get("prompt") for s in sb],
+                "scene_seconds": [s.get("seconds") for s in sb], "text": "\n".join(linhas).strip()}
+    # POST/PAUTA em prosa (fallback)
+    user = base + G["post_template"]
     return {"formato": fmt, "telas": [], "text": complete_ai(config, system, user, 1700).strip()}
 
 
