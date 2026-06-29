@@ -16,7 +16,7 @@ from ..db_companies import (
     brand_kit_get, brand_kit_upsert,
     competitor_list, competitor_create, competitor_delete,
     asset_list, asset_create, asset_delete, asset_get, asset_update_meta,
-    asset_list_logos, asset_clear_primary,
+    asset_list_logos, asset_list_photos, asset_clear_primary,
     product_list, product_get, product_create, product_update, product_delete,
     solution_list, solution_get, solution_create, solution_update, solution_delete,
 )
@@ -739,6 +739,7 @@ def list_products(company_id: str, request: Request):
     for p in products:
         p["solutions"] = solution_list(p["id"])
         p["logos"] = asset_list_logos(company_id, p["id"])
+        p["photos"] = asset_list_photos(company_id, p["id"])   # Fase 2: fotos do produto (a IA analisa)
     return {"products": products}
 
 
@@ -942,6 +943,51 @@ async def upload_product_logo(company_id: str, product_id: str, request: Request
         "meta": {"role": "logo", "variant": "light"},
     })
     return {"logo": asset}
+
+
+@router.post("/{company_id}/products/{product_id}/photo")
+async def upload_product_photo(company_id: str, product_id: str, request: Request, file: UploadFile = File(...)):
+    """FOTO do produto (Fase 2): sobe a imagem, analisa por VISÃO (gpt-4o) os FATOS VISUAIS imutáveis do item e
+    ACUMULA em product.knowledge com prefixo [IMAGEM DO PRODUTO] → a CENA e a NARRAÇÃO do vídeo ancoram no item
+    REAL (não alucina). Custo-seguro: se a visão falhar, a foto é salva mesmo assim."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    prod = product_get(product_id)
+    if not prod:
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    import uuid as _uuid
+    raw = await file.read()
+    ext = os.path.splitext(file.filename or "photo.png")[1] or ".png"
+    subdir = os.path.join(UPLOAD_DIR, company_id, "products", product_id)
+    os.makedirs(subdir, exist_ok=True)
+    filename = f"{_uuid.uuid4().hex}{ext}"
+    with open(os.path.join(subdir, filename), "wb") as f:
+        f.write(raw)
+    url = f"{UPLOAD_URL_PREFIX}/{company_id}/products/{product_id}/{filename}"
+    asset = asset_create(company_id, {
+        "kind": "IMAGE", "source": "UPLOADED", "url": url, "product_id": product_id, "meta": {"role": "photo"},
+    })
+    facts = ""
+    try:
+        from ..services.ai import vision_product_facts
+        facts, _cost = vision_product_facts(raw)
+        if facts:
+            prev = (prod.get("knowledge") or "").strip()
+            tag = f"[IMAGEM DO PRODUTO] {facts}"
+            if tag not in prev:                                # acumula sem duplicar; vira "fato" no _video_brief_context
+                product_update(product_id, {"knowledge": (prev + ("\n\n" if prev else "") + tag)})
+    except Exception:
+        facts = ""
+    return {"photo": asset, "facts": facts}
+
+
+@router.delete("/{company_id}/products/{product_id}/photo/{asset_id}")
+def delete_product_photo(company_id: str, product_id: str, asset_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    return {"deleted": asset_delete(asset_id)}
 
 
 @router.get("/{company_id}/products/{product_id}/solutions")

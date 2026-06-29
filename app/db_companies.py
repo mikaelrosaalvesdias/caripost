@@ -921,6 +921,23 @@ def asset_clear_primary(company_id: str, product_id: Optional[str] = None) -> No
                 conn.execute("UPDATE company_assets SET meta = ? WHERE id = ?", (json.dumps(meta), r["id"]))
 
 
+@_sqlite_retry
+def asset_list_photos(company_id: str, product_id: str) -> List[Dict[str, Any]]:
+    """Fotos do PRODUTO (role='photo', Fase 2 — base p/ a visão analisar o item real)."""
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT * FROM company_assets
+            WHERE company_id = ? AND product_id = ? AND json_extract(meta, '$.role') = 'photo'
+            ORDER BY created_at DESC
+        """, (company_id, product_id)).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            row["meta"] = json.loads(row.get("meta") or "{}")
+            out.append(row)
+        return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Products CRUD
 # ─────────────────────────────────────────────────────────────────────────────

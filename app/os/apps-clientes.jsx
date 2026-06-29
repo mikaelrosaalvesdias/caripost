@@ -455,6 +455,9 @@ function ProductCard({ company, product, onChanged }) {
   const [msg, setMsg] = React.useState('');
   const solutions = product.solutions || [];
   const logos = product.logos || [];
+  const photos = product.photos || [];
+  const [photoBusy, setPhotoBusy] = React.useState(false);
+  const [photoMsg, setPhotoMsg] = React.useState('');
   const [kbChars, setKbChars] = React.useState((product.knowledge || '').length);
   const [kbBusy, setKbBusy] = React.useState(false);
   const [kbMsg, setKbMsg] = React.useState('');
@@ -538,6 +541,21 @@ function ProductCard({ company, product, onChanged }) {
     try { await window.mpApi.deleteLogo(company.id, id); onChanged(); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
+  async function uploadPhoto(file) {
+    if (!file) return;
+    setPhotoBusy(true); setPhotoMsg('Enviando e analisando ' + file.name + '…');
+    try {
+      const r = await window.mpApi.uploadProductPhoto(company.id, product.id, file);
+      if (r && r.detail) setPhotoMsg('Erro: ' + r.detail);
+      else { setPhotoMsg((r && r.facts) ? ('✓ Foto analisada — fatos somados ao briefing: ' + r.facts) : '✓ Foto enviada (visão não extraiu fatos).'); onChanged(); }
+    } catch (e) { setPhotoMsg('Erro: ' + e.message); }
+    finally { setPhotoBusy(false); }
+  }
+  async function removePhoto(id) {
+    if (!window.confirm('Excluir esta foto?')) return;
+    try { await window.mpApi.deleteProductPhoto(company.id, product.id, id); onChanged(); }
+    catch (e) { setPhotoMsg('Erro: ' + e.message); }
+  }
 
   return <div className="panel stack">
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -577,6 +595,17 @@ function ProductCard({ company, product, onChanged }) {
       <label className="hint" style={{ display: 'block', marginTop: 4 }}>Selecione um ou vários arquivos de logo:</label>
       <input type="file" accept="image/*" multiple onChange={e => { if (e.target.files && e.target.files.length) uploadLogo(e.target.files); e.target.value = ''; }} />
     </div>
+
+    <div className="sec mut" style={{ marginTop: 4 }}>Foto do produto <span className="hint">— a IA analisa por visão e ancora o vídeo no item REAL</span></div>
+    <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+      {photos.map(p => <div key={p.id} style={{ position: 'relative', display: 'inline-block' }}>
+        <img loading="lazy" decoding="async" src={p.url} style={{ maxHeight: 64, maxWidth: 96, borderRadius: 6, border: '1px solid var(--line)', display: 'block' }} />
+        <button className="btn sm" title="Excluir foto" onClick={() => removePhoto(p.id)}
+          style={{ position: 'absolute', top: -8, right: -8, padding: '1px 6px', lineHeight: 1.2, borderRadius: 999 }}><Icon name="x" /></button>
+      </div>)}
+      <input type="file" accept="image/*" disabled={photoBusy} onChange={e => { const f = e.target.files[0]; e.target.value = ''; uploadPhoto(f); }} />
+    </div>
+    {photoMsg && <div className="hint">{photoMsg}</div>}
 
     {product.colors && ['primary', 'secondary', 'accent'].some(k => product.colors[k]) && <>
       <div className="sec mut" style={{ marginTop: 4 }}>Cores (do logo)</div>

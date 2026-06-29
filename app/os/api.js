@@ -1074,6 +1074,14 @@
     async clearProductKb(companyId, productId) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/kb', { method: 'DELETE' });
     },
+    async uploadProductPhoto(companyId, productId, file) {   // Fase 2: foto do produto (a IA analisa por visão)
+      const fd = new FormData();
+      fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/photo', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteProductPhoto(companyId, productId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/photo/' + _enc(assetId), { method: 'DELETE' });
+    },
 
     /* ════════ INFLUENCERS (por empresa) — cadastro + banco de imagem ════════ */
     async listInfluencers(companyId) {
@@ -1276,8 +1284,15 @@
     async videoStatus(jobsCsv, companyId) {
       return mpFetch('/api/posts/video-status?jobs=' + _enc(jobsCsv) + '&company_id=' + _enc(companyId || ''));
     },
-    async videoPreflight(companyId, theme, seconds) {
-      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, theme: theme || '', seconds: seconds || 0 }) }).catch(() => ({ configured: false }));
+    async videoPreflight(companyId, theme, seconds, style) {
+      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, theme: theme || '', seconds: seconds || 0, style: style || '' }) }).catch(() => ({ configured: false }));
+    },
+    async videoStyles(companyId) {
+      const r = await mpFetch('/api/posts/video-styles', { method: 'POST', body: JSON.stringify({ company_id: companyId || '' }) }).catch(() => ({ styles: [] }));
+      return r.styles || [];
+    },
+    async regenScene(payload) {
+      return mpFetch('/api/posts/video-scene-regen', { method: 'POST', body: JSON.stringify(payload) }).catch(() => ({}));
     },
     async generateBrandedVideo(payload) {
       return mpFetch('/api/posts/generate-branded-video', { method: 'POST', body: JSON.stringify(payload) });

@@ -1370,13 +1370,19 @@ async def generate_branded_video(request: Request):
         n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = trava de custo)
     else:
         per, n_want = (mx or 8), 0                            # livre → 1 clipe (custo mínimo)
-    prompts = [p for p in (body.get("storyboard") or []) if isinstance(p, str) and p.strip()]
-    if not prompts:
-        try:                                                  # roteiro CASADO com a duração (modo TRAVADO: n_want cenas de per s)
-            sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt, target, n_want, per)
-        except Exception:
-            sb = []
-        prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
+    _char_lock = (body.get("character") or "").strip()
+    _edited = [d for d in (body.get("scene_descs") or []) if isinstance(d, str) and d.strip()]
+    if _edited:                                               # usuário editou o roteiro por cena → recompõe MANTENDO o personagem travado
+        from ..services.ai import build_video_prompt as _bvp
+        prompts = [_bvp(company, theme, ((_char_lock + " " if _char_lock else "") + d.strip())) for d in _edited]
+    else:
+        prompts = [p for p in (body.get("storyboard") or []) if isinstance(p, str) and p.strip()]
+        if not prompts:
+            try:                                              # roteiro CASADO com a duração (modo TRAVADO: n_want cenas de per s)
+                sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt, target, n_want, per, (body.get("style") or "").strip())
+            except Exception:
+                sb = []
+            prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
     if n_want > 0:                                            # TRAVA o nº de cenas: sobra corta, falta completa → custo previsível
         prompts = (prompts or [video_prompt or theme or f"Cena da marca {company.get('name','')}"])[:n_want]
         while len(prompts) < n_want:
@@ -1470,18 +1476,24 @@ async def video_preflight(request: Request):
     else:
         per, n_want = mx, 0
     try:
-        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp, target, n_want, per) if company else []
+        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp, target, n_want, per, (body.get("style") or "").strip()) if company else []
     except Exception:
         sb = []
     prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
+    descs = [(s.get("desc") or "") for s in (sb or []) if s.get("prompt")]          # roteiro legível por cena (editável no front)
+    char_lock = next((s.get("character_map") for s in (sb or []) if (s.get("character_map") or "").strip()), "")
     if n_want > 0:                                             # duração TRAVADA → exatamente n_want cenas
-        prompts = prompts[:n_want]
+        prompts = prompts[:n_want]; descs = descs[:n_want]
         while len(prompts) < n_want:
             prompts.append((prompts[len(prompts) % len(prompts)] if prompts else (vp or theme or "cena da marca")))
+            descs.append((descs[0] if descs else (vp or theme or "")))
         secs = [per] * n_want
     else:                                                      # LIVRE → a IA decide
         prompts = prompts[:8] or [vp or theme or "cena"]
         secs = [min(int(s.get("seconds") or 8), mx) for s in (sb or [])][:len(prompts)] or [mx]
+    if len(descs) < len(prompts):                             # alinha descs ao tamanho final de prompts
+        descs += [descs[-1] if descs else ""] * (len(prompts) - len(descs))
+    descs = descs[:len(prompts)]
     n = len(prompts)
     _vm = get_setting("video.model") or ""
     ent = _video_catalog_entry(_vm)
@@ -1499,7 +1511,62 @@ async def video_preflight(request: Request):
     return {"configured": True, "model": name, "scenes": n, "total_seconds": total_s,
             "seconds_per_scene": (secs[0] if secs else 8), "scene_seconds": secs,
             "price_per_clip_usd": price, "total_usd": total_usd, "total_brl": round(usd_to_brl(total_usd), 2),
-            "price_real": real, "storyboard": prompts}
+            "price_real": real, "storyboard": prompts, "scene_descs": descs, "character": char_lock}
+
+
+@router.post("/video-styles")
+async def video_styles(request: Request):
+    """Fase 3: lista de estilos virais p/ o seletor da UI (defaults + overrides da empresa).
+    POST (não GET) p/ não cair na rota coringa GET /{post_id}."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    from ..services.ai import video_styles_list
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    cid = (body.get("company_id") or "").strip()
+    company = company_get(cid) if cid else None
+    return {"styles": video_styles_list(company)}
+
+
+@router.post("/video-scene-regen")
+async def video_scene_regen(request: Request):
+    """Fase 3 (gate por cena): regenera UMA cena do roteiro mantendo continuidade com as outras + personagem +
+    estilo. Custo = 1 chamada de texto barata. Devolve {desc}. Falha → devolve a cena atual (custo-seguro)."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    body = await request.json()
+    from ..services.ai import cheap_text_config, get_ai_config, complete_ai, extract_json, video_style_directive
+    company = company_get(body.get("company_id"))
+    theme = (body.get("theme") or "").strip()
+    descs = [d for d in (body.get("scene_descs") or []) if isinstance(d, str)]
+    try:
+        idx = int(body.get("index"))
+    except Exception:
+        idx = -1
+    if not (0 <= idx < len(descs)):
+        return JSONResponse({"detail": "index inválido"}, status_code=422)
+    cfg = cheap_text_config(get_ai_config())
+    if not cfg:
+        return {"desc": descs[idx]}
+    char = (body.get("character") or "").strip()
+    style = video_style_directive(company, (body.get("style") or "").strip())
+    others = "\n".join(f"Cena {i + 1}: {d}" for i, d in enumerate(descs) if i != idx) or "(nenhuma)"
+    system = ("Você é diretor de vídeo. Reescreva UMA cena de um reel trazendo uma VARIAÇÃO melhor, mantendo "
+              "continuidade (mesmo universo e mesma pessoa) com as outras cenas. SÓ a cena fotográfica em movimento — "
+              "PROIBIDO texto, legenda, número, logo, marca, preço. " + (style + " " if style else "")
+              + 'Responda SOMENTE JSON: {"desc":"sujeito/elemento + contexto + 1 ação + 1 movimento de câmera + luz/clima + emoção"}')
+    user = (f"Tema: {theme}. " + (f"Personagem fixo (mantenha igual): {char}. " if char else "")
+            + f"Reescreva a cena {idx + 1} (atual: \"{descs[idx]}\"). Outras cenas (NÃO repita, mantenha continuidade):\n{others}")
+    try:
+        p = extract_json(await asyncio.to_thread(complete_ai, cfg, system, user, 320)) or {}
+        nd = (p.get("desc") or "").strip()
+        return {"desc": nd or descs[idx]}
+    except Exception:
+        return {"desc": descs[idx]}
 
 
 @router.post("/branded-video-status")

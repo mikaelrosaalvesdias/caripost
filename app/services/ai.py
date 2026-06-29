@@ -1474,6 +1474,43 @@ def vision_clear_side(img_bytes: bytes):
     return "", 0.0
 
 
+def vision_product_facts(img_bytes: bytes) -> Tuple[str, float]:
+    """VISÃO do PRODUTO (Fase 2): descreve os FATOS VISUAIS IMUTÁVEIS do item da foto (cor, formato,
+    material/acabamento, proporção, detalhes marcantes) p/ ancorar a CENA e a NARRAÇÃO no produto REAL —
+    NÃO inventa marca/texto/preço/função, SÓ o que vê. Retorna (fatos, custo_usd). Erro/sem imagem → ('', 0.0).
+    Transborda CometAPI → OpenRouter (mesmo gpt-4o)."""
+    import base64
+    if not img_bytes:
+        return "", 0.0
+    b64 = base64.b64encode(img_bytes).decode()
+    msgs = [{"role": "user", "content": [
+        {"type": "text", "text": ("Descreva em PT-BR, em no MÁXIMO 60 palavras, os FATOS VISUAIS do produto/objeto "
+            "principal desta imagem que NÃO podem mudar num anúncio: cor(es), formato, material/acabamento, proporção "
+            "e detalhes marcantes. SÓ o que você vê — NÃO invente marca, texto, número, preço nem função. "
+            "Se não houver um produto/objeto claro, responda apenas 'NENHUM'.")},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
+    ]}]
+    chain = []
+    if _cometapi_key():
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
+    if _openrouter_key():
+        chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    for base, key, model in chain:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
+                r = c.post(base + "/chat/completions",
+                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                           json={"model": model, "max_tokens": 180, "temperature": 0.1, "messages": msgs})
+            if r.status_code >= 400:
+                continue
+            txt = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
+            if txt and "NENHUM" not in txt.upper()[:12]:
+                return txt[:600], 0.005
+        except Exception:
+            continue
+    return "", 0.0
+
+
 # ── TRANSBORDO INTELIGENTE de imagem (anti-"editorial em tudo") ───────────────
 def image_models_registry() -> List[Dict[str, Any]]:
     """Universo de modelos de imagem disponíveis (id, provider, tier, price) — fonte p/ achar equivalentes."""
@@ -1993,10 +2030,11 @@ def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
 
 
 def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
-                           target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8) -> List[Dict[str, str]]:
+                           target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8,
+                           style: str = "") -> List[Dict[str, str]]:
     """Roteiro em CENAS. Se n_scenes>0 (usuário TRAVOU a duração) gera EXATAMENTE n_scenes cenas distintas de
-    per_seconds cada; senão a IA decide (modo LIVRE). Retorna [{prompt, seconds}]."""
-    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": str(per_seconds or 8), "desc": (video_prompt or theme or "").strip()}]
+    per_seconds cada; senão a IA decide (modo LIVRE). `style` = preset de estilo viral (Fase 3). Retorna [{prompt, seconds}]."""
+    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": str(per_seconds or 8), "desc": (video_prompt or theme or "").strip(), "character_map": ""}]
     config = cheap_text_config(get_ai_config())
     if not config:
         return fallback
@@ -2020,6 +2058,7 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     tom_rule = (f"TOM/VOZ DA MARCA (mantenha CONSISTENTE em todo vídeo — define o clima, o ritmo e a energia das cenas): {voice}. " if voice else
                 "TOM consistente, brasileiro, premium e confiante. ")
     product_context = _video_brief_context(company, theme)
+    style_rule = video_style_directive(company, style)            # Fase 3: estilo viral escolhido (vazio = auto)
     G = creative_cfg(company).get("briefing") or {}
     vals = {
         "company": company.get("name", ""),
@@ -2028,6 +2067,7 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
         "video_prompt": video_prompt or "",
         "duration_rule": dur_rule,
         "tone_rule": tom_rule,
+        "style_rule": (style_rule + " ") if style_rule else "",
         "audience": audience,
         "audience_line": f"Público-alvo: {audience}. " if audience else "",
         "visual_base": vbase,
@@ -2040,7 +2080,13 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     user = _render_prompt_template(G.get("video_storyboard_user") or BRIEFING_GEN["video_storyboard_user"], vals)
     allowed = [4, 8, 12]
     try:
-        parsed = extract_json(complete_ai(config, system, user, 1500)) or {}
+        parsed = extract_json(complete_ai(config, system, user, 1600)) or {}
+        character = parsed.get("character") if isinstance(parsed.get("character"), dict) else {}
+        char_map = (character.get("map") or "").strip()
+        char_on = bool(character.get("present")) and bool(char_map)
+        # MESMO mapa de personagem repetido em CADA cena → trava a identidade (mesmo rosto/roupa/acessório-âncora).
+        char_clause = (("PERSONAGEM FIXO — a MESMA pessoa em TODAS as cenas, idêntica (rosto, cabelo, pele, vestuário "
+                        "e o acessório-âncora NÃO mudam): " + char_map.rstrip(".") + ". ") if char_on else "")
         out = []
         for s in (parsed.get("scenes") or [])[:8]:
             if not isinstance(s, dict):
@@ -2053,7 +2099,19 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
             except Exception:
                 sec = 8
             sec = min(allowed, key=lambda a: abs(a - sec))  # snap to 4/8/12
-            out.append({"prompt": build_video_prompt(company, theme, desc), "seconds": str(sec), "desc": desc})
+            cine = ""                                        # linguagem de câmera escolhida de propósito (Nível 2)
+            fr = (s.get("framing") or s.get("camera_framing") or "").strip()
+            mv = (s.get("movement") or s.get("camera_movement") or "").strip()
+            stl = (s.get("style") or s.get("visual_style") or "").strip()
+            if fr:
+                cine += f"Enquadramento: {fr}. "
+            if mv:
+                cine += f"Movimento de câmera: {mv}. "
+            if stl:
+                cine += f"Estilo: {stl}. "
+            scene_text = (char_clause + desc.rstrip(".") + ". " + cine).strip()   # personagem travado + cena + câmera
+            out.append({"prompt": build_video_prompt(company, theme, scene_text), "seconds": str(sec),
+                        "desc": desc, "character_map": char_clause})
         if out:
             return out
     except Exception:
@@ -2061,12 +2119,40 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     return fallback
 
 
+def _elevenlabs_key() -> str:
+    """Chave ElevenLabs (voz premium) — settings 'tts.elevenlabs.key' ou env ELEVENLABS_API_KEY. Vazio = desligado."""
+    try:
+        return (get_setting("tts.elevenlabs.key") or os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+    except Exception:
+        return (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+
+
 def tts_synthesize(text: str, out_path: str, voice: str = "onyx", model: str = "tts-1") -> bool:
-    """Locução (narração) via CometAPI /v1/audio/speech (OpenAI-compat). Salva mp3. True/False. ~$0.01.
-    NÃO chama nada sem texto ou sem chave (custo-seguro)."""
-    key = _cometapi_key()
+    """Locução (narração). Fase 4: usa ElevenLabs (voz premium) quando há chave configurada; senão CometAPI
+    /v1/audio/speech (OpenAI-compat). Salva mp3. True/False. Custo-seguro: sem texto/sem chave → False; EL falha → cai no CometAPI."""
     txt = (text or "").strip()
-    if not key or not txt:
+    if not txt:
+        return False
+    # 1) ElevenLabs — só quando configurado (chave + voz). NÃO verificado ao vivo sem chave; falha → fallback.
+    elk = _elevenlabs_key()
+    if elk:
+        try:
+            vid = (get_setting("tts.elevenlabs.voice") or "EXAVITQu4vr4xnSDxMaL").strip()   # voz default EL (override por setting/empresa)
+            mdl = (get_setting("tts.elevenlabs.model") or "eleven_multilingual_v2").strip()
+            with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+                r = c.post(f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
+                           headers={"xi-api-key": elk, "content-type": "application/json", "accept": "audio/mpeg"},
+                           json={"text": txt[:4096], "model_id": mdl})
+            if r.status_code < 400 and r.content:
+                with open(out_path, "wb") as f:
+                    f.write(r.content)
+                if os.path.getsize(out_path) > 200:
+                    return True
+        except Exception:
+            pass   # EL indisponível → cai no CometAPI (nunca quebra o vídeo)
+    # 2) CometAPI (default / fallback)
+    key = _cometapi_key()
+    if not key:
         return False
     try:
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
@@ -2658,7 +2744,7 @@ BRIEFING_GEN: Dict[str, Any] = {
         "Você é DIRETOR CRIATIVO, estrategista editorial e planejador de reels B2B. Sua função é transformar o briefing "
         "em um storyboard de vídeo forte, específico e publicável, com a MESMA régua do carrossel: conteúdo que educa, "
         "provoca ou reposiciona a visão do público; a venda acontece pela percepção de valor construída e pelo CTA desenhado "
-        "DEPOIS pelo sistema. {duration_rule}{tone_rule}"
+        "DEPOIS pelo sistema. {duration_rule}{tone_rule}{style_rule}"
         "ANTES de escrever as cenas, raciocine internamente sobre: dor real por trás do tema, crença errada do público, "
         "mudança de visão que o vídeo precisa provocar e ação que o público deve tomar no final. Não escreva esse raciocínio. "
         "O roteiro deve ter ARCO: (1) GANCHO visual até 2s com benefício concreto ou tensão comercial; "
@@ -2674,7 +2760,16 @@ BRIEFING_GEN: Dict[str, Any] = {
         "CONTINUIDADE: mantenha paleta, energia e lógica narrativa entre cenas; não troque de universo visual sem motivo. "
         "MOSTRE a sensação/benefício; não dependa de interface de app, tela com texto ou texto dentro do vídeo. "
         "O sistema aplica logo, títulos, captions, CTA e marca depois. Portanto NÃO crie cena de CTA, NÃO peça logo e NÃO peça texto em quadro. "
-        "Responda SOMENTE JSON válido e compacto: {\"scenes\":[{\"desc\":\"sujeito/elemento + contexto + 1 ação + 1 movimento de câmera + luz/clima + emoção + motivo estratégico\",\"seconds\":8}, ...]} . "
+        "CONSISTÊNCIA DE PERSONAGEM: se em QUALQUER cena aparecer uma pessoa, ela tem de ser a MESMA pessoa em TODAS as cenas. "
+        "Preencha 'character' UMA vez com um mapa HIPER-ESPECÍFICO e FIXO: idade aparente, etnia, cabelo (cor+textura+corte), "
+        "traços do rosto, tom de pele, vestuário (cor+padrão+corte) e UM acessório-âncora único e marcante "
+        "(ex.: 'brinco pequeno em formato de estrela banhado a prata'). O sistema repete esse mapa em cada cena pra travar a identidade. "
+        "Se o vídeo for SÓ de produto/ambiente (sem pessoa), use character.present=false e map vazio. "
+        "Em cada cena, escolha de propósito 'framing' (enquadramento), 'movement' (movimento de câmera) e 'style' (estética) — linguagem de cinema, não amador. "
+        "Responda SOMENTE JSON válido e compacto: {\"character\":{\"present\":true,\"map\":\"idade+etnia+cabelo+rosto+pele+vestuário+acessório-âncora único\"},"
+        "\"scenes\":[{\"desc\":\"sujeito/elemento + contexto + 1 ação + luz/clima + emoção + motivo estratégico\","
+        "\"framing\":\"close-up|plano médio|plano aberto\",\"movement\":\"push-in lento|dolly|pan discreto|parallax\","
+        "\"style\":\"estética da cena (ex.: 35mm granulado quente)\",\"seconds\":8}, ...]} . "
         "PROIBIDO em 'desc': qualquer TEXTO, letra, legenda, número; LOGO, marca, nome de marca; TELA/interface de app/celular com "
         "conteúdo legível, ícones ou nomes; claim não confirmado; preço inventado; promessa de resultado garantido. Só a CENA fotográfica em movimento, em PT-BR."
     ),
@@ -2745,6 +2840,31 @@ VIDEO_GEN: Dict[str, Any] = {
         "Telas de aparelhos só com brilho ABSTRATO. NADA escrito em lugar nenhum — o texto e a marca entram DEPOIS pelo sistema."
     ),
 }
+
+# Estilos virais de vídeo (Fase 3): preset id → diretiva injetada no roteiro. Override por empresa em creative_config.video.styles.
+VIDEO_STYLES: Dict[str, Dict[str, str]] = {
+    "auto":     {"name": "Automático (a IA decide)", "directive": ""},
+    "reveal":   {"name": "Revelação de produto",     "directive": "ESTILO DE VÍDEO: REVELAÇÃO DE PRODUTO — surgimento dramático do item (da sombra/luz), close cinematográfico, push-in lento, reflexos e partículas sutis; o produto é o herói da cena."},
+    "city_cgi": {"name": "CGI na cidade",            "directive": "ESTILO DE VÍDEO: CGI URBANO — o produto/elemento integrado em escala grande no ambiente urbano brasileiro, movimentos aéreos/drone, perspectiva épica, hora dourada."},
+    "unboxing": {"name": "Unboxing de luxo",         "directive": "ESTILO DE VÍDEO: UNBOXING DE LUXO — abertura de embalagem premium, mãos cuidadosas, macro nos detalhes/textura, luz suave de estúdio, ritmo elegante e tátil."},
+    "slowmo":   {"name": "Tecnologia em slow-motion","directive": "ESTILO DE VÍDEO: SLOW-MOTION TECH — câmera lenta em close nos detalhes técnicos, micro-movimentos, reflexos, profundidade e acabamento high-tech."},
+}
+
+
+def video_style_directive(company: Optional[Dict[str, Any]], style_id: str) -> str:
+    """Diretiva do estilo viral escolhido (Fase 3). Override por empresa em creative_config.video.styles. '' = sem estilo (auto)."""
+    sid = (style_id or "auto").strip().lower()
+    ov = (((company or {}).get("brand_kit") or {}).get("creative_config") or {}).get("video") or {}
+    styles = {**VIDEO_STYLES, **((ov.get("styles") or {}) if isinstance(ov.get("styles"), dict) else {})}
+    ent = styles.get(sid) if isinstance(styles.get(sid), dict) else {}
+    return (ent.get("directive") or "").strip()
+
+
+def video_styles_list(company: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+    """Lista [{id,name}] de estilos virais (defaults + overrides da empresa) p/ o seletor da UI."""
+    ov = (((company or {}).get("brand_kit") or {}).get("creative_config") or {}).get("video") or {}
+    styles = {**VIDEO_STYLES, **((ov.get("styles") or {}) if isinstance(ov.get("styles"), dict) else {})}
+    return [{"id": k, "name": (v.get("name") or k)} for k, v in styles.items() if isinstance(v, dict)]
 
 # Defaults criativos GLOBAIS (usados só quando o cliente NÃO personalizou). Tudo editável por cliente.
 # Política de layout "liberdade controlada": a IA ESCOLHE entre opções permitidas;

@@ -63,6 +63,11 @@ function VideoCreator({ company }) {
   const [vmodels, setVmodels] = React.useState([]);
   const [model, setModel] = React.useState('');
   const [pf, setPf] = React.useState(null);
+  const [scenes, setScenes] = React.useState([]);      // roteiro por cena (editável antes de gastar)
+  const [nonce, setNonce] = React.useState(0);          // ↻ regerar roteiro
+  const [style, setStyle] = React.useState(st.videoStyle || 'auto');   // Fase 3: estilo viral
+  const [styleList, setStyleList] = React.useState([]);
+  const [regening, setRegening] = React.useState(-1);   // índice da cena sendo regerada
   const [planning, setPlanning] = React.useState(false);
   const [status, setStatus] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -79,13 +84,23 @@ function VideoCreator({ company }) {
   React.useEffect(() => {
     window.mpApi.aiModels().then(r => { const v = r.video || []; setVmodels(v); setModel(m => m || r.video_current || (v[0] && v[0].id) || ''); }).catch(() => {});
   }, []);
+  React.useEffect(() => { window.mpApi.videoStyles(company.id).then(setStyleList).catch(() => {}); }, [company.id]);
   React.useEffect(() => {
     if (!model || !theme) return;
     setPlanning(true);
-    window.mpApi.videoPreflight(company.id, theme, dur).then(setPf).catch(() => {}).finally(() => setPlanning(false));
-  }, [model, dur]);   // custo AUTOMÁTICO (sem botão "calcular")
+    window.mpApi.videoPreflight(company.id, theme, dur, style).then(p => { setPf(p); setScenes((p && p.scene_descs) || []); }).catch(() => {}).finally(() => setPlanning(false));
+  }, [model, dur, nonce, style]);   // custo AUTOMÁTICO · nonce = ↻ regerar roteiro · style = estilo viral
   async function selectModel(id) { setModel(id); setPf(null); try { await window.mpApi.setAiModel({ video_model: id }); } catch (e) {} }
   function setDuration(d) { setDur(d); ContState.set(company.id, { videoSeconds: d }); }
+  function setStyleSel(s) { setStyle(s); ContState.set(company.id, { videoStyle: s }); }
+  async function regenScene(idx) {
+    setRegening(idx);
+    try {
+      const r = await window.mpApi.regenScene({ company_id: company.id, theme, scene_descs: scenes, index: idx, character: (pf && pf.character) || '', style });
+      if (r && r.desc) setScenes(s => s.map((x, i) => i === idx ? r.desc : x));
+    } catch (e) { /* mantém a cena atual */ }
+    finally { setRegening(-1); }
+  }
   async function gerar() {
     if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
     if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ≈ R$ ' + pf.total_brl + '.\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
@@ -101,6 +116,9 @@ function VideoCreator({ company }) {
         company_id: company.id,
         theme,
         storyboard: pf.storyboard,
+        scene_descs: scenes,              // roteiro (possivelmente editado) por cena
+        character: pf.character || '',     // mapa do personagem travado (re-injetado no backend)
+        style,                             // estilo viral escolhido (Fase 3)
         target_seconds: targetSeconds,
         seconds: targetSeconds,
         scene_seconds: sceneSeconds,
@@ -147,9 +165,26 @@ function VideoCreator({ company }) {
         </optgroup>) : <option value="">Configure CometAPI/OpenRouter no painel de IA</option>}
       </select>
     </Field>
+    {styleList.length > 0 && <Field label="Estilo do vídeo (vira a linguagem das cenas)">
+      <select className="inp" value={style} onChange={e => setStyleSel(e.target.value)}>
+        {styleList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+    </Field>}
     <div className="sec mut">Assunto: {theme.slice(0, 100)}</div>
     {planning && <div className="hint">Montando o roteiro e calculando o custo…</div>}
     {pf && pf.configured && !planning && <div className="hint">→ <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) · custo estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(o real vem ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
+    {pf && pf.configured && !planning && scenes.length > 0 && <Field label="Roteiro por cena — edite antes de gerar (gasto só ao confirmar)">
+      <div className="stack" style={{ gap: 6 }}>
+        {pf.character && <div className="hint" style={{ opacity: .85 }}>🎭 <b>Personagem travado</b> (igual em todas as cenas): {String(pf.character).replace(/^PERSONAGEM FIXO[^:]*:\s*/, '').slice(0, 180)}</div>}
+        {scenes.map((d, idx) => <div key={idx} className="row" style={{ gap: 6, alignItems: 'flex-start' }}>
+          <span className="hint" style={{ minWidth: 54, paddingTop: 8 }}>Cena {idx + 1}</span>
+          <textarea className="inp" rows={2} value={d} style={{ flex: 1, resize: 'vertical' }}
+            onChange={e => { const v = e.target.value; setScenes(s => s.map((x, i) => i === idx ? v : x)); }} />
+          <button className="btn ghost sm" disabled={regening === idx || planning} title="Regerar só esta cena (sem custo)" style={{ paddingTop: 6 }} onClick={() => regenScene(idx)}>{regening === idx ? '…' : '↻'}</button>
+        </div>)}
+        <button className="btn ghost sm" disabled={planning} onClick={() => setNonce(n => n + 1)}>↻ Regerar roteiro inteiro</button>
+      </div>
+    </Field>}
     {pf && !pf.configured && !planning && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha um modelo de vídeo acima (e configure a chave no painel de IA).</div>}
     {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 300, borderRadius: 12 }} />}
     {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
