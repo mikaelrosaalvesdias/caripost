@@ -199,7 +199,7 @@ function Boot({ pct, msg, onSkip }) {
     <div className="boot-logo">Cari<em>post</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
     <div className="boot-bar"><i style={{ width: pct + '%' }} /></div>
     <div className="boot-status">{msg} {pct < 100 && pct + '%'}</div>
-    <div className="boot-ver">v1.27.2 · vídeo com progresso e ETA</div>
+    <div className="boot-ver">v1.27.11 · prompts por cliente e preços de imagem</div>
   </div>;
 }
 

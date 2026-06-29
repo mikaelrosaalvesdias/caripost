@@ -652,6 +652,50 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
+def _usage_cost(data: Any) -> float:
+    if not isinstance(data, dict):
+        return 0.0
+    usage = data.get("usage") or {}
+    if isinstance(usage, dict):
+        for key in ("cost", "total_cost", "totalCost"):
+            val = _safe_float(usage.get(key))
+            if val > 0:
+                return val
+    for key in ("cost", "total_cost", "totalCost"):
+        val = _safe_float(data.get(key))
+        if val > 0:
+            return val
+    return 0.0
+
+
+def _learned_image_price(model_id: str) -> float:
+    """Preço real aprendido do último `usage.cost` retornado pelo provedor para este modelo."""
+    mid = (model_id or "").strip()
+    if not mid:
+        return 0.0
+    return _safe_float(get_setting("image.price." + mid))
+
+
+def _remember_image_price(model_id: str, cost: Any) -> None:
+    """Cacheia custo real de imagem por modelo quando o provedor devolve usage.cost."""
+    mid = (model_id or "").strip()
+    val = _safe_float(cost)
+    if not mid or val <= 0:
+        return
+    try:
+        from datetime import datetime, timezone
+        settings_set(key="image.price." + mid, value=str(val), updated_at=datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
+
+
+def _image_price_fields(model_id: str, fallback: float, fallback_source: str = "fallback") -> Dict[str, Any]:
+    learned = _learned_image_price(model_id)
+    if learned > 0:
+        return {"price_per_image": round(learned, 4), "price_source": "usage_learned"}
+    return {"price_per_image": round(_safe_float(fallback), 4), "price_source": fallback_source}
+
+
 def _openrouter_video_per_second(pricing_skus: Dict[str, Any]) -> float:
     """USD/s for the 720p text/video path we request. Returns 0 when the API exposes token pricing only."""
     if not isinstance(pricing_skus, dict):
@@ -690,6 +734,20 @@ def _openrouter_video_catalog() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _openrouter_image_catalog() -> Dict[str, Dict[str, Any]]:
+    key = _openrouter_key()
+    if not key:
+        return {}
+    try:
+        with httpx.Client(timeout=20) as c:
+            res = c.get("https://openrouter.ai/api/v1/images/models", headers={"Authorization": f"Bearer {key}"})
+        if res.status_code >= 400:
+            return {}
+        return {m.get("id"): m for m in (res.json().get("data") or []) if m.get("id")}
+    except Exception:
+        return {}
+
+
 def _cometapi_model_catalog() -> Dict[str, Dict[str, Any]]:
     key = _cometapi_key()
     if not key:
@@ -711,6 +769,13 @@ def _cometapi_video_prices(model: Dict[str, Any]) -> Tuple[float, float]:
     return _safe_float(pricing.get("per_second")), _safe_float(pricing.get("per_request"))
 
 
+def _cometapi_image_price(model: Dict[str, Any]) -> float:
+    pricing = model.get("pricing") or {}
+    if not isinstance(pricing, dict):
+        return 0.0
+    return _safe_float(pricing.get("per_request"))
+
+
 def _openrouter_avail(url: str) -> set:
     key = _openrouter_key()
     if not key:
@@ -724,14 +789,26 @@ def _openrouter_avail(url: str) -> set:
 
 
 def openrouter_image_models() -> List[Dict[str, Any]]:
-    """Top-10 modelos de imagem curados (ranking), só os disponíveis no OpenRouter."""
-    avail = _openrouter_avail("https://openrouter.ai/api/v1/images/models")
+    """Top-10 modelos de imagem curados, só os disponíveis no OpenRouter.
+    O catálogo atual de imagens do OpenRouter lista disponibilidade, mas não expõe preço por modelo;
+    por isso o preço fica marcado como estimado até `usage.cost` ensinar o valor real."""
+    catalog = _openrouter_image_catalog()
+    avail = set(catalog)
     # reve-2.0 é API própria (não OpenRouter) → só entra se o token Reve estiver configurado.
     has_reve = bool(_reve_key())
-    out = [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": i}
-           for i, (s, n, q, p) in enumerate(CURATED_IMAGE)
-           if (s.startswith("reve") and has_reve) or (not s.startswith("reve") and (not avail or s in avail))]
-    return out or [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": i}
+    out = []
+    for i, (s, n, q, p) in enumerate(CURATED_IMAGE):
+        if s.startswith("reve"):
+            if not has_reve:
+                continue
+            src = "fallback"
+        else:
+            if avail and s not in avail:
+                continue
+            src = "fallback"
+        row = {"id": s, "name": n, "quality": q, "rank": i, **_image_price_fields(s, p, src)}
+        out.append(row)
+    return out or [{"id": s, "name": n, "quality": q, "rank": i, **_image_price_fields(s, p, "fallback")}
                    for i, (s, n, q, p) in enumerate(CURATED_IMAGE) if not s.startswith("reve")]
 
 
@@ -788,7 +865,8 @@ def omniroute_image_models() -> List[Dict[str, Any]]:
             if mid and name not in seen and any(x in mid.lower() for x in ("image", "imagen", "flux", "dall", "banana", "seedream")):
                 seen.add(name)
                 out.append({"id": "omni:" + mid, "name": mid.split("/")[-1] + " (grátis · assinatura)",
-                            "provider": "omniroute", "quality": "Top", "price_per_image": 0.0, "rank": -1, "free": True})
+                            "provider": "omniroute", "quality": "Top", "price_per_image": 0.0,
+                            "price_source": "subscription", "rank": -1, "free": True})
     except Exception:
         pass
     return out
@@ -884,8 +962,8 @@ _COMETAPI_BASE = "https://api.cometapi.com/v1"
 # geram por aqui → fora (eram a causa do erro "invalid character '<'").
 _CURATED_COMETAPI = [
     ("gpt-image-1.5", "GPT Image 1.5", "OpenAI", "Top", 0.08),
-    ("gpt-image-2", "GPT Image 2", "OpenAI", "Médio", 0.06),
-    ("gpt-image-2-all", "GPT Image 2 All", "OpenAI", "Top", 0.06),
+    ("gpt-image-2", "GPT Image 2", "OpenAI", "Médio", 0.04),
+    ("gpt-image-2-all", "GPT Image 2 All", "OpenAI", "Top", 0.04),
     ("doubao-seedream-5-0-260128", "Seedream 5.0", "Seedream", "Top", 0.028),
     ("doubao-seedream-4-5-251128", "Seedream 4.5", "Seedream", "Médio", 0.032),
     ("doubao-seedream-4-0-250828", "Seedream 4.0", "Seedream", "Barato", 0.032),
@@ -902,9 +980,15 @@ def cometapi_image_models() -> List[Dict[str, Any]]:
     """Modelos curados da CometAPI. 'cometapi:'→/v1/images/generations; 'cometapi-gemini:'→generateContent."""
     if not _cometapi_key():
         return []
+    catalog = _cometapi_model_catalog()
     def _row(prefix, cid, nm, fam, tier, p):
+        model_id = prefix + cid
+        per_request = _cometapi_image_price(catalog.get(cid) or {})
+        source = "catalog_api" if per_request > 0 else "fallback"
+        price = per_request if per_request > 0 else p
         return {"id": prefix + cid, "name": f"{nm} · {fam} ({tier})", "provider": "cometapi",
-                "family": fam, "tier": tier, "quality": tier, "price_per_image": p, "rank": -2}
+                "family": fam, "tier": tier, "quality": tier, "rank": -2,
+                **_image_price_fields(model_id, price, source)}
     return ([_row("cometapi:", *m) for m in _CURATED_COMETAPI]
             + [_row("cometapi-gemini:", *m) for m in _CURATED_COMETAPI_GEMINI])
 
@@ -1065,6 +1149,14 @@ _CURATED_OPENAI = [
 ]
 
 
+def _image_generation_fallback_cost(real_model: str) -> float:
+    real = (real_model or "").strip()
+    for cid, _nm, _fam, _tier, p in (_CURATED_COMETAPI + _CURATED_COMETAPI_GEMINI):
+        if real == cid:
+            return _safe_float(p) or 0.06
+    return _OPENAI_IMG_COST.get(real, 0.06)
+
+
 def _openai_key() -> str:
     return (get_credential("ai", "openai") or get_credential("image", "openai")
             or get_setting("token:openai") or os.environ.get("OPENAI_API_KEY") or "").strip()
@@ -1098,10 +1190,12 @@ def generate_image_openai_direct(model: str, prompt: str, size: str = "1024x1536
                 r = c.post(f"{base}/images/edits", headers=H, data=edata, files=files)
             if r.status_code >= 400:
                 raise ValueError(f"Falha GPT imagem (edits HTTP {r.status_code}): {r.text[:200]}")
-            item = (r.json().get("data") or [{}])[0]
+            d = r.json()
+            item = (d.get("data") or [{}])[0]
+            cost = _usage_cost(d) or _image_generation_fallback_cost(real)
             b64 = item.get("b64_json")
             if b64:
-                return base64.b64decode(b64), _OPENAI_IMG_COST.get(real, 0.06)
+                return base64.b64decode(b64), cost
     body = {"model": real, "prompt": prompt[:4000], "n": 1}
     if sz and not any(x in real.lower() for x in ("seedream", "doubao")):  # Seedream/Doubao rejeitam 'size'
         body["size"] = sz
@@ -1115,8 +1209,9 @@ def generate_image_openai_direct(model: str, prompt: str, size: str = "1024x1536
         except Exception:
             detail = r.text[:300]
         raise ValueError(f"Falha OpenAI imagem (HTTP {r.status_code}): {detail}")
-    item = (r.json().get("data") or [{}])[0]
-    cost = _OPENAI_IMG_COST.get(real, 0.06)
+    d = r.json()
+    item = (d.get("data") or [{}])[0]
+    cost = _usage_cost(d) or _image_generation_fallback_cost(real)
     b64 = item.get("b64_json")
     if b64:
         return base64.b64decode(b64), cost
@@ -1131,7 +1226,7 @@ def openai_image_models() -> List[Dict[str, Any]]:
     """Modelos de imagem OpenAI (API direta). Vazio se a chave não estiver configurada."""
     if not _openai_key():
         return []
-    return [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": -2}
+    return [{"id": s, "name": n, "quality": q, "rank": -2, **_image_price_fields(s, p, "fallback")}
             for (s, n, q, p) in _CURATED_OPENAI]
 
 
@@ -1239,7 +1334,7 @@ def piapi_image_models() -> List[Dict[str, Any]]:
     """Modelos de imagem do PiAPI. Vazio se a chave não estiver configurada."""
     if not _piapi_key():
         return []
-    return [{"id": s, "name": n, "quality": q, "price_per_image": p, "rank": -3}
+    return [{"id": s, "name": n, "quality": q, "rank": -3, **_image_price_fields(s, p, "fallback")}
             for (s, n, q, p) in _CURATED_PIAPI]
 
 
@@ -1282,7 +1377,7 @@ def generate_image_openrouter(model: str, prompt: str, size: str = "1024x1024", 
                 continue
             d = res.json()
             item = (d.get("data") or [{}])[0]
-            cost = (d.get("usage") or {}).get("cost")
+            cost = _usage_cost(d) or None
             if item.get("b64_json"):
                 return base64.b64decode(item["b64_json"]), cost
             url = item.get("image_url") or item.get("url")
@@ -1488,6 +1583,14 @@ def generate_image_with_cost(prompt: str, size: str = "1024x1024", ref_images: O
     Returns (bytes, cost_usd|None, model)."""
     config = get_image_config() or {}
     provider, model = config.get("provider", "openrouter"), config.get("model")
+
+    def _ret(img: bytes, cost: Any, used_model: str):
+        val = _safe_float(cost)
+        if val > 0:
+            _remember_image_price(used_model, val)
+            return img, val, used_model
+        return img, cost, used_model
+
     if model_override:
         model = model_override
         ml = model_override.lower()
@@ -1523,35 +1626,36 @@ def generate_image_with_cost(prompt: str, size: str = "1024x1024", ref_images: O
         real = model.split(":", 1)[1] if str(model).lower().startswith("omni:") else model
         try:
             b, cost = generate_image_omniroute(real, prompt, size)
-            return b, cost, model
+            return _ret(b, cost, model)
         except Exception as oe:
             m = str(oe).lower()
             if any(x in m for x in ("429", "usage_limit", "limit reached", "quota", "exhaust", "rate limit")):
                 # Cota grátis da assinatura acabou → fallback pago (mesma família, ~$0.04).
                 fb = "google/gemini-2.5-flash-image"
                 b, cost = generate_image_openrouter(fb, prompt, size, ref_images)
-                return b, cost, fb + " (fallback pago)"
+                _remember_image_price(fb, cost)
+                return b, (_safe_float(cost) or cost), fb + " (fallback pago)"
             raise
     if provider == "openai_direct":
         b, cost = generate_image_openai_direct(model, prompt, size, ref_urls)
-        return b, cost, model
+        return _ret(b, cost, model)
     if provider == "piapi":
         b, cost = generate_image_piapi(model, prompt, size, ref_urls)
-        return b, cost, model
+        return _ret(b, cost, model)
     if provider == "cometapi":
         real = model.split(":", 1)[1] if str(model).lower().startswith("cometapi:") else model
         b, cost = generate_image_openai_direct(real, prompt, size, ref_urls,
                                                base="https://api.cometapi.com/v1", key=_cometapi_key())
-        return b, cost, model
+        return _ret(b, cost, model)
     if provider == "cometapi_gemini":
         b, cost = generate_image_cometapi_gemini(model, prompt)
-        return b, cost, model
+        return _ret(b, cost, model)
     if provider == "reve":
         b, cost = generate_image_reve(prompt, size)
-        return b, cost, model
+        return _ret(b, cost, model)
     if provider == "openrouter":
         b, cost = generate_image_openrouter(model, prompt, size, ref_images)
-        return b, cost, model
+        return _ret(b, cost, model)
     if not config.get("apiKey"):
         raise ValueError("Geração de imagem não configurada.")
     if ref_images:
@@ -1637,33 +1741,32 @@ def build_image_prompt(company: Dict[str, Any], theme: str, visual_prompt: str =
     head = (title or "").strip()
     tgt = (target_product or "").strip()
     foco = f"Contexto do app: {tgt}. " if tgt else "Contexto: portfólio de SVAs da Cariap. "
-    parts = [
-        "Gere APENAS a IMAGEM DE FUNDO (cenário fotográfico) de um post publicitário — "
-        "SEM nenhum texto e SEM nenhum logo. É uma FOTO/cena, não um cartaz pronto.",
-        f"{foco}Cena: {scene}.",
-        "Estilo de CAMPANHA PUBLICITÁRIA PREMIUM: cinematográfico, iluminação de campanha, profundidade, "
-        "cores ricas, foco/desfoque intencional, aparência de anúncio profissional de marca — NÃO foto de banco de imagem.",
-        f"Paleta que combina com a marca {name} (acentos em laranja #ED5E1F quando natural).",
-        {
-            0: "COMPOSIÇÃO: assunto principal (pessoa/dispositivo) à DIREITA; deixe a METADE ESQUERDA limpa e lisa.",
-            1: "COMPOSIÇÃO: assunto principal à ESQUERDA; deixe a METADE DIREITA limpa e lisa.",
-            2: "COMPOSIÇÃO: assunto principal no TOPO/centro, bem enquadrado; deixe a METADE INFERIOR limpa.",
-            3: "COMPOSIÇÃO: cena cinematográfica com profundidade (o sistema escurece a parte de baixo); pode preencher o quadro.",
-        }.get(int(variant) % 4, "COMPOSIÇÃO: assunto à direita, metade esquerda limpa.")
-        + " A FAIXA INFERIOR sempre limpa (vai o rodapé). É onde o sistema aplica texto e logos depois.",
-        "PROIBIDO desenhar: qualquer texto, letra, número, palavra, título, logotipo, marca, ícone de app, "
-        "telefone, site, rodapé, banner ou interface com palavras legíveis. Apenas o cenário.",
-        "Pessoas realistas e naturais (sem cara de IA, sem deformação). VARIE bastante o cenário a cada geração.",
-        "EVITE: aparência genérica de IA, cara de banco de imagem/stock, pessoas artificiais demais, "
-        "cenário corporativo clichê, excesso de elementos abstratos, interface com texto falso, "
-        "marcas de terceiros, visual infantil, estética poluída.",
-        ("Siga o ESTILO/clima/paleta das imagens de referência fornecidas." if has_refs else ""),
-        "Vertical 1080x1350, altíssima qualidade, nítida, com cara de campanha real.",
-    ]
+    composition = {
+        0: "COMPOSIÇÃO: assunto principal (pessoa/dispositivo) à DIREITA; deixe a METADE ESQUERDA limpa e lisa.",
+        1: "COMPOSIÇÃO: assunto principal à ESQUERDA; deixe a METADE DIREITA limpa e lisa.",
+        2: "COMPOSIÇÃO: assunto principal no TOPO/centro, bem enquadrado; deixe a METADE INFERIOR limpa.",
+        3: "COMPOSIÇÃO: cena cinematográfica com profundidade (o sistema escurece a parte de baixo); pode preencher o quadro.",
+    }.get(int(variant) % 4, "COMPOSIÇÃO: assunto à direita, metade esquerda limpa.")
     rules = ((company.get("brand_kit") or {}).get("client_rules") or "").strip()
-    if rules:
-        parts.append("REGRAS DESTE CLIENTE (correções que ele já pediu — NUNCA repita estes erros):\n" + rules)
-    return " ".join(p for p in parts if p).strip()
+    cfg = (creative_cfg(company).get("image") or {})
+    color = (((company.get("brand_kit") or {}).get("colors") or {}).get("accent")
+             or ((company.get("brand_kit") or {}).get("colors") or {}).get("primary")
+             or "#ED5E1F")
+    vals = {
+        "company": name,
+        "theme": theme or "",
+        "title": head,
+        "target_product": tgt,
+        "focus": foco,
+        "visual": scene,
+        "composition": composition,
+        "refs_rule": "Siga o ESTILO/clima/paleta das imagens de referência fornecidas." if has_refs else "",
+        "color": color,
+        "client_rules": ("REGRAS DESTE CLIENTE (correções que ele já pediu — NUNCA repita estes erros):\n" + rules) if rules else "",
+    }
+    vals["brand_fix"] = _render_prompt_template(cfg.get("brand_fix") or IMAGE_GEN["brand_fix"], vals)
+    vals["system_prompt"] = _render_prompt_template(cfg.get("system_prompt") or IMAGE_GEN["system_prompt"], vals)
+    return _render_prompt_template(cfg.get("scene_template") or IMAGE_GEN["scene_template"], vals)
 
 
 def get_video_config() -> Optional[Dict[str, Any]]:
@@ -1824,20 +1927,19 @@ def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = 
     acc = (cols.get("accent") or cols.get("primary") or "").strip()
     grade = (f"GRADE DE COR cinematográfica puxando para a COR DA MARCA {acc} (acentos e luz nessa cor). " if acc
              else "Grade de cor cinematográfica de campanha premium. ")
-    return (
-        "VÍDEO vertical 9:16 EM MOVIMENTO, nível AGÊNCIA de propaganda — estética de CAMPANHA publicitária real, "
-        "altíssima produção. NÃO foto de banco de imagem, NÃO cara de IA/cartoon/render barato. " + grade +
-        "Iluminação dramática e direcional (rim light, contraluz, glow), profundidade real em camadas, textura rica "
-        "(partículas, bokeh, atmosfera). Movimento de câmera suave e cinematográfico (push-in leve/parallax), ação natural contínua. "
-        "Pessoas brasileiras reais e naturais quando a cena pedir (sem deformação, sem rosto distorcido) — ou só elementos/produto se ilustrar melhor. "
-        f"CENA (interprete cinematograficamente, com a personalidade da marca): {scene}. "
-        "PROIBIDO ABSOLUTO em QUALQUER frame e QUALQUER lugar do quadro: TEXTO, letra, palavra, número, legenda, título; "
-        "LOGO, marca, logotipo, watermark; INTERFACE/TELA de app ou celular com ícones/nomes/texto legível; nota musical com texto. "
-        "Telas de aparelhos só com brilho ABSTRATO. NADA escrito em lugar nenhum — o texto e a marca entram DEPOIS pelo sistema. "
-        "ÁUDIO: APENAS som ambiente natural da cena e/ou trilha instrumental SUTIL — SEM fala, SEM narração, SEM vozes humanas, "
-        "SEM canto/letras (nada de pessoa falando; voz inventada pelo modelo sai garbled e acelerada). "
-        "Acabamento de revista: foco nítido, micro-contraste, grão fino, zero aspecto amador."
-    )
+    cfg = (creative_cfg(company).get("video") or {})
+    vals = {
+        "company": company.get("name", ""),
+        "segment": company.get("segment", ""),
+        "theme": theme or "",
+        "visual": scene,
+        "scene": scene,
+        "color": acc or "cor da marca",
+        "brand_grade": grade,
+    }
+    vals["brand_fix"] = _render_prompt_template(cfg.get("brand_fix") or VIDEO_GEN["brand_fix"], vals)
+    vals["system_prompt"] = _render_prompt_template(cfg.get("system_prompt") or VIDEO_GEN["system_prompt"], vals)
+    return _render_prompt_template(cfg.get("scene_template") or VIDEO_GEN["scene_template"], vals)
 
 
 def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
@@ -1917,27 +2019,25 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     vbase = (bk.get("visual_prompt_base") or "").strip()
     tom_rule = (f"TOM/VOZ DA MARCA (mantenha CONSISTENTE em todo vídeo — define o clima, o ritmo e a energia das cenas): {voice}. " if voice else
                 "TOM consistente, brasileiro, premium e confiante. ")
-    system = (
-        "Você é DIRETOR de reels/vídeo publicitário no nível das agências g4.business e v4company. A partir do briefing, "
-        + dur_rule + tom_rule +
-        "Monte um ROTEIRO CINEMATOGRÁFICO com ARCO: (1) GANCHO visual forte nos primeiros segundos (prende o olho), "
-        "(2) DESENVOLVIMENTO mostrando o VALOR/benefício de forma concreta e emocional, (3) CLÍMAX/virada que deixa o gancho "
-        "pro CTA. NÃO crie cena de CTA nem de logo — o sistema desenha CTA, logo, texto e marca DEPOIS. "
-        "Cada cena é uma CENA VISUAL REAL e cinematográfica: ambiente brasileiro real, sujeito (PESSOA natural OU produto/elemento "
-        "— o que MELHOR ilustrar), com NO MÁXIMO 1 AÇÃO principal e 1 MOVIMENTO de câmera por cena (clareza). EMOÇÃO clara. "
-        "CONTINUIDADE entre as cenas (mesmo personagem/clima/paleta da marca). MOSTRE a sensação/benefício, NÃO a tela do app. "
-        "ANCORE TODA cena no PRODUTO/SERVIÇO do briefing e no PÚBLICO — nada de cena genérica de banco de imagem que "
-        "serviria pra qualquer marca; a identidade do app vive no MUNDO, no benefício concreto e no clima, não em telas/texto. "
-        'Responda SOMENTE JSON válido e compacto: {"scenes":[{"desc":"cena visual concreta: sujeito + 1 ação + 1 movimento de câmera + luz/clima","seconds":8}, ...]} . '
-        "PROIBIDO em 'desc': qualquer TEXTO, letra, legenda, número; LOGO, marca, nome de marca; TELA/interface de app/celular com "
-        "conteúdo legível, ícones ou nomes. Só a CENA fotográfica em movimento, em PT-BR."
-    )
-    user = (f"Empresa: {company.get('name','')} ({company.get('segment','')}). "
-            + (f"Público-alvo: {audience}. " if audience else "")
-            + (f"Identidade visual base da marca: {vbase}. " if vbase else "")
-            + (f"Regras do cliente (RESPEITE): {rules}. " if rules else "")
-            + _video_brief_context(company, theme)
-            + f"Briefing/tema (O QUE PROMOVER): {theme}. Direção visual: {video_prompt}")
+    product_context = _video_brief_context(company, theme)
+    G = creative_cfg(company).get("briefing") or {}
+    vals = {
+        "company": company.get("name", ""),
+        "segment": company.get("segment", ""),
+        "theme": theme or "",
+        "video_prompt": video_prompt or "",
+        "duration_rule": dur_rule,
+        "tone_rule": tom_rule,
+        "audience": audience,
+        "audience_line": f"Público-alvo: {audience}. " if audience else "",
+        "visual_base": vbase,
+        "visual_base_line": f"Identidade visual base da marca: {vbase}. " if vbase else "",
+        "client_rules": rules,
+        "client_rules_line": f"Regras do cliente (RESPEITE): {rules}. " if rules else "",
+        "product_context": product_context,
+    }
+    system = _render_prompt_template(G.get("video_storyboard_system") or BRIEFING_GEN["video_storyboard_system"], vals)
+    user = _render_prompt_template(G.get("video_storyboard_user") or BRIEFING_GEN["video_storyboard_user"], vals)
     allowed = [4, 8, 12]
     try:
         parsed = extract_json(complete_ai(config, system, user, 1500)) or {}
@@ -2553,6 +2653,25 @@ BRIEFING_GEN: Dict[str, Any] = {
                        "Cena 1:, Cena 2:, ... (cada cena: o que APARECE + a FALA/legenda)\n"
                        "CTA: (chamada final)\n"
                        "Trilha/clima: (ritmo e sensação)"),
+    "video_storyboard_system": (
+        "Você é DIRETOR de reels/vídeo publicitário no nível das agências g4.business e v4company. A partir do briefing, "
+        "{duration_rule}{tone_rule}"
+        "Monte um ROTEIRO CINEMATOGRÁFICO com ARCO: (1) GANCHO visual forte nos primeiros segundos (prende o olho), "
+        "(2) DESENVOLVIMENTO mostrando o VALOR/benefício de forma concreta e emocional, (3) CLÍMAX/virada que deixa o gancho "
+        "pro CTA. NÃO crie cena de CTA nem de logo — o sistema desenha CTA, logo, texto e marca DEPOIS. "
+        "Cada cena é uma CENA VISUAL REAL e cinematográfica: ambiente brasileiro real, sujeito (PESSOA natural OU produto/elemento "
+        "— o que MELHOR ilustrar), com NO MÁXIMO 1 AÇÃO principal e 1 MOVIMENTO de câmera por cena (clareza). EMOÇÃO clara. "
+        "CONTINUIDADE entre as cenas (mesmo personagem/clima/paleta da marca). MOSTRE a sensação/benefício, NÃO a tela do app. "
+        "ANCORE TODA cena no PRODUTO/SERVIÇO do briefing e no PÚBLICO — nada de cena genérica de banco de imagem que "
+        "serviria pra qualquer marca; a identidade do app vive no MUNDO, no benefício concreto e no clima, não em telas/texto. "
+        "Responda SOMENTE JSON válido e compacto: {\"scenes\":[{\"desc\":\"cena visual concreta: sujeito + 1 ação + 1 movimento de câmera + luz/clima\",\"seconds\":8}, ...]} . "
+        "PROIBIDO em 'desc': qualquer TEXTO, letra, legenda, número; LOGO, marca, nome de marca; TELA/interface de app/celular com "
+        "conteúdo legível, ícones ou nomes. Só a CENA fotográfica em movimento, em PT-BR."
+    ),
+    "video_storyboard_user": (
+        "Empresa: {company} ({segment}). {audience_line}{visual_base_line}{client_rules_line}"
+        "{product_context}Briefing/tema (O QUE PROMOVER): {theme}. Direção visual: {video_prompt}"
+    ),
     "post_template": ("Formato: POST ÚNICO (feed). Entregue:\n"
                       "GRANDE IDEIA:\nHeadline:\nÂngulo: (pra quem e por quê)\nMensagem:\n"
                       "Destaques: (3 bullets fortes)\nCTA:\nVisual: (cena concreta e cinematográfica, sem clichê de banco de imagem)"),
@@ -2562,10 +2681,24 @@ BRIEFING_GEN: Dict[str, Any] = {
 # Template do PROMPT de imagem: a IA cria a CENA ({visual}); a identidade ({brand_fix}) é fixa
 # e aplicada por código. Tudo editável por cliente.
 IMAGE_GEN: Dict[str, Any] = {
-    "scene_template": ("Foto editorial premium, cinematográfica e realista para carrossel 4:5 (1080x1350): {visual}. "
-                       "Pessoas e ambientes brasileiros reais, luz natural controlada, profundidade de campo, lente 35-50mm, "
-                       "color grading quente e profissional, espaço negativo para texto. "
-                       "NADA de aparência de IA/3D/cartoon/banco de imagem genérico. {brand_fix}"),
+    "system_prompt": (
+        "Gere APENAS a IMAGEM DE FUNDO (cenário fotográfico) de um post publicitário — "
+        "SEM nenhum texto e SEM nenhum logo. É uma FOTO/cena, não um cartaz pronto."
+    ),
+    "scene_template": (
+        "{system_prompt} {focus}Cena: {visual}. "
+        "Estilo de CAMPANHA PUBLICITÁRIA PREMIUM: cinematográfico, iluminação de campanha, profundidade, "
+        "cores ricas, foco/desfoque intencional, aparência de anúncio profissional de marca — NÃO foto de banco de imagem. "
+        "Paleta que combina com a marca {company} (acentos em laranja #ED5E1F quando natural). "
+        "{composition} A FAIXA INFERIOR sempre limpa (vai o rodapé). É onde o sistema aplica texto e logos depois. "
+        "PROIBIDO desenhar: qualquer texto, letra, número, palavra, título, logotipo, marca, ícone de app, "
+        "telefone, site, rodapé, banner ou interface com palavras legíveis. Apenas o cenário. "
+        "Pessoas realistas e naturais (sem cara de IA, sem deformação). VARIE bastante o cenário a cada geração. "
+        "EVITE: aparência genérica de IA, cara de banco de imagem/stock, pessoas artificiais demais, "
+        "cenário corporativo clichê, excesso de elementos abstratos, interface com texto falso, "
+        "marcas de terceiros, visual infantil, estética poluída. {refs_rule} "
+        "Vertical 1080x1350, altíssima qualidade, nítida, com cara de campanha real. {client_rules}"
+    ),
     "brand_fix": ("IDENTIDADE FIXA (o sistema aplica DEPOIS — não desenhe, não escreva): cor de marca {color}; "
                   "a logo oficial do app é carimbada pelo código; todo TEXTO entra como camada de design. "
                   "NA FOTO: sem texto, sem letras, sem logo, sem marca d'água."),
@@ -2573,10 +2706,26 @@ IMAGE_GEN: Dict[str, Any] = {
 
 # Template do PROMPT de vídeo/reels (placeholder editável; a geração de vídeo usa isto quando ligada).
 VIDEO_GEN: Dict[str, Any] = {
-    "scene_template": ("Cena de vídeo vertical 9:16 cinematográfica e realista: {visual}. "
-                       "Movimento natural, luz controlada, ritmo dinâmico, ambiente brasileiro real. "
-                       "Sem texto na imagem (entra como camada). {brand_fix}"),
-    "brand_fix": "Identidade da marca aplicada por código (cor {color}, logo oficial). Não desenhe texto/logo.",
+    "system_prompt": (
+        "VÍDEO vertical 9:16 EM MOVIMENTO, nível AGÊNCIA de propaganda — estética de CAMPANHA publicitária real, "
+        "altíssima produção. NÃO foto de banco de imagem, NÃO cara de IA/cartoon/render barato."
+    ),
+    "scene_template": (
+        "{system_prompt} {brand_grade}"
+        "Iluminação dramática e direcional (rim light, contraluz, glow), profundidade real em camadas, textura rica "
+        "(partículas, bokeh, atmosfera). Movimento de câmera suave e cinematográfico (push-in leve/parallax), ação natural contínua. "
+        "Pessoas brasileiras reais e naturais quando a cena pedir (sem deformação, sem rosto distorcido) — ou só elementos/produto se ilustrar melhor. "
+        "CENA (interprete cinematograficamente, com a personalidade da marca): {visual}. "
+        "{brand_fix} "
+        "ÁUDIO: APENAS som ambiente natural da cena e/ou trilha instrumental SUTIL — SEM fala, SEM narração, SEM vozes humanas, "
+        "SEM canto/letras (nada de pessoa falando; voz inventada pelo modelo sai garbled e acelerada). "
+        "Acabamento de revista: foco nítido, micro-contraste, grão fino, zero aspecto amador."
+    ),
+    "brand_fix": (
+        "PROIBIDO ABSOLUTO em QUALQUER frame e QUALQUER lugar do quadro: TEXTO, letra, palavra, número, legenda, título; "
+        "LOGO, marca, logotipo, watermark; INTERFACE/TELA de app ou celular com ícones/nomes/texto legível; nota musical com texto. "
+        "Telas de aparelhos só com brilho ABSTRATO. NADA escrito em lugar nenhum — o texto e a marca entram DEPOIS pelo sistema."
+    ),
 }
 
 # Defaults criativos GLOBAIS (usados só quando o cliente NÃO personalizou). Tudo editável por cliente.
@@ -2691,6 +2840,14 @@ def creative_cfg(company: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     Nada fica travado no código: o cliente pode sobrescrever qualquer prompt/regra/design."""
     ov = ((company or {}).get("brand_kit") or {}).get("creative_config") or {}
     return _deep_merge(CREATIVE_DEFAULTS, ov if isinstance(ov, dict) else {})
+
+
+def _render_prompt_template(template: Any, values: Dict[str, Any]) -> str:
+    """Substitui só placeholders conhecidos ({visual}, {company}, etc.) sem quebrar JSON literal no prompt."""
+    txt = "" if template is None else str(template)
+    for key, val in values.items():
+        txt = txt.replace("{" + key + "}", "" if val is None else str(val))
+    return re.sub(r"\s{2,}", " ", txt).strip()
 
 
 def generate_carousel_caption(company: Dict[str, Any], telas: list, theme: str = "") -> Dict[str, str]:

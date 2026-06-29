@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.27.9';
+const MP_OS_VERSION = 'v1.27.11';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -714,14 +714,21 @@ function ImageModelPicker() {
     try { const r = await window.mpApi.setAiModel({ video_model: vsel }); setVcurrent(r.video_current); setMsg('✓ Modelo de vídeo padrão: ' + r.video_current); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
-  const price = m => m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '');
+  const priceKind = m => {
+    if (m.free) return '';
+    if (m.price_source === 'usage_learned') return ' · real';
+    if (m.price_source === 'catalog_api') return ' · catálogo';
+    if (m.price_source) return ' · estimado';
+    return '';
+  };
+  const price = m => m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + priceKind(m) : (m.free ? ' · grátis' : '');
   const PLAB = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
   const groups = (() => { const g = {}; models.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
   const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
 
   return <div className="panel stack">
     <div className="sec"><Icon name="image" />Provedor de IA (imagem)</div>
-    <div className="hint">Conecte a chave de cada provedor. Na criação você escolhe provedor + modelo livremente (e compara preços).</div>
+    <div className="hint">Conecte a chave de cada provedor. Na criação você escolhe provedor + modelo livremente; preços podem aparecer como real, catálogo ou estimado conforme o dado disponível.</div>
     {IMG_PROVS.map(pr => <div key={pr.id} className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <b style={{ minWidth: 210 }}>{pr.label}</b>
       <Pill kind={masks[pr.id] ? 'good' : 'warn'} dot>{masks[pr.id] ? 'configurado' : 'configurar'}</Pill>
@@ -742,7 +749,7 @@ function ImageModelPicker() {
     <button className="btn sm pri" onClick={save}>Definir como padrão</button>
 
     <div className="sec" style={{ marginTop: 14 }}><Icon name="video" />Modelos de VÍDEO (CometAPI + OpenRouter)</div>
-    <div className="hint">{vmodels.length} modelos disponíveis. Preços aproximados de mercado por clipe (~5-8s). Escolha o padrão; depois ligamos a geração nele.</div>
+    <div className="hint">{vmodels.length} modelos disponíveis. O preço mostra “catálogo” quando vem do provedor, “real” quando foi aprendido por uso e “estimado” quando o provedor não expõe tabela.</div>
     {vcurrent && <div className="row"><span className="k">Vídeo padrão</span><span className="v mono" style={{ color: 'var(--cyan)' }}>{vcurrent}</span></div>}
     <Field label="Modelo de vídeo padrão">
       <div className="rowx" style={{ gap: 8 }}>

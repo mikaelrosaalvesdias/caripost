@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.11 - 2026-06-29
+
+- **feat: Prompts modulares por cliente.** A aba Cliente > Criação agora expõe os prompts efetivos de briefing/roteiro de vídeo e de imagem/vídeo por cliente; `build_video_storyboard`, `build_video_prompt` e `build_image_prompt` consomem `brand_kit.creative_config`.
+- **fix: Preços de imagem com origem.** Modelos de imagem passam a marcar preço `real`, `catálogo` ou `estimado`; CometAPI usa `pricing.per_request` quando o catálogo expõe e OpenAI-compat aprende `usage.cost` por modelo após geração.
+- **fix: Transparência de custo na UI.** Seletores de imagem/vídeo mostram a origem do preço para não confundir estimativa com custo real.
+- Versão: main.py 1.27.11, OS/UI cache bust v=12711.
+
 ## v1.27.2 - 2026-06-29
 
 - **fix: Progresso de geração de vídeo.** A animação de carregamento agora usa `provider_progress` dentro da cena e um avanço conservador por tempo quando o provedor ainda está em fila, evitando ficar travada em 5% em vídeos de uma cena.

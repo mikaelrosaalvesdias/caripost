@@ -8,7 +8,14 @@ function imgGroups(list) {
   const g = {}; (list || []).forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); });
   return Object.keys(g).map(p => ({ provider: p, label: IMG_PROV_LABELS[p] || p, models: g[p] }));
 }
-function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '')); }
+function imgPriceKind(m) {
+  if (m.free) return '';
+  if (m.price_source === 'usage_learned') return ' · real';
+  if (m.price_source === 'catalog_api') return ' · catálogo';
+  if (m.price_source) return ' · estimado';
+  return '';
+}
+function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : (m.free ? ' · grátis' : '')); }
 
 function _videoNum(v) {
   const n = Number(v);
@@ -114,7 +121,7 @@ function VideoCreator({ company }) {
   const DURS = [[0, 'Livre (IA decide)'], [8, '8s'], [15, '15s'], [30, '30s'], [60, '60s']];
   const PLAB = { cometapi: 'CometAPI', openrouter: 'OpenRouter', openai: 'OpenAI' };
   const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
-  const vlabel = (m) => (m.name || m.id) + (m.quality ? ' (' + m.quality + ')' : '') + (m.max_seconds ? ' · até ' + m.max_seconds + 's' : '') + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + '/clipe' : '');
+  const vlabel = (m) => (m.name || m.id) + (m.quality ? ' (' + m.quality + ')' : '') + (m.max_seconds ? ' · até ' + m.max_seconds + 's' : '') + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + '/clipe' + imgPriceKind(m) : '');
   if (!theme) return <div className="panel stack"><div className="hint">Volte ao Briefing, escreva o assunto e gere o roteiro do vídeo primeiro.</div></div>;
   return <div className="panel stack">
     <div className="sec"><Icon name="video" />Gerar vídeo branded (9:16, com áudio)</div>
@@ -557,7 +564,7 @@ function CarrosselCreator({ company, format }) {
     const g = {}; imgModels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); });
     return Object.keys(g).map(p => ({ provider: p, label: PROV_LABELS[p] || p, models: g[p] }));
   })();
-  const optLabel = (m) => m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : ''));
+  const optLabel = (m) => m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : (m.free ? ' · grátis' : ''));
 
   function setVerModel(i, m) { setVersions(vs => vs.map((v, k) => k === i ? { model: m } : v)); }
   function addVer() { setVersions(vs => vs.length < 4 ? [...vs, { model: (imgModels[0] && imgModels[0].id) || 'editorial' }] : vs); }
@@ -788,7 +795,7 @@ function StepCriacaoPost({ company }) {
   function setModelFor(id, k, model) {
     setPerModels(pm => { const arr = [...(pm[id] || [])]; while (arr.length <= k) arr.push(defModel()); arr[k] = model; return { ...pm, [id]: arr }; });
   }
-  const modelLabel = (id) => { const m = imgModels.find(x => x.id === id); return m ? (m.name + (m.price_brl ? ' R$ ' + Number(m.price_brl).toFixed(2) : '')) : id; };
+  const modelLabel = (id) => { const m = imgModels.find(x => x.id === id); return m ? (m.name + (m.price_brl ? ' R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : '')) : id; };
 
   function fullBriefing() {
     const parts = [st.briefing || ''];

@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.11', date: '2026-06-29',
+    items: [
+      { type: 'feat', text: 'Clientes: Configuração Criativa agora expõe prompt de briefing/roteiro de vídeo e prompts de imagem/vídeo por cliente.' },
+      { type: 'fix', text: 'Vídeo: build_video_storyboard e build_video_prompt passam a consumir creative_config do cliente, em vez de depender só de prompt rígido no código.' },
+      { type: 'fix', text: 'Imagem: tabela de modelos mostra preço real aprendido, preço de catálogo ou estimativa; CometAPI usa per_request quando o catálogo expõe.' },
+    ],
+  },
+  {
     version: 'v1.27.2', date: '2026-06-29',
     items: [
       { type: 'fix', text: 'Vídeo: modal de geração agora usa progresso do provedor dentro da cena e não fica preso em 5% em vídeos de uma cena.' },

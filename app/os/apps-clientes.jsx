@@ -1026,7 +1026,12 @@ function CompanyCriacao({ company }) {
 
   if (!defaults) return <div className="hint">Carregando configuração criativa…</div>;
 
-  const GROUPS = { briefing: 'Texto — briefing / carrossel', image: 'Imagem (prompt)', video: 'Vídeo (prompt)', layout_policy: 'Layout (liberdade controlada)', brand_logo: 'Logo da marca', text_fit: 'Ajuste de texto', quality_guard: 'Controle de qualidade', design: 'Design do slide (avançado)' };
+  const GROUPS = { briefing: 'Briefing / roteiro (inclui vídeo)', image: 'Imagem — system prompt e cena', video: 'Vídeo — system prompt do modelo', layout_policy: 'Layout (liberdade controlada)', brand_logo: 'Logo da marca', text_fit: 'Ajuste de texto', quality_guard: 'Controle de qualidade', design: 'Design do slide (avançado)' };
+  const GROUP_HINTS = {
+    briefing: 'Controla o plano/roteiro antes da geração. Para vídeo, edite video_storyboard_system e video_storyboard_user.',
+    image: 'Controla o prompt da imagem. O padrão abaixo preserva a qualidade atual; mude só para este cliente.',
+    video: 'Controla o prompt final enviado ao provedor de vídeo. Texto/logo continuam entrando pela pós-produção.',
+  };
   const asStr = v => (v && typeof v === 'object') ? JSON.stringify(v, null, 2) : (v == null ? '' : String(v));
   const isObjKey = (g, k) => { const dv = (defaults[g] || {})[k]; return dv && typeof dv === 'object'; };
   function curStr(g, k) {
@@ -1070,6 +1075,7 @@ function CompanyCriacao({ company }) {
       if (!keys.length) return null;
       return <div key={g} className="panel stack">
         <b>{GROUPS[g]}</b>
+        {GROUP_HINTS[g] && <div className="hint">{GROUP_HINTS[g]}</div>}
         {keys.map(k => <Field key={k} label={k + (overridden(g, k) ? '  ·  personalizado' : '  ·  padrão')}>
           <textarea className="inp" rows={isObjKey(g, k) ? 6 : 3} value={curStr(g, k)}
             onChange={e => setStr(g, k, e.target.value)}
