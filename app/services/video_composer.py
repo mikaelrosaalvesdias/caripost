@@ -71,8 +71,8 @@ def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[
     grad = Image.new("L", (1, VH), 0)
     gp = grad.load()
     for y in range(VH):
-        f = max(0.0, (y - VH * 0.52) / (VH * 0.48))     # começa a escurecer em ~52% da altura
-        gp[0, y] = int(min(1.0, f) ** 1.3 * 235)
+        f = max(0.0, (y - VH * 0.46) / (VH * 0.54))     # escurece a partir de ~46% (cobre a legenda maior)
+        gp[0, y] = int(min(1.0, f) ** 1.25 * 240)
     grad = grad.resize((VW, VH))
     dark = Image.new("RGBA", (VW, VH), (8, 7, 11, 255)); dark.putalpha(grad)
     canvas.alpha_composite(dark)
@@ -80,27 +80,26 @@ def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[
     # 2) legenda: barra de acento + texto bold branco (estilo reels premium)
     cap = (caption or "").strip()
     if cap:
-        f = _font(60, weight="extrabold")
-        inner = VW - 130
+        f = _font(76, weight="extrabold")                # MAIOR
+        inner = VW - 120
         lines = _wrap(d, cap, f, inner)[:3]
-        lh = int(f.size * 1.12)
-        by = VH - 250 - len(lines) * lh
-        d.rounded_rectangle([65, by - 6, 65 + 90, by + 4], 4, fill=acc)   # tracinho de acento em cima
-        ty = by + 22
+        lh = int(f.size * 1.08)
+        by = int(VH * 0.56)                              # MAIS PRA CIMA (lower-middle, não no rodapé)
+        d.rounded_rectangle([60, by - 12, 60 + 120, by - 2], 5, fill=acc)   # tracinho de acento (maior)
+        ty = by + 18
         for ln in lines:
-            # sombra sutil + texto (sem caixa)
-            d.text((66, ty + 3), ln, font=f, fill=(0, 0, 0, 170))
-            d.text((64, ty), ln, font=f, fill=WHITE)
+            d.text((64, ty + 4), ln, font=f, fill=(0, 0, 0, 185))   # sombra (sem caixa)
+            d.text((60, ty), ln, font=f, fill=WHITE)
             ty += lh
-    # 3) rodapé da marca: logo embaixo à esquerda + site à direita
-    lg = _logo_img(logo_path, 230)
+    # 3) rodapé da marca: logo MAIOR embaixo à esquerda + site MAIOR à direita
+    lg = _logo_img(logo_path, 340)
     if lg:
-        canvas.alpha_composite(lg, (60, VH - lg.height - 70))
+        canvas.alpha_composite(lg, (58, VH - lg.height - 72))
     st = (site or "").replace("https://", "").replace("http://", "").strip("/")
     if st:
-        sf = _font(34, weight="semibold")
+        sf = _font(46, weight="semibold")
         sw = d.textlength(st, font=sf)
-        d.text((VW - 60 - sw, VH - 96), st, font=sf, fill=(255, 255, 255, 225))
+        d.text((VW - 58 - sw, VH - 112), st, font=sf, fill=(255, 255, 255, 235))
     canvas.save(path)
 
 
