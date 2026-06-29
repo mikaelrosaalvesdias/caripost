@@ -63,15 +63,19 @@ def _logo_h(logo_path: Optional[str], target_h: int) -> Optional[Image.Image]:
 
 
 def _brand_frame(canvas: Image.Image, d: ImageDraw.ImageDraw, colors: Dict[str, Any],
-                 logo_path: Optional[str], site: str) -> None:
-    """Marca CONSISTENTE em toda tela (clipe/capa/CTA): logo pequeno (~tamanho do site) no TOPO-esquerda +
-    site embaixo-esquerda. MESMO tamanho e posição em todas as telas → transição limpa entre elas."""
+                 logo_path: Optional[str], site: str, top_logo: bool = False) -> None:
+    """Rodapé da marca: logo (tamanho do site) embaixo-ESQUERDA + site embaixo-DIREITA — mesmo tamanho/posição
+    em toda tela → transição limpa. top_logo=True (SÓ no CTA) repete a logo no TOPO → CTA com DUAS logos."""
     lg = _logo_h(logo_path, 56)
     if lg:
-        canvas.alpha_composite(lg, (60, 64))
+        canvas.alpha_composite(lg, (60, VH - lg.height - 72))     # embaixo-esquerda (clipe e CTA)
+        if top_logo:
+            canvas.alpha_composite(lg, (60, 64))                  # topo-esquerda (só CTA)
     st = (site or "").replace("https://", "").replace("http://", "").strip("/")
     if st:
-        d.text((60, VH - 98), st, font=_font(44, weight="semibold"), fill=(255, 255, 255, 235))
+        sf = _font(44, weight="semibold")
+        sw = d.textlength(st, font=sf)
+        d.text((VW - 60 - sw, VH - 100), st, font=sf, fill=(255, 255, 255, 235))   # embaixo-direita
 
 
 def _brand_bg_bytes(colors: Dict[str, Any]) -> bytes:
@@ -96,8 +100,8 @@ def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[
     grad = Image.new("L", (1, VH), 0)
     gp = grad.load()
     for y in range(VH):
-        f = max((200 - y) / 200.0, (y - (VH - 200)) / 200.0, 0.0)
-        gp[0, y] = int(min(1.0, f) * 150)
+        f = max((y - (VH - 280)) / 280.0, 0.0)        # só a BASE (legibilidade do rodapé logo+site)
+        gp[0, y] = int(min(1.0, f) * 175)
     grad = grad.resize((VW, VH))
     dark = Image.new("RGBA", (VW, VH), (8, 7, 11, 255)); dark.putalpha(grad)
     canvas.alpha_composite(dark)
@@ -141,8 +145,8 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     d.text((M + 55, ty + 24), btn, font=bf, fill=WHITE); ty += 138
     if phone:
         d.text((M, ty), phone, font=_font(58, weight="extrabold"), fill=acc); ty += 78
-    # MESMA marca dos clipes (logo topo + site embaixo) → transição limpa entre cena e CTA
-    _brand_frame(canvas, d, colors, logo_path, site)
+    # CTA com DUAS logos (topo + embaixo) + site embaixo-direita; rodapé igual ao do clipe → transição limpa
+    _brand_frame(canvas, d, colors, logo_path, site, top_logo=True)
     canvas.convert("RGB").save(path)
 
 
