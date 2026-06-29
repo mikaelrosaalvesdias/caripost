@@ -63,19 +63,17 @@ def _logo_h(logo_path: Optional[str], target_h: int) -> Optional[Image.Image]:
 
 
 def _brand_frame(canvas: Image.Image, d: ImageDraw.ImageDraw, colors: Dict[str, Any],
-                 logo_path: Optional[str], site: str, top_logo: bool = False) -> None:
-    """Rodapé da marca: logo (tamanho do site) embaixo-ESQUERDA + site embaixo-DIREITA — mesmo tamanho/posição
-    em toda tela → transição limpa. top_logo=True (SÓ no CTA) repete a logo no TOPO → CTA com DUAS logos."""
+                 logo_path: Optional[str], site: str) -> None:
+    """Rodapé da marca: logo (tamanho do site) embaixo-ESQUERDA + site embaixo-DIREITA, ALINHADOS no MESMO
+    centro vertical. Mesmo tamanho/posição em toda tela → transição limpa entre clipe e CTA."""
+    fc = VH - 96                                                  # centro vertical do rodapé
     lg = _logo_h(logo_path, 56)
     if lg:
-        canvas.alpha_composite(lg, (60, VH - lg.height - 72))     # embaixo-esquerda (clipe e CTA)
-        if top_logo:
-            canvas.alpha_composite(lg, (60, 64))                  # topo-esquerda (só CTA)
+        canvas.alpha_composite(lg, (60, fc - lg.height // 2))     # embaixo-esquerda, centrado em fc
     st = (site or "").replace("https://", "").replace("http://", "").strip("/")
     if st:
-        sf = _font(44, weight="semibold")
-        sw = d.textlength(st, font=sf)
-        d.text((VW - 60 - sw, VH - 100), st, font=sf, fill=(255, 255, 255, 235))   # embaixo-direita
+        d.text((VW - 60, fc), st, font=_font(44, weight="semibold"),
+               fill=(255, 255, 255, 235), anchor="rm")            # embaixo-direita, centrado em fc (alinhado)
 
 
 def _brand_bg_bytes(colors: Dict[str, Any]) -> bytes:
@@ -125,11 +123,12 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     inner = VW - 2 * M
     tf = _font(96, weight="extrabold")
     tl = _wrap(d, title, tf, inner)[:4]
-    # altura do bloco p/ centralizar verticalmente
-    bh = (56 if eyebrow else 0) + len(tl) * int(tf.size * 1.05) + 56 + 110 + (78 if phone else 0) + (56 if st else 0)
-    ty = max(260, (VH - bh) // 2 - 60)
-    if eyebrow:
-        d.text((M, ty), eyebrow, font=_font(40, weight="extrabold"), fill=acc); ty += 56
+    # logo GRANDE (~tamanho do texto) ACIMA do título + bloco centralizado verticalmente
+    big = _logo_h(logo_path, 120)
+    bh = ((big.height + 44) if big else 0) + len(tl) * int(tf.size * 1.05) + 30 + 110 + (78 if phone else 0)
+    ty = max(180, (VH - bh) // 2 - 40)
+    if big:
+        canvas.alpha_composite(big, (M, ty)); ty += big.height + 44
     for k, ln in enumerate(tl):
         if k == len(tl) - 1 and " " in ln:                 # última palavra em ACC
             pre, last = ln.rsplit(" ", 1)
@@ -145,8 +144,8 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     d.text((M + 55, ty + 24), btn, font=bf, fill=WHITE); ty += 138
     if phone:
         d.text((M, ty), phone, font=_font(58, weight="extrabold"), fill=acc); ty += 78
-    # CTA com DUAS logos (topo + embaixo) + site embaixo-direita; rodapé igual ao do clipe → transição limpa
-    _brand_frame(canvas, d, colors, logo_path, site, top_logo=True)
+    # rodapé igual ao do clipe (logo embaixo-esq + site embaixo-dir alinhados) → transição limpa + 2ª logo (a grande no topo)
+    _brand_frame(canvas, d, colors, logo_path, site)
     canvas.convert("RGB").save(path)
 
 
