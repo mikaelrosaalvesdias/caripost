@@ -1588,13 +1588,45 @@ def build_image_prompt(company: Dict[str, Any], theme: str, visual_prompt: str =
 
 
 def get_video_config() -> Optional[Dict[str, Any]]:
-    """Video-gen config (Sora-2). Falls back to the OpenAI text key."""
-    provider = (get_setting("video.provider") or "openai").strip()
-    api_key = get_credential("video", provider) or (get_credential("ai", "openai") if provider == "openai" else None)
-    if not api_key:
+    """Config de geração de vídeo CIENTE DO PROVEDOR (openai/openrouter/cometapi): chave + base_url + modelo.
+    Provedor vem de video.provider (setado no seletor) ou é derivado do id do modelo."""
+    model = (get_setting("video.model") or "").strip()
+    provider = (get_setting("video.provider") or "").strip()
+    if not provider:
+        provider = "cometapi" if model.startswith("cometapi:") else ("openrouter" if "/" in model else "openai")
+    if provider == "openrouter":
+        key, base = _openrouter_key(), "https://openrouter.ai/api/v1"
+    elif provider == "cometapi":
+        key, base = _cometapi_key(), _COMETAPI_BASE
+    else:
+        key, base = (get_credential("video", "openai") or get_credential("ai", "openai")), "https://api.openai.com/v1"
+        model = model or "sora-2"
+    if not key:
         return None
-    model = get_setting("video.model") or ("sora-2" if provider == "openai" else None)
-    return {"provider": provider, "apiKey": api_key, "model": model}
+    if model.startswith("cometapi:"):
+        model = model[len("cometapi:"):]            # id real na Comet (sem o prefixo do nosso catálogo)
+    return {"provider": provider, "apiKey": key, "model": model, "base": base}
+
+
+def video_model_max_seconds(model_id: str = "") -> int:
+    """Máximo de segundos/clipe do modelo (do catálogo CURATED_VIDEO*). Default 8."""
+    mid = (model_id or get_setting("video.model") or "").strip()
+    raw = mid[len("cometapi:"):] if mid.startswith("cometapi:") else mid
+    for s, n, q, p, sec in CURATED_VIDEO:
+        if mid in (s, n):
+            return sec
+    for s, n, q, p, sec in CURATED_VIDEO_COMET:
+        if mid == ("cometapi:" + s) or raw in (s, n):
+            return sec
+    return 8
+
+
+def video_scene_count(target_seconds: int, max_seconds: int, cap: int = 8) -> int:
+    """Quantas cenas cobrem a duração-alvo com clipes de até max_seconds (teto de cenas = controle de custo)."""
+    import math
+    t = max(1, int(target_seconds or 8))
+    m = max(1, int(max_seconds or 8))
+    return max(1, min(cap, math.ceil(t / m)))
 
 
 def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
@@ -1647,44 +1679,87 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     return fallback
 
 
-def create_video_job(prompt: str, seconds: str = "4", size: str = "720x1280") -> Dict[str, Any]:
-    """Create a Sora-2 video job (async). Returns the job dict (id, status)."""
+def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
+                     first_frame_url: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+    """Cria um job de vídeo (async) no PROVEDOR configurado. Retorna o job (id/status).
+    first_frame_url → CONTINUIDADE: a imagem entra como PRIMEIRO FRAME (= último frame da cena anterior)."""
     config = get_video_config()
     if not config:
-        raise ValueError("Geração de vídeo não configurada — adicione a chave OpenAI em Configurações.")
-    body = {"model": config["model"] or "sora-2", "prompt": prompt[:4000], "seconds": str(seconds), "size": size}
-    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
-        res = client.post(
-            "https://api.openai.com/v1/videos",
-            headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
-            json=body,
-        )
-    if res.status_code >= 400:
-        try:
-            detail = res.json().get("error", {}).get("message") or res.text[:300]
-        except Exception:
-            detail = res.text[:300]
-        raise ValueError(f"Falha ao criar vídeo (HTTP {res.status_code}): {detail}")
-    return res.json()
+        raise ValueError("Geração de vídeo não configurada — escolha o modelo de vídeo no painel.")
+    prov = config["provider"]
+    mdl = model or config["model"]
+    if prov == "openrouter":
+        # OpenRouter: POST /api/v1/videos (async). frame_images=first_frame emenda as cenas (recurso OFICIAL).
+        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000]}
+        if seconds:
+            body["seconds"] = str(seconds)
+        if first_frame_url:
+            body["frame_images"] = [{"frame_type": "first_frame", "image_url": first_frame_url}]
+        with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+            res = client.post(config["base"] + "/videos",
+                              headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
+                              json=body)
+        if res.status_code >= 400:
+            raise ValueError(f"Falha ao criar vídeo OpenRouter (HTTP {res.status_code}): {res.text[:300]}")
+        return res.json()    # {id, status, ...} — VERIFICAR shape no 1º teste real
+    if prov == "openai":
+        body = {"model": mdl or "sora-2", "prompt": prompt[:4000], "seconds": str(seconds), "size": size}
+        with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+            res = client.post("https://api.openai.com/v1/videos",
+                              headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
+                              json=body)
+        if res.status_code >= 400:
+            try:
+                detail = res.json().get("error", {}).get("message") or res.text[:300]
+            except Exception:
+                detail = res.text[:300]
+            raise ValueError(f"Falha ao criar vídeo (HTTP {res.status_code}): {detail}")
+        return res.json()
+    # CometAPI: API de vídeo é por FAMÍLIA (kling/veo/seedance diferentes) → fase futura (fallback).
+    raise ValueError(f"Provedor de vídeo '{prov}' ainda não implementado — use OpenRouter ou OpenAI por ora.")
 
 
 def get_video_job(job_id: str) -> Dict[str, Any]:
     config = get_video_config()
+    base = config["base"] if config else "https://api.openai.com/v1"
+    key = config["apiKey"] if config else ""
     with httpx.Client(timeout=60) as client:
-        res = client.get(
-            f"https://api.openai.com/v1/videos/{job_id}",
-            headers={"Authorization": f"Bearer {config['apiKey']}"},
-        )
+        res = client.get(f"{base}/videos/{job_id}", headers={"Authorization": f"Bearer {key}"})
     return res.json()
+
+
+def _video_url_from_job(job: Dict[str, Any]) -> str:
+    """Extrai a URL do vídeo pronto do job (shape varia por provedor → tenta caminhos comuns). VERIFICAR no 1º teste."""
+    for path in (("video", "url"), ("output", "url"), ("data", 0, "url"), ("assets", "video"), ("url",), ("video_url",)):
+        cur = job
+        try:
+            for k in path:
+                cur = cur[k]
+            if isinstance(cur, str) and cur.startswith("http"):
+                return cur
+        except Exception:
+            continue
+    return ""
 
 
 def download_video(job_id: str) -> bytes:
     config = get_video_config()
+    if not config:
+        raise ValueError("Geração de vídeo não configurada.")
+    prov, base = config["provider"], config["base"]
+    H = {"Authorization": f"Bearer {config['apiKey']}"}
+    if prov == "openai":
+        with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+            res = client.get(f"{base}/videos/{job_id}/content", headers=H)
+        if res.status_code >= 400:
+            raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
+        return res.content
+    # OpenRouter/Comet: o job concluído traz a URL do vídeo → baixa de lá.
+    vurl = _video_url_from_job(get_video_job(job_id))
+    if not vurl:
+        raise ValueError("Vídeo pronto mas sem URL no job (verificar shape do provedor no 1º teste real).")
     with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
-        res = client.get(
-            f"https://api.openai.com/v1/videos/{job_id}/content",
-            headers={"Authorization": f"Bearer {config['apiKey']}"},
-        )
+        res = client.get(vurl, headers=H)
     if res.status_code >= 400:
         raise ValueError(f"Falha ao baixar vídeo (HTTP {res.status_code})")
     return res.content
