@@ -339,7 +339,7 @@ function StepBriefing({ company }) {
     }).catch(() => {});
   }, [company.id]);
 
-  function persist(patch) { ContState.set(company.id, { briefingMode: mode, briefing, objetivo, tom, cta, networks, sources, assunto, formato, intent, eventId, ...patch }); }
+  function persist(patch) { ContState.set(company.id, { briefingMode: mode, briefing, objetivo, tom, cta, networks, sources, assunto, formato, intent, eventId, videoSeconds: vsec, ...patch }); }
 
   function pushBlock(blocks, g, label) {
     const idea = (g.headline || g.title || '').trim() || label;
@@ -373,7 +373,8 @@ function StepBriefing({ company }) {
         setMsg(`Montando ${fmtLabel} sobre "${seed}" (objetivo: ${objetivo}, formato: ${formato})…`);
         // post/story = 1 arte RICA (capa pela máquina do carrossel, no backend); carrossel = plano completo.
         const isSingle = formato === 'post' || formato === 'story';
-        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name), seconds: (formato === 'video' ? vsec : 0) });
+        const _vsecEff = (formato === 'video') ? (Number(vsec) || Number((ContState.get(company.id) || {}).videoSeconds) || 0) : 0;
+        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name), seconds: _vsecEff });
         const text = ((r && r.briefing) || '').trim();
         if (!text) { setMsg('Não consegui gerar agora. Tente de novo.'); return; }
         let tl = (r && r.telas) || [];
@@ -441,7 +442,7 @@ function StepBriefing({ company }) {
         </div>}
         <small className="hint">Carrossel → plano de telas · Post fixo → pauta · Vídeo → roteiro em cenas (trave a duração aqui).</small>
       </Field>}
-      {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto') : 'Gerar briefing com IA (apps marcados)')}</button>}
+      {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto' + (formato === 'video' ? ' · ' + (vsec ? vsec + 's' : 'livre') : '')) : 'Gerar briefing com IA (apps marcados)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
       <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>
       {mode === 'auto' && formato === 'video' && <small className="hint">Vídeo: <b>trave a duração acima</b>, gere o roteiro, depois <b>Próximo</b> pra escolher o modelo e gerar (a duração já vai travada, com o custo na tela).</small>}
