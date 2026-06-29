@@ -2032,8 +2032,9 @@ def music_generate(vibe: str, out_path: str, max_wait: int = 150) -> bool:
 def build_video_audio_plan(company: Dict[str, Any], theme: str, video_prompt: str = "",
                            total_seconds: int = 24) -> Dict[str, str]:
     """QUEM MANDA NO ÁUDIO É O BRIEFING. Lê o briefing e decide: mode (none|music|narration|both), ROTEIRO de
-    locução (tamanho que CASA com a duração) e a VIBE da trilha. Custo-seguro: sem config de texto → 'none' ($0)."""
-    safe = {"mode": "none", "script": "", "music": "", "voice": "onyx"}
+    locução (tamanho que CASA com a duração) e a VIBE da trilha. Default (briefing neutro) = TRILHA (reel não nasce mudo)."""
+    _GENVIBE = "trilha instrumental cinematográfica brasileira, energia crescente, sem vocais"
+    safe = {"mode": "music", "script": "", "music": _GENVIBE, "voice": "onyx"}
     config = cheap_text_config(get_ai_config())
     if not config:
         return safe
@@ -2044,6 +2045,7 @@ def build_video_audio_plan(company: Dict[str, Any], theme: str, video_prompt: st
         "Você é DIRETOR DE ÁUDIO de reels publicitários. A PARTIR DO BRIEFING decida o áudio — QUEM MANDA É O "
         "BRIEFING: se pede narração/locução/gravação, escreva a locução; se pede só trilha/música, sem locução; "
         "se pede os dois, faça os dois; se pede mudo/sem som, mode='none'. "
+        "Se o briefing NÃO mencionar áudio, use mode='music' (trilha) — reel MUDO performa mal. "
         f"Se houver locução: ROTEIRO em PT-BR de NO MÁXIMO {max_words} palavras, natural e persuasivo, no tom da "
         "marca, que CASA com a duração (nem corre nem sobra). PROIBIDO ler preço/valores ou soletrar URL. "
         "Se houver trilha: descreva a VIBE (gênero, andamento, energia) p/ gerar instrumental SEM vocais. "
@@ -2056,11 +2058,14 @@ def build_video_audio_plan(company: Dict[str, Any], theme: str, video_prompt: st
             + f"Duração do vídeo ~{int(total_seconds or 24)}s. Briefing/tema: {theme}. Direção visual: {video_prompt}")
     try:
         p = extract_json(complete_ai(config, system, user, 600)) or {}
-        mode = (p.get("mode") or "none").strip().lower()
+        mode = (p.get("mode") or "music").strip().lower()
         if mode not in ("none", "music", "narration", "both"):
-            mode = "none"
+            mode = "music"
+        _mus = (p.get("music") or "").strip()
+        if mode in ("music", "both") and not _mus:
+            _mus = _GENVIBE
         return {"mode": mode, "script": (p.get("script") or "").strip(),
-                "music": (p.get("music") or "").strip(), "voice": ((p.get("voice") or "onyx").strip() or "onyx")}
+                "music": _mus, "voice": ((p.get("voice") or "onyx").strip() or "onyx")}
     except Exception:
         return safe
 

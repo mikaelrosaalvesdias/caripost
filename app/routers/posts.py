@@ -1386,35 +1386,48 @@ async def generate_branded_video(request: Request):
         audio_plan = {"mode": "none"}
     colors = (company.get("brand_kit") or {}).get("colors") or {}
     co_logos = _all_raster_logos(asset_list_logos(cid)) or []        # TODAS as variantes da marca (motor escolhe por fundo)
-    app_logos = {}                                                   # logo OFICIAL do(s) app(s) em foco (carimbada no CTA)
-    try:
-        _focus_set = {a.strip().lower() for a in (body.get("apps") or []) if (a or "").strip()}
-        for _p in (product_list(cid) or []):
-            _nm = (_p.get("name") or "").strip()
-            if _focus_set and _nm.lower() not in _focus_set:
-                continue
-            _lps = _all_raster_logos(asset_list_logos(cid, _p["id"]))
-            if _lps:
-                app_logos[_nm.lower()] = _lps
-    except Exception:
-        app_logos = {}
+    # APP EM FOCO = o que o usuário marcou (body.apps) OU o app citado no TEMA (ex.: deezer). NUNCA pega
+    # arbitrário (era o bug que carimbava e-saúde). Se nada casar → sem logo de app (não inventa).
+    import unicodedata as _ud
+    def _norm(s):
+        s = _ud.normalize("NFKD", (s or "").lower())
+        return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
+    _focus_names = [a.strip() for a in (body.get("apps") or []) if (a or "").strip()]
+    _tn = _norm(theme)
+    _prods = product_list(cid) or []
+    if _focus_names:
+        _match = [p for p in _prods if (p.get("name") or "").strip().lower() in {a.lower() for a in _focus_names}]
+    else:
+        _match = [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tn]
+    app_logos = {}
+    for _p in _match[:1]:                                            # SÓ o app em foco → nunca carimba app errado
+        _lps = _all_raster_logos(asset_list_logos(cid, _p["id"]))
+        if _lps:
+            app_logos[(_p.get("name") or "").strip().lower()] = _lps
     site = (company.get("website") or "").strip()
     handle = ((company.get("socials") or {}).get("instagram") or "").strip()
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
     phone = (f"({phone_raw[:2]}) {phone_raw[2:7]}-{phone_raw[7:]}" if len(phone_raw) == 11 else (company.get("phone") or "")).strip()
-    # CTA GERADO pelo briefing (igual carrossel: NADA fixo, com ESTRUTURA) — eyebrow + headline de valor +
-    # subtítulo + botão, ancorado no produto/KB. Render usa o MESMO motor do carrossel (compose_card_slide).
-    from ..services.ai import build_video_cta
+    # CTA pelo MOTOR DO CARROSSEL (confiável, com ESTRUTURA): pega o slide 'cta' de um generate_carousel —
+    # headline de valor + subtítulo + botão GERADOS (nada fixo). Antes (build_video_cta) caía em "nome da marca".
+    cta = {"eyebrow": (company.get("segment") or "").strip(), "title": "Fale com a gente", "subtitle": "", "cta": "Fale com a gente"}
     try:
-        cta = await asyncio.to_thread(build_video_cta, company, theme, None)
+        from ..services.ai import generate_carousel
+        _cr = await asyncio.to_thread(generate_carousel, company, theme, 4, "produtos", None, "carrossel", _focus_names or None)
+        _slides = _cr.get("slides") or []
+        _ctas = next((s for s in _slides if (s.get("type") == "cta")), None) or (_slides[-1] if _slides else {})
+        if _ctas:
+            cta = {"eyebrow": (_ctas.get("eyebrow") or company.get("segment") or "").strip(),
+                   "title": (_ctas.get("title") or "Fale com a gente").strip(),
+                   "subtitle": (_ctas.get("subtitle") or _ctas.get("body") or "").strip(),
+                   "cta": (_ctas.get("cta") or "Fale com a gente").strip()}
     except Exception:
-        cta = {"eyebrow": (company.get("segment") or "").strip(),
-               "title": company.get("name") or "Fale com a gente", "subtitle": "", "cta": "Fale com a gente"}
-    if body.get("cta_title"):                 # override manual do usuário, se mandar
+        pass
+    if body.get("cta_title"):
         cta["title"] = str(body.get("cta_title")).strip()
     if body.get("cta"):
         cta["cta"] = str(body.get("cta")).strip()
-    cta["phone"] = phone                      # telefone só p/ fallback do card PIL
+    cta["phone"] = phone
     jid = _uuid.uuid4().hex
     base_url = str(request.base_url).rstrip("/")
     # Os provedores de vídeo (OpenRouter/Comet) BAIXAM o frame de continuidade por HTTP externo.

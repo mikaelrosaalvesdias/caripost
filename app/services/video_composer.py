@@ -161,7 +161,7 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], co_logos,
         from .template_composer import compose_card_slide
         slide = {"type": "cta", "eyebrow": (cta.get("eyebrow") or "").strip(),
                  "title": (cta.get("title") or "Fale com a gente").strip(),
-                 "subtitle": (cta.get("subtitle") or cta.get("phone") or "").strip(),
+                 "subtitle": (cta.get("subtitle") or "").strip(),
                  "cta": (cta.get("cta") or "Fale com a gente").strip()}
         png = compose_card_slide(slide, 1, 1, colors, co_logos, site, handle,
                                  _brand_bg_bytes(colors), None, None, app_logos, (VW, VH))
