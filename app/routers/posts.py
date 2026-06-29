@@ -1190,6 +1190,128 @@ async def generate_post_video(request: Request):
         return JSONResponse({"detail": str(exc)}, status_code=502)
 
 
+def _video_job_dir(company_id: str) -> str:
+    d = os.path.join(UPLOAD_DIR, company_id, "video")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, seconds: str,
+                              cta: dict, colors: dict, logo_path, site: str, handle: str, base_url: str) -> None:
+    """BACKGROUND: gera as cenas EM SEQUÊNCIA com continuidade (último frame → first_frame da próxima),
+    baixa, e monta o vídeo branded. Escreve o progresso/custo num .json. SÓ roda quando o usuário confirma."""
+    import json as _json, time as _time
+    from ..services.ai import create_video_job, get_video_job, download_video
+    from ..services.video_composer import compose_branded_video, last_frame_png
+    jdir = _video_job_dir(company_id)
+    sp_path = os.path.join(jdir, jid + ".json")
+
+    def _w(d):
+        try:
+            with open(sp_path, "w") as f:
+                _json.dump(d, f)
+        except Exception:
+            pass
+
+    def _pub(p):
+        return base_url + UPLOAD_URL_PREFIX + p[len(UPLOAD_DIR):]
+
+    total = len(scene_prompts)
+    clips, cost, first_frame_url = [], 0.0, None
+    try:
+        for i, sp in enumerate(scene_prompts):
+            _w({"status": "generating", "scene": i + 1, "total": total, "cost_usd": round(cost, 2)})
+            job = create_video_job(sp, str(seconds or ""), "720x1280", first_frame_url, None)
+            jid2 = job.get("id") or job.get("job_id")
+            if not jid2:
+                raise ValueError(f"sem job id na cena {i + 1}")
+            done = False
+            for _ in range(45):                                  # ~11min teto por cena
+                _time.sleep(15)
+                st = get_video_job(jid2)
+                status = str(st.get("status") or "").lower()
+                if status in ("completed", "succeeded", "success", "done"):
+                    cost += float((st.get("usage") or {}).get("cost") or 0); done = True; break
+                if status in ("failed", "error", "canceled", "cancelled"):
+                    raise ValueError(f"cena {i + 1} falhou no provedor")
+            if not done:
+                raise ValueError(f"cena {i + 1} demorou demais")
+            cp = os.path.join(jdir, f"{jid}_c{i}.mp4")
+            with open(cp, "wb") as f:
+                f.write(download_video(jid2))
+            clips.append({"path": cp})
+            lf = os.path.join(jdir, f"{jid}_f{i}.png")           # último frame → first_frame da próxima (continuidade)
+            first_frame_url = _pub(lf) if last_frame_png(cp, lf) else None
+        _w({"status": "composing", "scene": total, "total": total, "cost_usd": round(cost, 2)})
+        out = os.path.join(jdir, jid + ".mp4")
+        if not compose_branded_video(clips, out, colors, logo_path, cta, site, handle):
+            raise ValueError("falha ao montar o vídeo final")
+        _w({"status": "done", "url": _pub(out), "cost_usd": round(cost, 2), "scenes": total})
+    except Exception as e:
+        _w({"status": "error", "detail": str(e)[:300], "cost_usd": round(cost, 2)})
+
+
+@router.post("/generate-branded-video")
+async def generate_branded_video(request: Request):
+    """Dispara (em background) a geração de um vídeo BRANDED com continuidade. Retorna o job + preflight de custo.
+    A geração só roda após o usuário confirmar (o front mostra o preflight antes)."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    body = await request.json()
+    company = company_get(body.get("company_id"))
+    if not company:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    from ..services.ai import (get_video_config, video_cost_estimate, video_model_max_seconds,
+                               video_scene_count, build_video_storyboard, get_setting)
+    if not get_video_config():
+        return JSONResponse({"detail": "Escolha o modelo de vídeo no painel de IA antes."}, status_code=400)
+    cid = company["id"]
+    theme = (body.get("theme") or body.get("briefing") or "").strip()
+    video_prompt = (body.get("video_prompt") or body.get("visual_prompt") or "").strip()
+    target = max(4, min(int(body.get("seconds_total") or 8), 60))
+    mx = video_model_max_seconds()
+    n = video_scene_count(target, mx)
+    try:
+        sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt)
+    except Exception:
+        sb = []
+    prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")][:n]
+    while len(prompts) < n:                                       # garante n cenas
+        prompts.append(video_prompt or theme or f"Cena {len(prompts)+1} da marca {company.get('name','')}")
+    colors = (company.get("brand_kit") or {}).get("colors") or {}
+    logo = (_all_raster_logos(asset_list_logos(cid)) or [None])[0]
+    site = (company.get("website") or "").strip()
+    handle = ((company.get("socials") or {}).get("instagram") or "").strip()
+    phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
+    phone = (f"({phone_raw[:2]}) {phone_raw[2:7]}-{phone_raw[7:]}" if len(phone_raw) == 11 else (company.get("phone") or "")).strip()
+    cta = {"title": (body.get("cta_title") or theme or "Leve isso pro seu provedor"),
+           "cta": (body.get("cta") or "Fale com a gente"), "phone": phone}
+    jid = _uuid.uuid4().hex
+    base_url = str(request.base_url).rstrip("/")
+    import threading as _th
+    _th.Thread(target=_render_branded_video_job,
+               args=(cid, jid, prompts, body.get("seconds") or "", cta, colors, logo, site, handle, base_url),
+               daemon=True).start()
+    return {"job": jid, "scenes": n, "estimate": video_cost_estimate(target)}
+
+
+@router.get("/branded-video-status")
+def branded_video_status(request: Request, company_id: str = "", job: str = ""):
+    err = _api_key_required(request)
+    if err:
+        return err
+    import json as _json
+    p = os.path.join(UPLOAD_DIR, company_id, "video", job + ".json")
+    if not os.path.exists(p):
+        return {"status": "unknown"}
+    try:
+        with open(p) as f:
+            return _json.load(f)
+    except Exception:
+        return {"status": "unknown"}
+
+
 def _stitch_videos(paths, out_path) -> bool:
     """Concatenate clips into one mp4 via ffmpeg (copy, falling back to re-encode)."""
     import subprocess
