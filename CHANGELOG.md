@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.12 - 2026-06-29
+
+- **fix: Briefing adaptativo de vídeo.** O `video_storyboard_system` padrão passa a herdar a régua editorial do carrossel: dor real, crença errada, mudança de visão, benefício concreto, regras específicas para provedores/SVAs e bloqueio de b-roll genérico.
+- **fix: Prompt final de vídeo por cena.** `VIDEO_GEN` agora compila cada cena como shot canônico com sujeito/elemento, contexto, uma ação, um movimento de câmera, luz/clima e proibição dura de texto/logo/UI dentro do clipe.
+- **teste: Validação sem custo.** O smoke de prompts/preços agora prova os defaults de vídeo e os overrides por cliente sem chamar OpenRouter/CometAPI para geração paga.
+- Versão: main.py 1.27.12, OS/UI cache bust v=12712.
+
 ## v1.27.11 - 2026-06-29
 
 - **feat: Prompts modulares por cliente.** A aba Cliente > Criação agora expõe os prompts efetivos de briefing/roteiro de vídeo e de imagem/vídeo por cliente; `build_video_storyboard`, `build_video_prompt` e `build_image_prompt` consomem `brand_kit.creative_config`.

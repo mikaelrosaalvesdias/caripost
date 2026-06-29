@@ -124,9 +124,61 @@ def test_per_client_video_storyboard_prompt_override():
         ai._video_brief_context = originals["_video_brief_context"]
 
 
+def test_default_video_prompts_follow_adaptive_briefing_rules():
+    company = {
+        "id": "co1",
+        "name": "CARIAP",
+        "segment": "SVAs para provedores",
+        "brand_kit": {"colors": {"accent": "#ED5E1F"}},
+    }
+    prompt = ai.build_video_prompt(company, "ExitLag para provedores", "gamer percebe conexao estavel")
+    assert "CLIPE DE FUNDO" in prompt
+    assert "UMA ação principal" in prompt
+    assert "UM movimento de câmera" in prompt
+    assert "NÃO faça b-roll genérico" in prompt
+    assert "texto, logo, legenda, CTA" in prompt
+
+
+def test_default_video_storyboard_prompt_uses_carousel_quality_rules():
+    company = {"id": "co1", "name": "CARIAP", "segment": "SVAs para provedores", "brand_kit": {}}
+    captured = {}
+    originals = {
+        "cheap_text_config": ai.cheap_text_config,
+        "get_ai_config": ai.get_ai_config,
+        "complete_ai": ai.complete_ai,
+        "_video_brief_context": ai._video_brief_context,
+    }
+    try:
+        ai.cheap_text_config = lambda _cfg: {"provider": "fake"}
+        ai.get_ai_config = lambda: {}
+        ai._video_brief_context = lambda _company, _theme: "PRODUTO/APP REAL EM FOCO: [ExitLag] Funções: redução de latência. "
+
+        def fake_complete(_config, system, user, _max_tokens):
+            captured["system"] = system
+            captured["user"] = user
+            return '{"scenes":[{"desc":"gamer brasileiro percebe partida estavel, camera push-in leve, luz neon controlada","seconds":8}]}'
+
+        ai.complete_ai = fake_complete
+        out = ai.build_video_storyboard(company, "ExitLag para reduzir guerra de preço", "", 8, 1, 8)
+        assert out and "gamer brasileiro" in out[0]["desc"]
+        assert "dor real por trás do tema" in captured["system"]
+        assert "crença errada do público" in captured["system"]
+        assert "NÃO gere b-roll genérico" in captured["system"]
+        assert "redução da guerra de preço" in captured["system"]
+        assert "DADOS FIXOS DA MARCA E DO CLIENTE" in captured["user"]
+        assert "PRODUTO/APP REAL EM FOCO" in captured["user"]
+    finally:
+        ai.cheap_text_config = originals["cheap_text_config"]
+        ai.get_ai_config = originals["get_ai_config"]
+        ai.complete_ai = originals["complete_ai"]
+        ai._video_brief_context = originals["_video_brief_context"]
+
+
 if __name__ == "__main__":
     test_comet_image_catalog_price()
     test_learned_image_price_overrides_fallback()
     test_per_client_image_and_video_prompt_overrides()
     test_per_client_video_storyboard_prompt_override()
+    test_default_video_prompts_follow_adaptive_briefing_rules()
+    test_default_video_storyboard_prompt_uses_carousel_quality_rules()
     print("image pricing + prompt override tests: OK")

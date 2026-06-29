@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.12', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: briefing adaptativo agora herda a régua editorial do carrossel, com dor real, crença errada, benefício concreto e nada de b-roll genérico.' },
+      { type: 'fix', text: 'Vídeo: prompt final por cena usa gramática de shot com sujeito, contexto, uma ação, um movimento de câmera, luz/clima e proibição dura de texto/logo no clipe.' },
+      { type: 'test', text: 'Validação sem custo cobre defaults de vídeo e overrides por cliente, sem chamar geração paga.' },
+    ],
+  },
+  {
     version: 'v1.27.11', date: '2026-06-29',
     items: [
       { type: 'feat', text: 'Clientes: Configuração Criativa agora expõe prompt de briefing/roteiro de vídeo e prompts de imagem/vídeo por cliente.' },
