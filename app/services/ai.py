@@ -611,12 +611,12 @@ CURATED_IMAGE = [
 # Top-10 vídeo (slug real do OpenRouter). gemini-omni-flash/happyhorse NÃO existem lá.
 # Modelos de VÍDEO do OpenRouter (id real do /videos/models). (id, nome, qualidade, preço USD/clipe, MAX_SEGUNDOS por clipe da doc).
 CURATED_VIDEO = [
-    ("google/veo-3.1", "veo-3.1", "Top", 0.50, 8),
-    ("openai/sora-2-pro", "sora-2-pro", "Top", 0.50, 12),
+    ("google/veo-3.1", "veo-3.1", "Top", 1.20, 8),
+    ("openai/sora-2-pro", "sora-2-pro", "Top", 1.00, 12),
     ("bytedance/seedance-2.0", "seedance-2.0", "Top", 0.40, 12),
     ("kwaivgi/kling-v3.0-pro", "kling-v3.0-pro", "Top", 0.40, 10),
     ("alibaba/wan-2.7", "wan-2.7", "Top", 0.40, 5),
-    ("google/veo-3.1-fast", "veo-3.1-fast", "Alta", 0.30, 8),
+    ("google/veo-3.1-fast", "veo-3.1-fast", "Alta", 0.96, 8),
     ("bytedance/seedance-2.0-fast", "seedance-2.0-fast", "Alta", 0.25, 12),
     ("bytedance/seedance-1-5-pro", "seedance-1.5-pro", "Alta", 0.30, 10),
     ("kwaivgi/kling-v3.0-std", "kling-v3.0-std", "Alta", 0.25, 10),
@@ -1680,9 +1680,11 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
 
 
 def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
-                     first_frame_url: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+                     first_frame_url: Optional[str] = None, model: Optional[str] = None,
+                     aspect_ratio: str = "9:16") -> Dict[str, Any]:
     """Cria um job de vídeo (async) no PROVEDOR configurado. Retorna o job (id/status).
-    first_frame_url → CONTINUIDADE: a imagem entra como PRIMEIRO FRAME (= último frame da cena anterior)."""
+    first_frame_url → CONTINUIDADE: a imagem entra como PRIMEIRO FRAME (= último frame da cena anterior).
+    aspect_ratio → 9:16 (reels/story) por padrão; verificado que sem isso o veo sai 16:9."""
     config = get_video_config()
     if not config:
         raise ValueError("Geração de vídeo não configurada — escolha o modelo de vídeo no painel.")
@@ -1691,6 +1693,8 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
     if prov == "openrouter":
         # OpenRouter: POST /api/v1/videos (async). frame_images=first_frame emenda as cenas (recurso OFICIAL).
         body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000]}
+        if aspect_ratio:
+            body["aspect_ratio"] = aspect_ratio          # 9:16 vertical (senão sai 16:9 — verificado no teste)
         if seconds:
             body["seconds"] = str(seconds)
         if first_frame_url:
@@ -1729,7 +1733,11 @@ def get_video_job(job_id: str) -> Dict[str, Any]:
 
 
 def _video_url_from_job(job: Dict[str, Any]) -> str:
-    """Extrai a URL do vídeo pronto do job (shape varia por provedor → tenta caminhos comuns). VERIFICAR no 1º teste."""
+    """Extrai a URL do vídeo pronto do job. OpenRouter usa unsigned_urls/signed_urls (lista); outros variam."""
+    for k in ("unsigned_urls", "signed_urls"):     # OpenRouter (verificado no 1º teste)
+        u = job.get(k)
+        if isinstance(u, list) and u and isinstance(u[0], str) and u[0].startswith("http"):
+            return u[0]
     for path in (("video", "url"), ("output", "url"), ("data", 0, "url"), ("assets", "video"), ("url",), ("video_url",)):
         cur = job
         try:
