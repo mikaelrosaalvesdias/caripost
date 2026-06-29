@@ -1296,6 +1296,22 @@ async def generate_branded_video(request: Request):
     return {"job": jid, "scenes": n, "estimate": video_cost_estimate(target)}
 
 
+@router.get("/video-preflight")
+def video_preflight(request: Request, company_id: str = "", seconds: int = 8):
+    """Custo ESTIMADO do vídeo (cenas + R$) SEM gerar nada — pro front mostrar antes de confirmar."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    from ..services.ai import video_cost_estimate, get_video_config, get_setting
+    if not get_video_config():
+        return {"configured": False}
+    try:
+        s = int(seconds)
+    except Exception:
+        s = 8
+    return {"configured": True, "model_id": get_setting("video.model"), **video_cost_estimate(s)}
+
+
 @router.get("/branded-video-status")
 def branded_video_status(request: Request, company_id: str = "", job: str = ""):
     err = _api_key_required(request)

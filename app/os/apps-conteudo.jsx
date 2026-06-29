@@ -10,6 +10,47 @@ function imgGroups(list) {
 }
 function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '')); }
 
+function BrandedVideoPanel({ company, theme }) {
+  const [seconds, setSeconds] = React.useState(8);
+  const [pf, setPf] = React.useState(null);
+  const [status, setStatus] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  React.useEffect(() => { window.mpApi.videoPreflight(company.id, seconds).then(setPf).catch(() => {}); }, [seconds]);
+  const brl = (usd) => 'R$ ' + (Number(usd || 0) * 5.4).toFixed(2);
+  async function gerar() {
+    if (!pf || !pf.configured) { setMsg('Erro: configure o modelo de vídeo no painel de IA (Configurações) primeiro.'); return; }
+    if (!window.confirm('Gerar vídeo de ' + seconds + 's (' + pf.scenes + ' cena(s)) ≈ R$ ' + pf.total_brl + '?\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
+    setBusy(true); setMsg('Iniciando…'); setStatus(null);
+    try {
+      const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, seconds_total: seconds });
+      if (!r || !r.job) { setMsg('Erro: ' + ((r && r.detail) || 'não consegui iniciar')); setBusy(false); return; }
+      for (let i = 0; i < 90; i++) {
+        await new Promise(res => setTimeout(res, 8000));
+        const s = await window.mpApi.brandedVideoStatus(company.id, r.job);
+        setStatus(s);
+        if (s.status === 'done') { setMsg('✓ Vídeo pronto! Custo REAL: ' + brl(s.cost_usd)); setBusy(false); return; }
+        if (s.status === 'error') { setMsg('Falhou: ' + (s.detail || '') + ' (gasto: ' + brl(s.cost_usd) + ')'); setBusy(false); return; }
+      }
+      setMsg('Demorando — clique de novo pra ver o status.'); setBusy(false);
+    } catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
+  }
+  return <div className="panel stack" style={{ marginTop: 10 }}>
+    <div className="sec"><Icon name="video" />Gerar vídeo branded (9:16, com áudio)</div>
+    <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span className="hint">Duração:</span>
+      {[8, 15, 30].map(s => <button key={s} className={'btn sm' + (seconds === s ? ' pri' : ' ghost')} onClick={() => setSeconds(s)}>{s}s</button>)}
+    </div>
+    {pf && pf.configured && <div className="hint">Modelo <b>{pf.model}</b> · {pf.scenes} cena(s) · custo estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(o custo REAL aparece ao final)</span></div>}
+    {pf && !pf.configured && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha o modelo de vídeo no painel de IA (Configurações) antes.</div>}
+    {status && status.status === 'generating' && <div className="hint">Gerando cena {status.scene}/{status.total}… · gasto até agora {brl(status.cost_usd)}</div>}
+    {status && status.status === 'composing' && <div className="hint">Montando o vídeo com a marca (logo, CTA)…</div>}
+    {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 280, borderRadius: 12 }} />}
+    {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
+    <button className="btn pri" disabled={busy || !theme || (pf && !pf.configured)} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.configured ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
+  </div>;
+}
+
 const CONT_STEPS = [
   { k: 'cliente', ic: 'users', t: 'Cliente' },
   { k: 'briefing', ic: 'sparkles', t: 'Briefing' },
@@ -308,6 +349,7 @@ function StepBriefing({ company }) {
       {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto') : 'Gerar briefing com IA (apps marcados)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
       <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>
+      {mode === 'auto' && formato === 'video' && (briefing.trim() || assunto.trim()) && <BrandedVideoPanel company={company} theme={(briefing.trim() || assunto.trim())} />}
     </div>
     <div className="stack">
       <Field label="Objetivo">

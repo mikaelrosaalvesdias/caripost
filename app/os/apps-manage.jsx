@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.26.86';
+const MP_OS_VERSION = 'v1.26.87';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
