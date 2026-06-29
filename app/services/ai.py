@@ -1642,33 +1642,55 @@ def _video_catalog_entry(model_id: str):
     return None
 
 
+def video_clip_price(model_id: str = "") -> float:
+    """Preço por clipe (USD): usa o PREÇO REAL APRENDIDO (usage.cost da última geração desse modelo) se existir;
+    senão a estimativa do catálogo. Faz a previsão CONVERGIR pro real após o 1º uso de cada modelo."""
+    mid = (model_id or get_setting("video.model") or "").strip()
+    learned = get_setting("video.price." + mid)
+    if learned:
+        try:
+            v = float(learned)
+            if v > 0:
+                return v
+        except Exception:
+            pass
+    ent = _video_catalog_entry(mid)
+    return ent[0] if ent else 0.40
+
+
 def video_cost_estimate(target_seconds: int, model_id: str = "") -> Dict[str, Any]:
-    """PREFLIGHT: nº de cenas + custo ESTIMADO (catálogo) p/ a duração no modelo. O custo REAL vem depois
-    em usage.cost por clipe. Mostrar isto ANTES de gerar (controle de gasto)."""
+    """PREFLIGHT: nº de cenas + custo p/ a duração no modelo. Usa preço APRENDIDO (real) se já houver; senão catálogo."""
     mid = model_id or get_setting("video.model") or ""
     ent = _video_catalog_entry(mid)
-    price = ent[0] if ent else 0.40
+    price = video_clip_price(mid)
     mx = ent[1] if ent else 8
     name = ent[2] if ent else (mid or "modelo")
     n = video_scene_count(target_seconds, mx)
     total = round(price * n, 2)
     return {"model": name, "model_id": mid, "max_seconds": mx, "scenes": n,
-            "price_per_clip_usd": price, "total_usd": total, "total_brl": round(usd_to_brl(total), 2)}
+            "price_per_clip_usd": price, "total_usd": total, "total_brl": round(usd_to_brl(total), 2),
+            "price_learned": bool(get_setting("video.price." + (mid or "")))}
 
 
 def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
-    """Prompt SÓ-CENA pro modelo de vídeo: cena cinematográfica REAL, SEM texto/logo/marca/UI de app.
-    O código desenha marca/legenda/CTA depois — senão o modelo inventa anúncio falso com texto e logo tortos."""
+    """Prompt SÓ-CENA pro modelo de vídeo — MESMA régua de qualidade da ARTE (campanha premium + grade na cor da
+    marca + proibição dura de texto/logo). O código desenha marca/legenda/CTA depois."""
     scene = (video_prompt or theme or "cena publicitária premium").strip()
+    cols = (company.get("brand_kit") or {}).get("colors") or {}
+    acc = (cols.get("accent") or cols.get("primary") or "").strip()
+    grade = (f"GRADE DE COR cinematográfica puxando para a COR DA MARCA {acc} (acentos e luz nessa cor). " if acc
+             else "Grade de cor cinematográfica de campanha premium. ")
     return (
-        "Cena de VÍDEO vertical 9:16, cinematográfica e PREMIUM — estética de campanha publicitária real, alta produção, "
-        "iluminação dramática e direcional, profundidade, movimento de câmera suave, cores ricas e coesas. "
-        "Pessoas brasileiras reais e naturais (sem cara de IA, sem deformação, sem rosto distorcido). "
-        f"CENA (interprete de forma cinematográfica): {scene}. "
-        "PROIBIDO ABSOLUTO em QUALQUER lugar do quadro: TEXTO, letra, palavra, número, legenda, título; LOGO, "
-        "marca, logotipo, watermark; INTERFACE de app ou TELA de celular com ícones/nomes/texto legível. "
-        "NADA escrito em lugar nenhum — telas de aparelhos só com brilho ABSTRATO, sem UI. É SÓ a cena em movimento; "
-        "o texto e a marca são adicionados depois pelo sistema. Sem cara de banco de imagem, sem cartoon, sem render barato."
+        "VÍDEO vertical 9:16 EM MOVIMENTO, nível AGÊNCIA de propaganda — estética de CAMPANHA publicitária real, "
+        "altíssima produção. NÃO foto de banco de imagem, NÃO cara de IA/cartoon/render barato. " + grade +
+        "Iluminação dramática e direcional (rim light, contraluz, glow), profundidade real em camadas, textura rica "
+        "(partículas, bokeh, atmosfera). Movimento de câmera suave e cinematográfico (push-in leve/parallax), ação natural contínua. "
+        "Pessoas brasileiras reais e naturais quando a cena pedir (sem deformação, sem rosto distorcido) — ou só elementos/produto se ilustrar melhor. "
+        f"CENA (interprete cinematograficamente, com a personalidade da marca): {scene}. "
+        "PROIBIDO ABSOLUTO em QUALQUER frame e QUALQUER lugar do quadro: TEXTO, letra, palavra, número, legenda, título; "
+        "LOGO, marca, logotipo, watermark; INTERFACE/TELA de app ou celular com ícones/nomes/texto legível; nota musical com texto. "
+        "Telas de aparelhos só com brilho ABSTRATO. NADA escrito em lugar nenhum — o texto e a marca entram DEPOIS pelo sistema. "
+        "Acabamento de revista: foco nítido, micro-contraste, grão fino, zero aspecto amador."
     )
 
 

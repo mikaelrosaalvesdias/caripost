@@ -1246,6 +1246,17 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
         out = os.path.join(jdir, jid + ".mp4")
         if not compose_branded_video(clips, out, colors, logo_path, cta, site, handle):
             raise ValueError("falha ao montar o vídeo final")
+        try:                                          # APRENDE o preço real (usage.cost/cena) p/ a próxima previsão bater
+            if total and cost > 0:
+                from ..services.ai import get_setting as _gs
+                from ..db import settings_set as _ss
+                from datetime import datetime, timezone
+                _m = _gs("video.model") or ""
+                if _m:
+                    _ss(key="video.price." + _m, value=str(round(cost / total, 4)),
+                        updated_at=datetime.now(timezone.utc).isoformat())
+        except Exception:
+            pass
         _w({"status": "done", "url": _pub(out), "cost_usd": round(cost, 2), "scenes": total})
     except Exception as e:
         _w({"status": "error", "detail": str(e)[:300], "cost_usd": round(cost, 2)})
@@ -1304,7 +1315,7 @@ async def video_preflight(request: Request):
         return err
     body = await request.json()
     from ..services.ai import (build_video_storyboard, get_video_config, get_setting,
-                               video_model_max_seconds, _video_catalog_entry, usd_to_brl)
+                               video_model_max_seconds, _video_catalog_entry, usd_to_brl, video_clip_price)
     if not get_video_config():
         return {"configured": False}
     company = company_get(body.get("company_id"))
@@ -1335,13 +1346,14 @@ async def video_preflight(request: Request):
         prompts = prompts[:8] or [vp or theme or "cena"]
         secs = [min(int(s.get("seconds") or 8), mx) for s in (sb or [])][:len(prompts)] or [mx]
     n = len(prompts)
-    ent = _video_catalog_entry(get_setting("video.model") or "")
-    price = ent[0] if ent else 0.40
-    name = ent[2] if ent else (get_setting("video.model") or "modelo")
+    _vm = get_setting("video.model") or ""
+    ent = _video_catalog_entry(_vm)
+    price = video_clip_price(_vm)                  # preço REAL aprendido se já houver; senão catálogo
+    name = ent[2] if ent else (_vm or "modelo")
     total_usd = round(price * n, 2)
     return {"configured": True, "model": name, "scenes": n, "total_seconds": sum(secs),
             "price_per_clip_usd": price, "total_usd": total_usd, "total_brl": round(usd_to_brl(total_usd), 2),
-            "storyboard": prompts}
+            "price_learned": bool(get_setting("video.price." + _vm)), "storyboard": prompts}
 
 
 @router.post("/branded-video-status")

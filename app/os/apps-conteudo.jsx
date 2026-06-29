@@ -21,6 +21,7 @@ function VideoCreator({ company }) {
   const [status, setStatus] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
+  const [proc, setProc] = React.useState({ open: false });   // mesma animação (ProcessModal) da geração de imagem
   const brl = (usd) => 'R$ ' + (Number(usd || 0) * 5.4).toFixed(2);
   React.useEffect(() => {
     window.mpApi.aiModels().then(r => { const v = r.video || []; setVmodels(v); setModel(m => m || r.video_current || (v[0] && v[0].id) || ''); }).catch(() => {});
@@ -35,19 +36,23 @@ function VideoCreator({ company }) {
   async function gerar() {
     if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
     if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ≈ R$ ' + pf.total_brl + '.\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
-    setBusy(true); setMsg('Iniciando…'); setStatus(null);
+    setBusy(true); setMsg(''); setStatus(null);
+    setProc({ open: true, pct: 3, detail: 'Iniciando a geração do vídeo…', phase: '' });
     try {
       const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, storyboard: pf.storyboard });
-      if (!r || !r.job) { setMsg('Erro: ' + ((r && r.detail) || 'não consegui iniciar')); setBusy(false); return; }
-      for (let i = 0; i < 120; i++) {
-        await new Promise(res => setTimeout(res, 8000));
+      if (!r || !r.job) { setProc({ open: true, phase: 'error', detail: ((r && r.detail) || 'não consegui iniciar') }); setBusy(false); return; }
+      const tot = r.scenes || pf.scenes || 1;
+      for (let i = 0; i < 160; i++) {
+        await new Promise(res => setTimeout(res, 6000));
         const s = await window.mpApi.brandedVideoStatus(company.id, r.job);
         setStatus(s);
-        if (s.status === 'done') { setMsg('✓ Vídeo pronto! Custo REAL: ' + brl(s.cost_usd)); setBusy(false); return; }
-        if (s.status === 'error') { setMsg('Falhou: ' + (s.detail || '') + ' (gasto: ' + brl(s.cost_usd) + ')'); setBusy(false); return; }
+        if (s.status === 'generating') setProc({ open: true, pct: Math.min(92, Math.round((s.scene - 1) / tot * 88) + 5), detail: 'Gerando cena ' + s.scene + '/' + s.total + ' (com áudio)… · gasto ' + brl(s.cost_usd), phase: '' });
+        else if (s.status === 'composing') setProc({ open: true, pct: 95, detail: 'Juntando as cenas em 1 vídeo só + logo e CTA da marca…', phase: '' });
+        else if (s.status === 'done') { setProc({ open: true, pct: 100, phase: 'done', detail: '✓ Vídeo pronto! Custo REAL: ' + brl(s.cost_usd) }); setBusy(false); return; }
+        else if (s.status === 'error') { setProc({ open: true, phase: 'error', detail: (s.detail || 'falhou') + ' · gasto ' + brl(s.cost_usd) }); setBusy(false); return; }
       }
-      setMsg('Demorando — recarregue pra ver o status.'); setBusy(false);
-    } catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
+      setProc({ open: true, phase: 'error', detail: 'Demorando demais — recarregue a página pra ver o status.' }); setBusy(false);
+    } catch (e) { setProc({ open: true, phase: 'error', detail: e.message }); setBusy(false); }
   }
   const DURS = [[0, 'Livre (IA decide)'], [8, '8s'], [15, '15s'], [30, '30s'], [60, '60s']];
   const PLAB = { cometapi: 'CometAPI', openrouter: 'OpenRouter', openai: 'OpenAI' };
@@ -72,11 +77,10 @@ function VideoCreator({ company }) {
     {planning && <div className="hint">Montando o roteiro e calculando o custo…</div>}
     {pf && pf.configured && !planning && <div className="hint">→ <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) · custo estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(o real vem ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
     {pf && !pf.configured && !planning && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha um modelo de vídeo acima (e configure a chave no painel de IA).</div>}
-    {status && status.status === 'generating' && <div className="hint">Gerando cena {status.scene}/{status.total}… · gasto até agora {brl(status.cost_usd)}</div>}
-    {status && status.status === 'composing' && <div className="hint">Juntando as cenas num vídeo só + marca/CTA…</div>}
     {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 300, borderRadius: 12 }} />}
     {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
     <button className="btn pri" disabled={busy || !pf || !pf.configured} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.total_brl ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
+    {proc.open && <ProcessModal open={proc.open} title="Gerando vídeo" detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
   </div>;
 }
 
@@ -259,6 +263,7 @@ function StepBriefing({ company }) {
   const [ideasCount, setIdeasCount] = React.useState(st.ideasCount || 5);
   const [assunto, setAssunto] = React.useState(st.assunto || '');
   const [formato, setFormato] = React.useState(st.formato || 'carrossel');
+  const [vsec, setVsec] = React.useState(st.videoSeconds || 0);   // duração do vídeo (0=livre) — TRAVA o briefing
   const [intent, setIntent] = React.useState(st.intent || 'produtos');   // MODO: produtos | evento | criativo
   const [eventId, setEventId] = React.useState(st.eventId || '');
   const [events, setEvents] = React.useState([]);
@@ -373,12 +378,16 @@ function StepBriefing({ company }) {
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           {FORMATOS.map(([k, t]) => <button key={k} className={'btn sm' + (formato === k ? ' pri' : ' ghost')} onClick={() => { setFormato(k); persist({ formato: k }); }}>{t}</button>)}
         </div>
-        <small className="hint">Carrossel → plano de telas · Post fixo → pauta · Vídeo → roteiro em cenas.</small>
+        {formato === 'video' && <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+          <span className="hint">Duração do vídeo:</span>
+          {[[0, 'Livre (IA decide)'], [8, '8s'], [15, '15s'], [30, '30s'], [60, '60s']].map(([v, t]) => <button key={v} className={'btn sm' + (vsec === v ? ' pri' : ' ghost')} onClick={() => { setVsec(v); persist({ videoSeconds: v }); }}>{t}</button>)}
+        </div>}
+        <small className="hint">Carrossel → plano de telas · Post fixo → pauta · Vídeo → roteiro em cenas (trave a duração aqui).</small>
       </Field>}
       {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto') : 'Gerar briefing com IA (apps marcados)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
       <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>
-      {mode === 'auto' && formato === 'video' && <small className="hint">Vídeo: gere o roteiro acima, depois clique em <b>Próximo</b> pra escolher a duração + o modelo de vídeo e gerar (com o custo na tela).</small>}
+      {mode === 'auto' && formato === 'video' && <small className="hint">Vídeo: <b>trave a duração acima</b>, gere o roteiro, depois <b>Próximo</b> pra escolher o modelo e gerar (a duração já vai travada, com o custo na tela).</small>}
     </div>
     <div className="stack">
       <Field label="Objetivo">
