@@ -10,48 +10,73 @@ function imgGroups(list) {
 }
 function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '')); }
 
-function BrandedVideoPanel({ company, theme }) {
+function VideoCreator({ company }) {
+  const st = ContState.get(company.id);
+  const theme = ((st.briefing || '').trim() || (st.assunto || '').trim());
+  const [dur, setDur] = React.useState(st.videoSeconds || 0);
+  const [vmodels, setVmodels] = React.useState([]);
+  const [model, setModel] = React.useState('');
   const [pf, setPf] = React.useState(null);
+  const [planning, setPlanning] = React.useState(false);
   const [status, setStatus] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
-  const [loadingPf, setLoadingPf] = React.useState(false);
   const [msg, setMsg] = React.useState('');
-  React.useEffect(() => { setPf(null); setStatus(null); setMsg(''); }, [theme]);
   const brl = (usd) => 'R$ ' + (Number(usd || 0) * 5.4).toFixed(2);
-  async function plan() {
-    setLoadingPf(true); setMsg('');
-    try { setPf(await window.mpApi.videoPreflight(company.id, theme)); }
-    catch (e) { setMsg('Erro: ' + e.message); }
-    finally { setLoadingPf(false); }
-  }
+  React.useEffect(() => {
+    window.mpApi.aiModels().then(r => { const v = r.video || []; setVmodels(v); setModel(m => m || r.video_current || (v[0] && v[0].id) || ''); }).catch(() => {});
+  }, []);
+  React.useEffect(() => {
+    if (!model || !theme) return;
+    setPlanning(true);
+    window.mpApi.videoPreflight(company.id, theme, dur).then(setPf).catch(() => {}).finally(() => setPlanning(false));
+  }, [model, dur]);   // custo AUTOMÁTICO (sem botão "calcular")
+  async function selectModel(id) { setModel(id); setPf(null); try { await window.mpApi.setAiModel({ video_model: id }); } catch (e) {} }
+  function setDuration(d) { setDur(d); ContState.set(company.id, { videoSeconds: d }); }
   async function gerar() {
-    if (!pf || !pf.configured) { setMsg('Erro: configure o modelo de vídeo no painel de IA (Configurações) primeiro.'); return; }
+    if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
     if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ≈ R$ ' + pf.total_brl + '.\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
     setBusy(true); setMsg('Iniciando…'); setStatus(null);
     try {
       const r = await window.mpApi.generateBrandedVideo({ company_id: company.id, theme, storyboard: pf.storyboard });
       if (!r || !r.job) { setMsg('Erro: ' + ((r && r.detail) || 'não consegui iniciar')); setBusy(false); return; }
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 120; i++) {
         await new Promise(res => setTimeout(res, 8000));
         const s = await window.mpApi.brandedVideoStatus(company.id, r.job);
         setStatus(s);
         if (s.status === 'done') { setMsg('✓ Vídeo pronto! Custo REAL: ' + brl(s.cost_usd)); setBusy(false); return; }
         if (s.status === 'error') { setMsg('Falhou: ' + (s.detail || '') + ' (gasto: ' + brl(s.cost_usd) + ')'); setBusy(false); return; }
       }
-      setMsg('Demorando — clique de novo pra ver o status.'); setBusy(false);
+      setMsg('Demorando — recarregue pra ver o status.'); setBusy(false);
     } catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
   }
-  return <div className="panel stack" style={{ marginTop: 10 }}>
+  const DURS = [[0, 'Livre (IA decide)'], [8, '8s'], [15, '15s'], [30, '30s'], [60, '60s']];
+  const PLAB = { cometapi: 'CometAPI', openrouter: 'OpenRouter', openai: 'OpenAI' };
+  const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
+  const vlabel = (m) => (m.name || m.id) + (m.quality ? ' (' + m.quality + ')' : '') + (m.max_seconds ? ' · até ' + m.max_seconds + 's' : '') + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + '/clipe' : '');
+  if (!theme) return <div className="panel stack"><div className="hint">Volte ao Briefing, escreva o assunto e gere o roteiro do vídeo primeiro.</div></div>;
+  return <div className="panel stack">
     <div className="sec"><Icon name="video" />Gerar vídeo branded (9:16, com áudio)</div>
-    <div className="hint">A <b>duração vem do briefing</b> (ele decide quantas cenas) — você não escolhe. Calcule antes de gerar:</div>
-    {!pf && <button className="btn sm ghost" disabled={loadingPf || !theme} onClick={plan}>{loadingPf ? 'Montando roteiro…' : 'Calcular cenas e custo'}</button>}
-    {pf && pf.configured && <div className="hint">O briefing virou <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) no modelo <b>{pf.model}</b> · estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(real ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
-    {pf && !pf.configured && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha o modelo de vídeo no painel de IA (Configurações) antes.</div>}
+    <Field label="Duração — TRAVE quantos segundos quer, ou deixe LIVRE pra IA decidir pelo briefing">
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        {DURS.map(([v, t]) => <button key={v} className={'btn sm' + (dur === v ? ' pri' : ' ghost')} onClick={() => setDuration(v)}>{t}</button>)}
+      </div>
+    </Field>
+    <Field label="Modelo de VÍDEO (OpenRouter / CometAPI)">
+      <select className="inp" value={model} onChange={e => selectModel(e.target.value)}>
+        {vgroups.length ? vgroups.map(g => <optgroup key={g.provider} label={g.label}>
+          {g.models.map(m => <option key={m.id} value={m.id}>{vlabel(m)}</option>)}
+        </optgroup>) : <option value="">Configure CometAPI/OpenRouter no painel de IA</option>}
+      </select>
+    </Field>
+    <div className="sec mut">Assunto: {theme.slice(0, 100)}</div>
+    {planning && <div className="hint">Montando o roteiro e calculando o custo…</div>}
+    {pf && pf.configured && !planning && <div className="hint">→ <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) · custo estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(o real vem ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
+    {pf && !pf.configured && !planning && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha um modelo de vídeo acima (e configure a chave no painel de IA).</div>}
     {status && status.status === 'generating' && <div className="hint">Gerando cena {status.scene}/{status.total}… · gasto até agora {brl(status.cost_usd)}</div>}
     {status && status.status === 'composing' && <div className="hint">Juntando as cenas num vídeo só + marca/CTA…</div>}
-    {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 280, borderRadius: 12 }} />}
+    {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 300, borderRadius: 12 }} />}
     {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
-    {pf && pf.configured && <button className="btn pri" disabled={busy} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo (≈ R$ ' + pf.total_brl + ')')}</button>}
+    <button className="btn pri" disabled={busy || !pf || !pf.configured} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.total_brl ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
   </div>;
 }
 
@@ -353,7 +378,7 @@ function StepBriefing({ company }) {
       {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto') : 'Gerar briefing com IA (apps marcados)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
       <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>
-      {mode === 'auto' && formato === 'video' && (briefing.trim() || assunto.trim()) && <BrandedVideoPanel company={company} theme={(briefing.trim() || assunto.trim())} />}
+      {mode === 'auto' && formato === 'video' && <small className="hint">Vídeo: gere o roteiro acima, depois clique em <b>Próximo</b> pra escolher a duração + o modelo de vídeo e gerar (com o custo na tela).</small>}
     </div>
     <div className="stack">
       <Field label="Objetivo">
@@ -641,7 +666,7 @@ function StepCriacao({ company }) {
   const f = st.formato || 'carrossel';
   // carrossel/post/story usam o MESMO criador moderno (modelo, versões, influencer, card de vidro) — só muda a dimensão.
   if (f === 'carrossel' || f === 'post' || f === 'story') return <CarrosselCreator company={company} format={f} />;
-  return <StepCriacaoPost company={company} />;   // vídeo segue no fluxo próprio (roteiro + cenas)
+  return <VideoCreator company={company} />;   // VÍDEO tem tela PRÓPRIA (duração + modelo de vídeo + cenas), não a de imagem
 }
 
 function StepCriacaoPost({ company }) {

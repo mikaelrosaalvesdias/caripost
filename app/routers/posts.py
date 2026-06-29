@@ -1310,15 +1310,30 @@ async def video_preflight(request: Request):
     company = company_get(body.get("company_id"))
     theme = (body.get("theme") or "").strip()
     vp = (body.get("video_prompt") or "").strip()
+    import math as _math
     try:
-        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp) if company else []
+        target = int(body.get("seconds") or 0)        # >0 = usuário TRAVOU a duração; 0 = livre (IA decide)
+    except Exception:
+        target = 0
+    mx = video_model_max_seconds()
+    if target > 0:
+        per = min(mx, 12)
+        n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = custo)
+    else:
+        per, n_want = mx, 0
+    try:
+        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp, target, n_want, per) if company else []
     except Exception:
         sb = []
-    mx = video_model_max_seconds()
-    prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")][:8]    # briefing decide o nº (teto 8 = custo)
-    secs = [min(int(s.get("seconds") or 8), mx) for s in (sb or [])][:len(prompts)]
-    if not prompts:
-        prompts, secs = [vp or theme or "cena"], [mx]
+    prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
+    if n_want > 0:                                             # duração TRAVADA → exatamente n_want cenas
+        prompts = prompts[:n_want]
+        while len(prompts) < n_want:
+            prompts.append((prompts[len(prompts) % len(prompts)] if prompts else (vp or theme or "cena da marca")))
+        secs = [per] * n_want
+    else:                                                      # LIVRE → a IA decide
+        prompts = prompts[:8] or [vp or theme or "cena"]
+        secs = [min(int(s.get("seconds") or 8), mx) for s in (sb or [])][:len(prompts)] or [mx]
     n = len(prompts)
     ent = _video_catalog_entry(get_setting("video.model") or "")
     price = ent[0] if ent else 0.40

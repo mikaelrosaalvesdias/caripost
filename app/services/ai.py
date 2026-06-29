@@ -1667,18 +1667,23 @@ def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = 
     return " ".join(p for p in parts if p).strip()
 
 
-def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "") -> List[Dict[str, str]]:
-    """The AI decides the ideal reel duration AND scene breakdown from the briefing
-    (the human does NOT pick duration). Returns a list of {prompt, seconds} where
-    seconds is one of Sora's allowed values (4/8/12)."""
-    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": "8"}]
+def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
+                           target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8) -> List[Dict[str, str]]:
+    """Roteiro em CENAS. Se n_scenes>0 (usuário TRAVOU a duração) gera EXATAMENTE n_scenes cenas distintas de
+    per_seconds cada; senão a IA decide (modo LIVRE). Retorna [{prompt, seconds}]."""
+    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": str(per_seconds or 8)}]
     config = cheap_text_config(get_ai_config())
     if not config:
         return fallback
+    if n_scenes and int(n_scenes) > 0:
+        dur_rule = (f"Quebre em EXATAMENTE {int(n_scenes)} CENAS DISTINTAS e sequenciais (com continuidade entre elas), "
+                    f"cada uma com {int(per_seconds)} segundos, totalizando ~{int(target_seconds or n_scenes*per_seconds)}s. "
+                    f"NÃO repita cenas — cada uma avança a narrativa. ")
+    else:
+        dur_rule = ("DECIDA a duração ideal do reel (o que performa melhor — normalmente 15 a 60s) e quebre em cenas. ")
     system = (
-        "Você é roteirista/estrategista de reels. A partir do briefing, DECIDA a duração ideal do reel "
-        "(o que performa melhor para o objetivo — normalmente entre 15 e 60s, sem forçar nem encurtar demais) "
-        "e quebre em CENAS sequenciais coerentes. Cada cena dura 4, 8 ou 12 segundos (valores válidos). "
+        "Você é roteirista/estrategista de reels. A partir do briefing, " + dur_rule +
+        "Cada cena dura 4, 8 ou 12 segundos. "
         'Responda SOMENTE JSON: {"total_seconds": N, "scenes":[{"desc":"cena visual","seconds":8}, ...]} . '
         "Cada 'desc': descrição visual concreta (ambiente, ação, movimento de câmera), SEM texto/letras/logo na tela. PT-BR."
     )
