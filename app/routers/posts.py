@@ -1206,8 +1206,8 @@ def _video_job_dir(company_id: str) -> str:
 
 
 def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, seconds: str,
-                              cta: dict, colors: dict, logo_path, site: str, handle: str, base_url: str,
-                              audio_plan: dict = None) -> None:
+                              cta: dict, colors: dict, co_logos, site: str, handle: str, base_url: str,
+                              audio_plan: dict = None, app_logos: dict = None) -> None:
     """BACKGROUND: gera as cenas EM SEQUÊNCIA com continuidade (último frame → first_frame da próxima),
     baixa, e monta o vídeo branded. Escreve o progresso/custo num .json. SÓ roda quando o usuário confirma."""
     import json as _json, time as _time
@@ -1313,8 +1313,8 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
         _w({"status": "composing", "scene": total, "total": total,
             "cost_usd": round(cost, 2), "cost_source": cost_source})
         out = os.path.join(jdir, jid + ".mp4")
-        if not compose_branded_video(clips, out, colors, logo_path, cta, site, handle,
-                                     narration_path, music_path):
+        if not compose_branded_video(clips, out, colors, co_logos, cta, site, handle,
+                                     narration_path, music_path, app_logos):
             raise ValueError("falha ao montar o vídeo final")
         try:                                          # APRENDE o preço real (usage.cost/cena) p/ a próxima previsão bater
             if total and usage_cost > 0:
@@ -1385,7 +1385,19 @@ async def generate_branded_video(request: Request):
     except Exception:
         audio_plan = {"mode": "none"}
     colors = (company.get("brand_kit") or {}).get("colors") or {}
-    logo = (_all_raster_logos(asset_list_logos(cid)) or [None])[0]
+    co_logos = _all_raster_logos(asset_list_logos(cid)) or []        # TODAS as variantes da marca (motor escolhe por fundo)
+    app_logos = {}                                                   # logo OFICIAL do(s) app(s) em foco (carimbada no CTA)
+    try:
+        _focus_set = {a.strip().lower() for a in (body.get("apps") or []) if (a or "").strip()}
+        for _p in (product_list(cid) or []):
+            _nm = (_p.get("name") or "").strip()
+            if _focus_set and _nm.lower() not in _focus_set:
+                continue
+            _lps = _all_raster_logos(asset_list_logos(cid, _p["id"]))
+            if _lps:
+                app_logos[_nm.lower()] = _lps
+    except Exception:
+        app_logos = {}
     site = (company.get("website") or "").strip()
     handle = ((company.get("socials") or {}).get("instagram") or "").strip()
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
@@ -1412,7 +1424,7 @@ async def generate_branded_video(request: Request):
         base_url = "https://" + base_url[len("http://"):]
     import threading as _th
     _th.Thread(target=_render_branded_video_job,
-               args=(cid, jid, prompts, str(_per), cta, colors, logo, site, handle, base_url, audio_plan),
+               args=(cid, jid, prompts, str(_per), cta, colors, co_logos, site, handle, base_url, audio_plan, app_logos),
                daemon=True).start()
     return {"job": jid, "scenes": n}
 

@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from .template_composer import _font, _hex, ORANGE, WHITE, compose_card_slide
+from .template_composer import _font, _hex, ORANGE, WHITE, compose_card_slide, _pick_logo_variant
 
 VW, VH = 1080, 1920   # 9:16
 
@@ -99,11 +99,20 @@ def _logo_h(logo_path: Optional[str], target_h: int) -> Optional[Image.Image]:
 
 
 def _brand_frame(canvas: Image.Image, d: ImageDraw.ImageDraw, colors: Dict[str, Any],
-                 logo_path: Optional[str], site: str) -> None:
-    """Rodapé da marca: logo (tamanho do site) embaixo-ESQUERDA + site embaixo-DIREITA, ALINHADOS no MESMO
-    centro vertical. Mesmo tamanho/posição em toda tela → transição limpa entre clipe e CTA."""
+                 co_logos, site: str) -> None:
+    """Rodapé da marca: logo embaixo-ESQUERDA + site embaixo-DIREITA, alinhados. co_logos = LISTA de variantes;
+    escolhe a de MELHOR contraste com o fundo escuro (igual carrossel: branca em fundo escuro)."""
     fc = VH - 96                                                  # centro vertical do rodapé
-    lg = _logo_h(logo_path, 56)
+    lg = None
+    try:
+        _paths = co_logos if isinstance(co_logos, list) else ([co_logos] if co_logos else [])
+        if _paths:
+            lg = _pick_logo_variant(_paths, 28, 240, 56)          # fundo escuro (gradiente do rodapé) → variante clara
+    except Exception:
+        lg = None
+    if lg is None:                                                # fallback: 1ª logo crua
+        _p0 = (co_logos[0] if isinstance(co_logos, list) and co_logos else co_logos)
+        lg = _logo_h(_p0, 56)
     if lg:
         canvas.alpha_composite(lg, (60, fc - lg.height // 2))     # embaixo-esquerda, centrado em fc
     st = (site or "").replace("https://", "").replace("http://", "").strip("/")
@@ -124,9 +133,9 @@ def _brand_bg_bytes(colors: Dict[str, Any]) -> bytes:
     b = io.BytesIO(); out.save(b, "PNG"); return b.getvalue()
 
 
-def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[str], site: str, path: str) -> None:
+def _clip_overlay_png(caption: str, colors: Dict[str, Any], co_logos, site: str, path: str) -> None:
     """Overlay transparente 1080x1920 p/ cada clipe: LEGENDA tech (gradiente, sem caixa) + RODAPÉ da marca
-    (logo embaixo à esquerda + site à direita) — igual à arte do carrossel."""
+    (logo de melhor contraste + site) — igual à arte do carrossel. co_logos = LISTA de variantes."""
     canvas = Image.new("RGBA", (VW, VH), (0, 0, 0, 0))
     d = ImageDraw.Draw(canvas)
     # gradiente sutil só no TOPO e na BASE (legibilidade da marca); MEIO fica livre — o texto da mensagem
@@ -139,29 +148,43 @@ def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[
     grad = grad.resize((VW, VH))
     dark = Image.new("RGBA", (VW, VH), (8, 7, 11, 255)); dark.putalpha(grad)
     canvas.alpha_composite(dark)
-    _brand_frame(canvas, d, colors, logo_path, site)   # MESMA marca da capa/CTA
+    _brand_frame(canvas, d, colors, co_logos, site)   # MESMA marca da capa/CTA (variante por fundo)
     canvas.save(path)
 
 
-def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Optional[str],
-                  site: str, handle: str, path: str) -> None:
+def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], co_logos,
+                  site: str, handle: str, path: str, app_logos=None) -> None:
     """CTA 9:16. PRIMEIRO tenta o MESMO motor do carrossel (compose_card_slide → identidade IDÊNTICA: cor, fonte,
-    layout editorial, eyebrow+headline+subtítulo+botão). Só cai no PIL local se o motor falhar (degradação graciosa)."""
+    layout editorial, eyebrow+headline+subtítulo+botão, LOGO por contraste + LOGO DO APP carimbada).
+    co_logos = LISTA de variantes da marca; app_logos = dict {nome:[variantes]}. Só cai no PIL se o motor falhar."""
     try:
         from .template_composer import compose_card_slide
         slide = {"type": "cta", "eyebrow": (cta.get("eyebrow") or "").strip(),
                  "title": (cta.get("title") or "Fale com a gente").strip(),
                  "subtitle": (cta.get("subtitle") or cta.get("phone") or "").strip(),
                  "cta": (cta.get("cta") or "Fale com a gente").strip()}
-        png = compose_card_slide(slide, 1, 1, colors, logo_path, site, handle,
-                                 _brand_bg_bytes(colors), None, None, None, (VW, VH))
+        png = compose_card_slide(slide, 1, 1, colors, co_logos, site, handle,
+                                 _brand_bg_bytes(colors), None, None, app_logos, (VW, VH))
         if png and len(png) > 2000:
+            # O motor NÃO carimba logo de app no slide tipo 'cta' → carimbo aqui a logo do app EM FOCO (ex.: Deezer)
+            # na área central-baixa (mostra o app + preenche o 9:16). Variante por contraste com o fundo escuro.
+            try:
+                variants = next((v for v in (app_logos or {}).values() if v), None)
+                if variants:
+                    im = Image.open(io.BytesIO(png)).convert("RGBA")
+                    alg = _pick_logo_variant(variants, 30, 520, 230)     # fundo escuro → variante clara/colorida
+                    if alg:
+                        im.alpha_composite(alg, ((VW - alg.width) // 2, int(VH * 0.60)))
+                    b = io.BytesIO(); im.convert("RGB").save(b, "PNG"); png = b.getvalue()
+            except Exception:
+                pass
             with open(path, "wb") as f:
                 f.write(png)
             return
     except Exception:
         pass
     acc = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
+    _p0 = (co_logos[0] if isinstance(co_logos, list) and co_logos else co_logos)   # fallback PIL: 1ª variante
     canvas = Image.open(io.BytesIO(_brand_bg_bytes(colors))).convert("RGBA")
     d = ImageDraw.Draw(canvas)
     eyebrow = (cta.get("eyebrow") or "").strip().upper()
@@ -173,7 +196,7 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     inner = VW - 2 * M
     tf, tl = _fit_title(d, title, inner, 3, 96, "extrabold", 52)
     # logo GRANDE (~tamanho do texto) ACIMA do título + bloco centralizado verticalmente
-    big = _logo_h(logo_path, 120)
+    big = _logo_h(_p0, 120)
     bh = ((big.height + 44) if big else 0) + len(tl) * int(tf.size * 1.05) + 30 + 110 + (78 if phone else 0)
     ty = max(180, (VH - bh) // 2 - 40)
     if big:
@@ -194,7 +217,7 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     if phone:
         d.text((M, ty), phone, font=_font(58, weight="extrabold"), fill=acc); ty += 78
     # rodapé igual ao do clipe (logo embaixo-esq + site embaixo-dir alinhados) → transição limpa + 2ª logo (a grande no topo)
-    _brand_frame(canvas, d, colors, logo_path, site)
+    _brand_frame(canvas, d, colors, co_logos, site)
     canvas.convert("RGB").save(path)
 
 
@@ -254,9 +277,10 @@ def _mux_audio(base_path: str, out_path: str, narration_path: Optional[str],
 
 
 def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
-                          colors: Dict[str, Any], logo_path: Optional[str],
+                          colors: Dict[str, Any], co_logos,
                           cta: Dict[str, Any], site: str = "", handle: str = "",
-                          narration_path: Optional[str] = None, music_path: Optional[str] = None) -> bool:
+                          narration_path: Optional[str] = None, music_path: Optional[str] = None,
+                          app_logos=None) -> bool:
     """clips=[{'path','caption'}] (já gerados) → 1 vídeo 9:16 branded (rodapé+legenda) + card de CTA + ÁUDIO
     do briefing (narração/trilha mixados sobre a faixa silenciosa). R$0 nesta etapa."""
     tmp = tempfile.mkdtemp(prefix="vid_")
@@ -266,7 +290,7 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
         if not cp or not os.path.exists(cp):
             continue
         ov = os.path.join(tmp, f"ov{i}.png")
-        _clip_overlay_png(c.get("caption") or "", colors, logo_path, site, ov)
+        _clip_overlay_png(c.get("caption") or "", colors, co_logos, site, ov)
         seg = os.path.join(tmp, f"seg{i}.mp4")
         fc = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
               f"{_grade_filter(colors)}[v];[v][1:v]overlay=0:0[vout]")
@@ -284,7 +308,7 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
     if not segs:
         return False
     cta_png = os.path.join(tmp, "cta.png")
-    _cta_card_png(cta, colors, logo_path, site, handle, cta_png)
+    _cta_card_png(cta, colors, co_logos, site, handle, cta_png, app_logos)
     cta_mp4 = os.path.join(tmp, "cta.mp4")
     if _ff(["-loop", "1", "-i", cta_png, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
             "-t", "2.6", "-vf", "scale=1080:1920,setsar=1", "-r", "30",
