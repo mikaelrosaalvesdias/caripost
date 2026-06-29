@@ -534,6 +534,15 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.13', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: geração final agora recebe a duração total escolhida e não confunde segundos por cena com duração do reel.' },
+      { type: 'fix', text: 'Vídeo: compositor corta cada clipe no tempo planejado antes de montar o CTA, mesmo quando o provedor devolve duração maior.' },
+      { type: 'fix', text: 'Vídeo: Omni/CometAPI não quebra mais um pedido de 8s em duas cenas de 4s antes de enviar ao provedor.' },
+      { type: 'fix', text: 'Vídeo: áudio nativo do provedor é descartado e CTA final vira card determinístico da marca, sem copy decidida por IA.' },
+    ],
+  },
+  {
     version: 'v1.27.12', date: '2026-06-29',
     items: [
       { type: 'fix', text: 'Vídeo: briefing adaptativo agora herda a régua editorial do carrossel, com dor real, crença errada, benefício concreto e nada de b-roll genérico.' },

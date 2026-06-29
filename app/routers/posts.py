@@ -1290,7 +1290,11 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
             cp = os.path.join(jdir, f"{jid}_c{i}.mp4")
             with open(cp, "wb") as f:
                 f.write(download_video(jid2, provider_config))
-            clips.append({"path": cp})
+            try:
+                clip_seconds = max(1.0, float(seconds or 0))
+            except Exception:
+                clip_seconds = 0.0
+            clips.append({"path": cp, "seconds": clip_seconds})
             lf = os.path.join(jdir, f"{jid}_f{i}.png")           # último frame → first_frame da próxima (continuidade)
             first_frame_url = _pub(lf) if last_frame_png(cp, lf) else None
         # ÁUDIO conforme o BRIEFING (plano): narração via TTS + trilha via Suno (best-effort, NUNCA quebra o vídeo)
@@ -1355,7 +1359,9 @@ async def generate_branded_video(request: Request):
     # MESMA lógica do video-preflight. NUNCA manda o total como duração de cada clipe (era o bug que multiplicava o custo).
     import math as _math
     try:
-        target = int(float(body.get("seconds") or 0))         # total escolhido pelo usuário (0 = livre)
+        # total escolhido pelo usuário (0 = livre). "scene_seconds" é só hint de UI;
+        # nunca use segundos por cena como duração total, senão 15/30/60s descartam cenas.
+        target = int(float(body.get("target_seconds") if body.get("target_seconds") is not None else body.get("seconds") or 0))
     except Exception:
         target = 0
     mx = video_model_max_seconds()                            # máx de segundos POR CLIPE do modelo
@@ -1408,21 +1414,15 @@ async def generate_branded_video(request: Request):
     handle = ((company.get("socials") or {}).get("instagram") or "").strip()
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
     phone = (f"({phone_raw[:2]}) {phone_raw[2:7]}-{phone_raw[7:]}" if len(phone_raw) == 11 else (company.get("phone") or "")).strip()
-    # CTA pelo MOTOR DO CARROSSEL (confiável, com ESTRUTURA): pega o slide 'cta' de um generate_carousel —
-    # headline de valor + subtítulo + botão GERADOS (nada fixo). Antes (build_video_cta) caía em "nome da marca".
-    cta = {"eyebrow": (company.get("segment") or "").strip(), "title": "Fale com a gente", "subtitle": "", "cta": "Fale com a gente"}
-    try:
-        from ..services.ai import generate_carousel
-        _cr = await asyncio.to_thread(generate_carousel, company, theme, 4, "produtos", None, "carrossel", _focus_names or None)
-        _slides = _cr.get("slides") or []
-        _ctas = next((s for s in _slides if (s.get("type") == "cta")), None) or (_slides[-1] if _slides else {})
-        if _ctas:
-            cta = {"eyebrow": (_ctas.get("eyebrow") or company.get("segment") or "").strip(),
-                   "title": (_ctas.get("title") or "Fale com a gente").strip(),
-                   "subtitle": (_ctas.get("subtitle") or _ctas.get("body") or "").strip(),
-                   "cta": (_ctas.get("cta") or "Fale com a gente").strip()}
-    except Exception:
-        pass
+    # CTA determinístico: vídeo não deixa CTA/copy final na mão da IA. O código desenha o card,
+    # carimba logo oficial e usa CTA do estado do cliente quando existir.
+    _app_focus = (_match[0].get("name") or "").strip() if _match else ""
+    _cta_btn = (body.get("cta") or "").strip() or "Fale com a gente"
+    _brand = (company.get("name") or "a gente").strip()
+    cta = {"eyebrow": (_app_focus or company.get("segment") or "").strip(),
+           "title": f"Fale com a {_brand}" if _brand.lower() not in ("a gente", "gente") else "Fale com a gente",
+           "subtitle": (f"Leve {_app_focus} para sua base de clientes." if _app_focus else ""),
+           "cta": _cta_btn}
     if body.get("cta_title"):
         cta["title"] = str(body.get("cta_title")).strip()
     if body.get("cta"):

@@ -5,6 +5,10 @@ Run inside the app container/image, where project dependencies are installed:
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
+
 from app.services import ai
 
 
@@ -110,9 +114,39 @@ def test_cost_fallback_helpers():
         assert ai.video_model_id_from_config({"provider": "cometapi", "model": "viduq3-turbo"}) == "cometapi:viduq3-turbo"
         assert ai.video_estimated_clip_cost("cometapi:viduq3-turbo", "4") == 0.112
         assert ai.video_estimated_clip_cost("cometapi:omni-fast", "4") == 0.40
+        assert ai.video_model_max_seconds("cometapi:omni-fast") == 8
+        assert ai.video_scene_count(8, ai.video_model_max_seconds("cometapi:omni-fast")) == 1
     finally:
         ai.video_price_per_second = original_per_second
         ai.video_clip_price = original_clip_price
+
+
+def test_composer_trims_provider_clip_duration():
+    from app.services.video_composer import compose_branded_video, _media_dur
+
+    if subprocess.run(["which", "ffmpeg"], capture_output=True).returncode != 0:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "provider_ignored_seconds.mp4")
+        out = os.path.join(tmp, "out.mp4")
+        subprocess.run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=#222222:s=720x1280:d=10:r=30",
+            "-f", "lavfi", "-i", "sine=frequency=1000:duration=10",
+            "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", src,
+        ], check=True)
+        ok = compose_branded_video(
+            [{"path": src, "seconds": 2}],
+            out,
+            {"accent": "#ED5E1F"},
+            [],
+            {"title": "Fale com a gente", "cta": "Fale com a gente"},
+            "cariap.com.br",
+            "",
+        )
+        assert ok
+        dur = _media_dur(out)
+        assert 4.4 <= dur <= 5.0, dur  # 2s clipe + 2.6s CTA, com folga de encoder
 
 
 if __name__ == "__main__":
@@ -124,6 +158,7 @@ if __name__ == "__main__":
         test_openrouter_download_content_url()
         test_price_parsers()
         test_cost_fallback_helpers()
+        test_composer_trims_provider_clip_duration()
     finally:
         ai.get_video_config = original_config
         ai.httpx.Client = original_client

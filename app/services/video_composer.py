@@ -281,8 +281,9 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
                           cta: Dict[str, Any], site: str = "", handle: str = "",
                           narration_path: Optional[str] = None, music_path: Optional[str] = None,
                           app_logos=None) -> bool:
-    """clips=[{'path','caption'}] (já gerados) → 1 vídeo 9:16 branded (rodapé+legenda) + card de CTA + ÁUDIO
-    do briefing (narração/trilha mixados sobre a faixa silenciosa). R$0 nesta etapa."""
+    """clips=[{'path','caption','seconds'}] (já gerados) → 1 vídeo 9:16 branded (rodapé+legenda) + card de CTA
+    + ÁUDIO do briefing. Áudio nativo do provedor é descartado: voz/trilha precisa ser consistente e controlada pelo
+    sistema, não pelo modelo de vídeo."""
     tmp = tempfile.mkdtemp(prefix="vid_")
     segs = []
     for i, c in enumerate(clips):
@@ -292,15 +293,15 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
         ov = os.path.join(tmp, f"ov{i}.png")
         _clip_overlay_png(c.get("caption") or "", colors, co_logos, site, ov)
         seg = os.path.join(tmp, f"seg{i}.mp4")
-        fc = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
+        try:
+            target_seconds = float(c.get("seconds") or 0)
+        except Exception:
+            target_seconds = 0.0
+        trim = f"trim=duration={target_seconds:.3f},setpts=PTS-STARTPTS," if target_seconds > 0 else ""
+        fc = (f"[0:v]{trim}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
               f"{_grade_filter(colors)}[v];[v][1:v]overlay=0:0[vout]")
-        # PRESERVA o áudio NATIVO do clipe (ex.: trilha gerada pela Comet). Só injeta faixa silenciosa se o clipe
-        # vier MUDO (ex.: Veo c/ generate_audio=False) → o concat final exige áudio uniforme em todos os segmentos.
-        if _has_audio(cp):
-            cmd = ["-i", cp, "-i", ov, "-filter_complex", fc, "-map", "[vout]", "-map", "0:a"]
-        else:
-            cmd = ["-i", cp, "-i", ov, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                   "-filter_complex", fc, "-map", "[vout]", "-map", "2:a"]
+        cmd = ["-i", cp, "-i", ov, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+               "-filter_complex", fc, "-map", "[vout]", "-map", "2:a"]
         ok = _ff(cmd + ["-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
                         "-ar", "44100", "-shortest", seg])
         if ok:

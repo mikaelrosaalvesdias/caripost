@@ -641,7 +641,7 @@ CURATED_VIDEO_COMET = [
     ("viduq3", "viduq3", "Alta", 0.448, 8),
     ("viduq3-turbo", "viduq3-turbo", "Boa", 0.224, 8),
     ("veo3", "veo3", "Alta", 2.56, 8),
-    ("omni-fast", "omni-fast", "Boa", 0.40, 4),
+    ("omni-fast", "omni-fast", "Boa", 0.40, 8),
 ]
 
 

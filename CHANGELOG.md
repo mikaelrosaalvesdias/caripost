@@ -2,6 +2,15 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.13 - 2026-06-29
+
+- **fix: Duração real do vídeo.** O front envia `target_seconds` para o backend e não usa mais segundos por cena como duração total.
+- **fix: Corte pós-provedor.** O compositor corta cada clipe no tempo planejado antes de montar o vídeo final, impedindo que modelos como Omni devolvam 10s/20s quando o app pediu menos.
+- **fix: Omni 8s em uma cena.** `cometapi:omni-fast` não divide mais um pedido de 8s em duas cenas de 4s antes do envio ao provedor.
+- **fix: Áudio e CTA controlados pelo sistema.** O compositor descarta áudio nativo do provedor e o CTA final passa a ser determinístico da marca/CTA do cliente, sem copy final gerada por IA.
+- **teste: Sem custo de IA.** O smoke de vídeo cria um clipe local de 10s e prova que o output final fica em ~2s + CTA.
+- Versão: main.py 1.27.13, OS/UI cache bust v=12713.
+
 ## v1.27.12 - 2026-06-29
 
 - **fix: Briefing adaptativo de vídeo.** O `video_storyboard_system` padrão passa a herdar a régua editorial do carrossel: dor real, crença errada, mudança de visão, benefício concreto, regras específicas para provedores/SVAs e bloqueio de b-roll genérico.
