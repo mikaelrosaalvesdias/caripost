@@ -2784,8 +2784,23 @@ def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educ
                    "texto, locução, marca e CTA entram na PÓS (o modelo de vídeo NÃO escreve)."), ""]
         for i, s in enumerate(sb, 1):
             linhas.append(f"Cena {i} ({s.get('seconds','')}s): {(s.get('desc') or '').strip()}")
+        _ap = {}
+        try:                                              # mostra o ÁUDIO que o briefing pediu (narração/trilha)
+            _ap = build_video_audio_plan(company, theme, theme, target or (n_want * per)) or {}
+            _am = _ap.get("mode")
+            if _am == "narration":
+                linhas += ["", '🔊 Narração: "' + (_ap.get("script") or "")[:400] + '"']
+            elif _am == "both":
+                linhas += ["", '🔊 Narração + trilha: "' + (_ap.get("script") or "")[:400] + '"']
+            elif _am == "music":
+                linhas += ["", "🔊 Trilha: " + (_ap.get("music") or "")[:160]]
+            elif _am == "none":
+                linhas += ["", "🔇 Sem som (mudo)"]
+        except Exception:
+            pass
         return {"formato": fmt, "telas": [], "storyboard": [s.get("prompt") for s in sb],
-                "scene_seconds": [s.get("seconds") for s in sb], "text": "\n".join(linhas).strip()}
+                "scene_seconds": [s.get("seconds") for s in sb], "audio_plan": _ap,
+                "text": "\n".join(linhas).strip()}
     # POST/PAUTA em prosa (fallback)
     user = base + G["post_template"]
     return {"formato": fmt, "telas": [], "text": complete_ai(config, system, user, 1700).strip()}
