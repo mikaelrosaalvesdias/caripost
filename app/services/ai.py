@@ -1677,6 +1677,12 @@ def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = 
     marca + proibição dura de texto/logo). O código desenha marca/legenda/CTA depois."""
     scene = (video_prompt or theme or "cena publicitária premium").strip()
     cols = (company.get("brand_kit") or {}).get("colors") or {}
+    if not cols:
+        try:
+            from ..db_companies import brand_kit_get
+            cols = (brand_kit_get(company.get("id")) or {}).get("colors") or {}
+        except Exception:
+            cols = {}
     acc = (cols.get("accent") or cols.get("primary") or "").strip()
     grade = (f"GRADE DE COR cinematográfica puxando para a COR DA MARCA {acc} (acentos e luz nessa cor). " if acc
              else "Grade de cor cinematográfica de campanha premium. ")
