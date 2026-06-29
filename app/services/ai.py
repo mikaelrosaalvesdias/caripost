@@ -1657,14 +1657,19 @@ def video_cost_estimate(target_seconds: int, model_id: str = "") -> Dict[str, An
 
 
 def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
-    """Compose a brand-aware prompt for a short social video."""
-    parts = [
-        f"Vídeo curto vertical para redes sociais da marca {company.get('name','')}.",
-        f"Tema: {theme}." if theme else "",
-        video_prompt or "",
-        "Dinâmico, alta qualidade, alinhado à identidade da marca. Sem legendas/texto na tela.",
-    ]
-    return " ".join(p for p in parts if p).strip()
+    """Prompt SÓ-CENA pro modelo de vídeo: cena cinematográfica REAL, SEM texto/logo/marca/UI de app.
+    O código desenha marca/legenda/CTA depois — senão o modelo inventa anúncio falso com texto e logo tortos."""
+    scene = (video_prompt or theme or "cena publicitária premium").strip()
+    return (
+        "Cena de VÍDEO vertical 9:16, cinematográfica e PREMIUM — estética de campanha publicitária real, alta produção, "
+        "iluminação dramática e direcional, profundidade, movimento de câmera suave, cores ricas e coesas. "
+        "Pessoas brasileiras reais e naturais (sem cara de IA, sem deformação, sem rosto distorcido). "
+        f"CENA (interprete de forma cinematográfica): {scene}. "
+        "PROIBIDO ABSOLUTO em QUALQUER lugar do quadro: TEXTO, letra, palavra, número, legenda, título; LOGO, "
+        "marca, logotipo, watermark; INTERFACE de app ou TELA de celular com ícones/nomes/texto legível. "
+        "NADA escrito em lugar nenhum — telas de aparelhos só com brilho ABSTRATO, sem UI. É SÓ a cena em movimento; "
+        "o texto e a marca são adicionados depois pelo sistema. Sem cara de banco de imagem, sem cartoon, sem render barato."
+    )
 
 
 def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
@@ -1685,7 +1690,9 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
         "Você é roteirista/estrategista de reels. A partir do briefing, " + dur_rule +
         "Cada cena dura 4, 8 ou 12 segundos. "
         'Responda SOMENTE JSON: {"total_seconds": N, "scenes":[{"desc":"cena visual","seconds":8}, ...]} . '
-        "Cada 'desc': descrição visual concreta (ambiente, ação, movimento de câmera), SEM texto/letras/logo na tela. PT-BR."
+        "Cada 'desc': uma CENA REAL e cinematográfica (pessoas, ambiente, EMOÇÃO/benefício, ação, movimento de câmera). "
+        "MOSTRE a sensação/benefício do produto, NÃO a tela do app. PROIBIDO: descrever telas de celular/app, "
+        "interfaces, ícones, textos, logos ou nomes de marca. Só cena fotográfica em movimento. PT-BR."
     )
     user = f"Empresa: {company.get('name','')} ({company.get('segment','')}). Briefing/tema: {theme}. Direção visual: {video_prompt}"
     allowed = [4, 8, 12]
@@ -1751,8 +1758,22 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
                 detail = res.text[:300]
             raise ValueError(f"Falha ao criar vídeo (HTTP {res.status_code}): {detail}")
         return res.json()
-    # CometAPI: API de vídeo é por FAMÍLIA (kling/veo/seedance diferentes) → fase futura (fallback).
-    raise ValueError(f"Provedor de vídeo '{prov}' ainda não implementado — use OpenRouter ou OpenAI por ora.")
+    if prov == "cometapi":
+        # CometAPI é OpenAI-compat → tenta /videos (async, igual Sora). first_frame não suportado aqui.
+        body = {"model": mdl, "prompt": prompt[:4000]}
+        if seconds:
+            body["seconds"] = str(seconds)
+        if size:
+            body["size"] = size
+        with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+            res = client.post(config["base"] + "/videos",
+                              headers={"Authorization": f"Bearer {config['apiKey']}", "content-type": "application/json"},
+                              json=body)
+        if res.status_code >= 400:
+            raise ValueError(f"CometAPI não aceitou esse modelo de vídeo (HTTP {res.status_code}). "
+                             f"Tente um modelo OpenRouter (veo/seedance/kling). Detalhe: {res.text[:200]}")
+        return res.json()
+    raise ValueError(f"Provedor de vídeo '{prov}' não suportado.")
 
 
 def get_video_job(job_id: str) -> Dict[str, Any]:
