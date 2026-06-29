@@ -50,6 +50,30 @@ def _wrap(d: ImageDraw.ImageDraw, text: str, font, max_w: int) -> List[str]:
     return out
 
 
+def _logo_h(logo_path: Optional[str], target_h: int) -> Optional[Image.Image]:
+    """Logo escalada por ALTURA (p/ casar com o tamanho do texto do site)."""
+    if not logo_path or not os.path.exists(logo_path):
+        return None
+    try:
+        im = Image.open(logo_path).convert("RGBA")
+        r = target_h / max(1, im.height)
+        return im.resize((max(1, int(im.width * r)), target_h), Image.LANCZOS)
+    except Exception:
+        return None
+
+
+def _brand_frame(canvas: Image.Image, d: ImageDraw.ImageDraw, colors: Dict[str, Any],
+                 logo_path: Optional[str], site: str) -> None:
+    """Marca CONSISTENTE em toda tela (clipe/capa/CTA): logo pequeno (~tamanho do site) no TOPO-esquerda +
+    site embaixo-esquerda. MESMO tamanho e posição em todas as telas → transição limpa entre elas."""
+    lg = _logo_h(logo_path, 56)
+    if lg:
+        canvas.alpha_composite(lg, (60, 64))
+    st = (site or "").replace("https://", "").replace("http://", "").strip("/")
+    if st:
+        d.text((60, VH - 98), st, font=_font(44, weight="semibold"), fill=(255, 255, 255, 235))
+
+
 def _brand_bg_bytes(colors: Dict[str, Any]) -> bytes:
     """Fundo escuro da marca 1080x1920 (grafite + glow na cor de acento) — base do card de CTA."""
     acc = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
@@ -65,41 +89,19 @@ def _brand_bg_bytes(colors: Dict[str, Any]) -> bytes:
 def _clip_overlay_png(caption: str, colors: Dict[str, Any], logo_path: Optional[str], site: str, path: str) -> None:
     """Overlay transparente 1080x1920 p/ cada clipe: LEGENDA tech (gradiente, sem caixa) + RODAPÉ da marca
     (logo embaixo à esquerda + site à direita) — igual à arte do carrossel."""
-    acc = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
     canvas = Image.new("RGBA", (VW, VH), (0, 0, 0, 0))
-    # 1) gradiente suave de baixo p/ cima (legibilidade SEM caixa) — só o terço inferior
+    d = ImageDraw.Draw(canvas)
+    # gradiente sutil só no TOPO e na BASE (legibilidade da marca); MEIO fica livre — o texto da mensagem
+    # fica por conta da IA (não trava posição).
     grad = Image.new("L", (1, VH), 0)
     gp = grad.load()
     for y in range(VH):
-        f = max(0.0, (y - VH * 0.46) / (VH * 0.54))     # escurece a partir de ~46% (cobre a legenda maior)
-        gp[0, y] = int(min(1.0, f) ** 1.25 * 240)
+        f = max((200 - y) / 200.0, (y - (VH - 200)) / 200.0, 0.0)
+        gp[0, y] = int(min(1.0, f) * 150)
     grad = grad.resize((VW, VH))
     dark = Image.new("RGBA", (VW, VH), (8, 7, 11, 255)); dark.putalpha(grad)
     canvas.alpha_composite(dark)
-    d = ImageDraw.Draw(canvas)
-    # 2) legenda: barra de acento + texto bold branco (estilo reels premium)
-    cap = (caption or "").strip()
-    if cap:
-        f = _font(76, weight="extrabold")                # MAIOR
-        inner = VW - 120
-        lines = _wrap(d, cap, f, inner)[:3]
-        lh = int(f.size * 1.08)
-        by = int(VH * 0.56)                              # MAIS PRA CIMA (lower-middle, não no rodapé)
-        d.rounded_rectangle([60, by - 12, 60 + 120, by - 2], 5, fill=acc)   # tracinho de acento (maior)
-        ty = by + 18
-        for ln in lines:
-            d.text((64, ty + 4), ln, font=f, fill=(0, 0, 0, 185))   # sombra (sem caixa)
-            d.text((60, ty), ln, font=f, fill=WHITE)
-            ty += lh
-    # 3) rodapé da marca: logo MAIOR embaixo à esquerda + site MAIOR à direita
-    lg = _logo_img(logo_path, 340)
-    if lg:
-        canvas.alpha_composite(lg, (58, VH - lg.height - 72))
-    st = (site or "").replace("https://", "").replace("http://", "").strip("/")
-    if st:
-        sf = _font(46, weight="semibold")
-        sw = d.textlength(st, font=sf)
-        d.text((VW - 58 - sw, VH - 112), st, font=sf, fill=(255, 255, 255, 235))
+    _brand_frame(canvas, d, colors, logo_path, site)   # MESMA marca da capa/CTA
     canvas.save(path)
 
 
@@ -139,12 +141,8 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     d.text((M + 55, ty + 24), btn, font=bf, fill=WHITE); ty += 138
     if phone:
         d.text((M, ty), phone, font=_font(58, weight="extrabold"), fill=acc); ty += 78
-    if st:
-        d.text((M, ty), st, font=_font(42, weight="semibold"), fill=(255, 255, 255, 230))
-    # logo embaixo à esquerda (igual ao rodapé da arte)
-    lg = _logo_img(logo_path, 300)
-    if lg:
-        canvas.alpha_composite(lg, (M, VH - lg.height - 90))
+    # MESMA marca dos clipes (logo topo + site embaixo) → transição limpa entre cena e CTA
+    _brand_frame(canvas, d, colors, logo_path, site)
     canvas.convert("RGB").save(path)
 
 
