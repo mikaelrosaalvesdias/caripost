@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.2 - 2026-06-29
+
+- **fix: Progresso de geração de vídeo.** A animação de carregamento agora usa `provider_progress` dentro da cena e um avanço conservador por tempo quando o provedor ainda está em fila, evitando ficar travada em 5% em vídeos de uma cena.
+- **fix: ETA do vídeo.** Como o percentual passa de 10% mesmo antes da cena terminar, o modal volta a mostrar estimativa de tempo restante durante jobs longos da OpenRouter/CometAPI.
+- **fix: Texto de custo.** Quando o provedor não devolve `usage.cost`, a UI mostra custo estimado pelo catálogo em vez de chamar esse valor de custo real, e usa a mesma conversão BRL do preflight.
+- Versão: main.py 1.27.2, OS/UI cache bust v=12702.
+
 ## v1.27.1 - 2026-06-29
 
 - **fix: Custo de vídeo CometAPI entregue.** Quando a CometAPI conclui o vídeo mas não devolve `usage.cost`, o job agora registra o custo pelo catálogo/preflight (`per_second` ou `per_request`) em vez de finalizar como `0.0`.

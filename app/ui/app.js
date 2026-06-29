@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.2', date: '2026-06-29',
+    items: [
+      { type: 'fix', text: 'Vídeo: modal de geração agora usa progresso do provedor dentro da cena e não fica preso em 5% em vídeos de uma cena.' },
+      { type: 'fix', text: 'Vídeo: ETA volta a aparecer em jobs longos porque a barra avança mesmo enquanto a cena ainda está sendo gerada.' },
+      { type: 'fix', text: 'Vídeo: custo estimado por catálogo não é mais rotulado como custo real e usa a mesma conversão BRL do preflight.' },
+    ],
+  },
+  {
     version: 'v1.27.1', date: '2026-06-29',
     items: [
       { type: 'fix', text: 'Vídeo: CometAPI entregue sem usage.cost agora registra custo pelo catálogo/preflight, em vez de finalizar como R$ 0.' },

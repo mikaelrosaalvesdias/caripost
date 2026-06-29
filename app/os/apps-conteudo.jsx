@@ -10,6 +10,45 @@ function imgGroups(list) {
 }
 function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) : (m.free ? ' · grátis' : '')); }
 
+function _videoNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function _videoProviderPct(s) {
+  let p = _videoNum(s && s.provider_progress);
+  if (p == null) return null;
+  if (p > 0 && p <= 1) p *= 100;
+  return Math.max(0, Math.min(100, p));
+}
+function _videoProgressPct(s, fallbackTotal, startedAt, lastPct) {
+  const total = Math.max(1, _videoNum(s && s.total) || fallbackTotal || 1);
+  const scene = Math.max(1, Math.min(total, _videoNum(s && s.scene) || 1));
+  const providerPct = _videoProviderPct(s);
+  let inside = providerPct;
+  if (inside == null || inside <= 0) {
+    const prov = String((s && s.provider) || '').toLowerCase();
+    const perSceneMs = prov === 'cometapi' ? 20 * 60 * 1000 : 8 * 60 * 1000;
+    const elapsed = Math.max(0, Date.now() - (startedAt || Date.now()));
+    inside = Math.min(85, Math.max(8, ((elapsed % perSceneMs) / perSceneMs) * 85));
+  }
+  const pct = 5 + (((scene - 1) + Math.min(0.98, inside / 100)) / total) * 88;
+  return Math.max(lastPct || 0, Math.min(92, pct));
+}
+function _videoStatusDetail(s, fallbackTotal, costText) {
+  const total = Math.max(1, _videoNum(s && s.total) || fallbackTotal || 1);
+  const scene = Math.max(1, Math.min(total, _videoNum(s && s.scene) || 1));
+  const provider = s && s.provider ? ' · ' + String(s.provider) : '';
+  const pstatus = s && s.provider_status ? ' · status: ' + String(s.provider_status).replace(/_/g, ' ') : '';
+  const ppct = _videoProviderPct(s);
+  const prog = ppct != null && ppct > 0 ? ' · provedor ' + Math.round(ppct) + '%' : '';
+  const cost = costText ? ' · ' + costText : '';
+  return 'Gerando cena ' + scene + '/' + total + ' (com áudio)' + provider + pstatus + prog + cost;
+}
+function _videoCostText(s, brl) {
+  const label = s && s.cost_source === 'catalog_estimate' ? 'custo estimado' : 'gasto';
+  return label + ' ' + brl(s && s.cost_usd);
+}
+
 function VideoCreator({ company }) {
   const st = ContState.get(company.id);
   const theme = ((st.briefing || '').trim() || (st.assunto || '').trim());
@@ -22,7 +61,14 @@ function VideoCreator({ company }) {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
   const [proc, setProc] = React.useState({ open: false });   // mesma animação (ProcessModal) da geração de imagem
-  const brl = (usd) => 'R$ ' + (Number(usd || 0) * 5.4).toFixed(2);
+  const videoStartRef = React.useRef(0);
+  const lastPctRef = React.useRef(3);
+  const brl = (usd) => {
+    const rate = pf && Number(pf.total_usd) > 0 && Number(pf.total_brl) > 0
+      ? Number(pf.total_brl) / Number(pf.total_usd)
+      : 5.15;
+    return 'R$ ' + (Number(usd || 0) * rate).toFixed(2);
+  };
   React.useEffect(() => {
     window.mpApi.aiModels().then(r => { const v = r.video || []; setVmodels(v); setModel(m => m || r.video_current || (v[0] && v[0].id) || ''); }).catch(() => {});
   }, []);
@@ -37,6 +83,8 @@ function VideoCreator({ company }) {
     if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
     if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ≈ R$ ' + pf.total_brl + '.\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
     setBusy(true); setMsg(''); setStatus(null);
+    videoStartRef.current = Date.now();
+    lastPctRef.current = 3;
     setProc({ open: true, pct: 3, detail: 'Iniciando a geração do vídeo…', phase: '' });
     try {
       const sceneSeconds = pf.seconds_per_scene || ((pf.scene_seconds || [])[0]) || 8;
@@ -47,10 +95,18 @@ function VideoCreator({ company }) {
         await new Promise(res => setTimeout(res, 6000));
         const s = await window.mpApi.brandedVideoStatus(company.id, r.job);
         setStatus(s);
-        if (s.status === 'generating') setProc({ open: true, pct: Math.min(92, Math.round((s.scene - 1) / tot * 88) + 5), detail: 'Gerando cena ' + s.scene + '/' + s.total + ' (com áudio)… · gasto ' + brl(s.cost_usd), phase: '' });
-        else if (s.status === 'composing') setProc({ open: true, pct: 95, detail: 'Juntando as cenas em 1 vídeo só + logo e CTA da marca…', phase: '' });
-        else if (s.status === 'done') { setProc({ open: true, pct: 100, phase: 'done', detail: '✓ Vídeo pronto! Custo REAL: ' + brl(s.cost_usd) }); setBusy(false); return; }
-        else if (s.status === 'error') { setProc({ open: true, phase: 'error', detail: (s.detail || 'falhou') + ' · gasto ' + brl(s.cost_usd) }); setBusy(false); return; }
+        if (s.status === 'generating') {
+          const pct = _videoProgressPct(s, tot, videoStartRef.current, lastPctRef.current);
+          lastPctRef.current = pct;
+          setProc({ open: true, pct, detail: _videoStatusDetail(s, tot, _videoCostText(s, brl)), phase: '' });
+        }
+        else if (s.status === 'composing') { lastPctRef.current = 95; setProc({ open: true, pct: 95, detail: 'Juntando as cenas em 1 vídeo só + logo e CTA da marca…', phase: '' }); }
+        else if (s.status === 'done') {
+          const costLabel = s.cost_source === 'catalog_estimate' ? 'Custo estimado' : 'Custo REAL';
+          setProc({ open: true, pct: 100, phase: 'done', detail: 'Vídeo pronto! ' + costLabel + ': ' + brl(s.cost_usd) });
+          setBusy(false); return;
+        }
+        else if (s.status === 'error') { setProc({ open: true, phase: 'error', detail: (s.detail || 'falhou') + ' · ' + _videoCostText(s, brl) }); setBusy(false); return; }
       }
       setProc({ open: true, phase: 'error', detail: 'Demorando demais — recarregue a página pra ver o status.' }); setBusy(false);
     } catch (e) { setProc({ open: true, phase: 'error', detail: e.message }); setBusy(false); }
