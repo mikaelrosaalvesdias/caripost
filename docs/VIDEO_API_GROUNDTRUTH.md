@@ -78,3 +78,25 @@ python scripts/test_video_providers_no_api.py
 
 O teste substitui o cliente HTTP por fake local. Ele valida payload e parsing sem usar
 tokens e sem chamar OpenRouter ou CometAPI.
+
+## Status — correções de QUALIDADE aplicadas (Claude, NÃO deployado)
+
+Working tree (ainda não commitado/deployado). Arte intocada: `template_composer.py` diff = vazio.
+
+- **#0 sangria de dinheiro** — `posts.py` (`generate_branded_video`): força `https://` no `base_url`.
+  Provado: `http://.../uploads/.../video/..._f0.png` → 404; `https://...` → 200. O provedor baixava o
+  frame por http → 404 → cena falhava DEPOIS da anterior cobrar. Estrutural: vale p/ TODOS os modelos.
+- **#1/#2 voz 2x + texto queimado** — `ai.py` `create_video_job`: `generate_audio: True → False`
+  (voz inventada do Veo sai garbled/2x e queima legenda nos frames). Clipe sai mudo.
+- **#1/#2 (compositor)** — `video_composer.py`: cada segmento ganha faixa de áudio silenciosa
+  (`anullsrc`, `-map 2:a`) p/ o `concat` final não falhar com clipe mudo.
+- **#3 cor da marca** — `video_composer.py` `_grade_filter()`: grade ffmpeg (eq + colorbalance) puxando
+  sombras/midtones pro accent. Token `strength=0.18` (default sutil; dá pra mover p/ creative_config.design).
+- **#4 identidade do app** — `ai.py` `build_video_storyboard`: injeta audience + visual_prompt_base +
+  client_rules no prompt e ancora cada cena no produto/benefício (não cena genérica).
+- **#5 texto estranho no CTA** — `posts.py`: título do CTA NÃO usa mais `theme` cru (usa nome da marca);
+  `video_composer._fit_title()` faz auto-shrink (nunca estoura).
+
+Verificado SEM custo: py_compile OK; `test_video_providers_no_api.py` OK; render local com clipes
+placeholder OK (vídeo+áudio, áudio -91 dB = mudo, concat 2 clipes + CTA, CTA com título longo coube em 3 linhas).
+FALTA: deploy (custo $0) — só quando o usuário liberar.

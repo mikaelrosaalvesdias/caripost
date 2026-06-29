@@ -58,6 +58,34 @@ def _wrap(d: ImageDraw.ImageDraw, text: str, font, max_w: int) -> List[str]:
     return out
 
 
+def _grade_filter(colors: Dict[str, Any], strength: float = 0.18) -> str:
+    """Grade de cor da MARCA p/ TODO clipe (ffmpeg, determinístico): empurra sombras/midtones pra cor de acento
+    + leve punch (contraste/saturação). Dá identidade de cor consistente mesmo com footage variado do modelo.
+    'strength' é design token (default sutil); dá pra mover pra creative_config.design depois."""
+    r, g, b = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
+    rm = round((r / 255.0 - 0.5) * strength, 3)
+    gm = round((g / 255.0 - 0.5) * strength, 3)
+    bm = round((b / 255.0 - 0.5) * strength, 3)
+    rs, gs, bs = round(rm * 0.6, 3), round(gm * 0.6, 3), round(bm * 0.6, 3)
+    return ("eq=contrast=1.05:saturation=1.10,"
+            f"colorbalance=rs={rs}:gs={gs}:bs={bs}:rm={rm}:gm={gm}:bm={bm}")
+
+
+def _fit_title(d: ImageDraw.ImageDraw, text: str, max_w: int, max_lines: int,
+               start: int, weight: str, min_size: int):
+    """Maior tamanho de fonte em que o título cabe em <= max_lines (auto-shrink). Nunca deixa o texto
+    estourar/quebrar o card, qualquer que seja o tamanho do texto."""
+    size = start
+    while size >= min_size:
+        f = _font(size, weight=weight)
+        lines = _wrap(d, text, f, max_w)
+        if len(lines) <= max_lines:
+            return f, lines
+        size -= 6
+    f = _font(min_size, weight=weight)
+    return f, _wrap(d, text, f, max_w)[:max_lines]
+
+
 def _logo_h(logo_path: Optional[str], target_h: int) -> Optional[Image.Image]:
     """Logo escalada por ALTURA (p/ casar com o tamanho do texto do site)."""
     if not logo_path or not os.path.exists(logo_path):
@@ -129,8 +157,7 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     st = (site or "").replace("https://", "").replace("http://", "").strip("/")
     M = 90
     inner = VW - 2 * M
-    tf = _font(96, weight="extrabold")
-    tl = _wrap(d, title, tf, inner)[:4]
+    tf, tl = _fit_title(d, title, inner, 3, 96, "extrabold", 52)
     # logo GRANDE (~tamanho do texto) ACIMA do título + bloco centralizado verticalmente
     big = _logo_h(logo_path, 120)
     bh = ((big.height + 44) if big else 0) + len(tl) * int(tf.size * 1.05) + 30 + 110 + (78 if phone else 0)
@@ -157,10 +184,57 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], logo_path: Option
     canvas.convert("RGB").save(path)
 
 
+def _media_dur(path: str) -> float:
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "default=nk=1:nw=1", path], capture_output=True, text=True, timeout=30)
+        return float((r.stdout or "0").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _mux_audio(base_path: str, out_path: str, narration_path: Optional[str],
+               music_path: Optional[str]) -> bool:
+    """Mixa o áudio final sobre o vídeo (que já tem faixa silenciosa): narração (volume cheio) + trilha (bed
+    abaixado = duck). Sem áudio → copia o base. -c:v copy (não re-encoda vídeo). Determinístico."""
+    import shutil
+    has_n = bool(narration_path and os.path.exists(narration_path))
+    has_m = bool(music_path and os.path.exists(music_path))
+    if not has_n and not has_m:
+        try:
+            shutil.copy(base_path, out_path); return True
+        except Exception:
+            return False
+    dur = _media_dur(base_path)
+    if dur <= 0:
+        try:
+            shutil.copy(base_path, out_path); return True
+        except Exception:
+            return False
+    args = ["-i", base_path]
+    if has_n:
+        args += ["-i", narration_path]
+    if has_m:
+        args += ["-stream_loop", "-1", "-i", music_path]
+    n_idx = 1 if has_n else None
+    m_idx = (2 if has_n else 1) if has_m else None
+    if has_n and has_m:
+        fc = (f"[{n_idx}:a]volume=1.0,apad[n];[{m_idx}:a]volume=0.16[m];"
+              "[n][m]amix=inputs=2:duration=longest:dropout_transition=0,volume=1.5[a]")
+    elif has_n:
+        fc = f"[{n_idx}:a]volume=1.0,apad[a]"
+    else:
+        fc = f"[{m_idx}:a]volume=0.5[a]"
+    return _ff(args + ["-filter_complex", fc, "-map", "0:v", "-map", "[a]", "-t", f"{dur:.2f}",
+                       "-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart", out_path], timeout=300)
+
+
 def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
                           colors: Dict[str, Any], logo_path: Optional[str],
-                          cta: Dict[str, Any], site: str = "", handle: str = "") -> bool:
-    """clips=[{'path','caption'}] (já gerados) → 1 vídeo 9:16 branded (rodapé+legenda) + card de CTA. R$0."""
+                          cta: Dict[str, Any], site: str = "", handle: str = "",
+                          narration_path: Optional[str] = None, music_path: Optional[str] = None) -> bool:
+    """clips=[{'path','caption'}] (já gerados) → 1 vídeo 9:16 branded (rodapé+legenda) + card de CTA + ÁUDIO
+    do briefing (narração/trilha mixados sobre a faixa silenciosa). R$0 nesta etapa."""
     tmp = tempfile.mkdtemp(prefix="vid_")
     segs = []
     for i, c in enumerate(clips):
@@ -170,9 +244,12 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
         ov = os.path.join(tmp, f"ov{i}.png")
         _clip_overlay_png(c.get("caption") or "", colors, logo_path, site, ov)
         seg = os.path.join(tmp, f"seg{i}.mp4")
-        fc = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v];"
-              "[v][1:v]overlay=0:0[vout]")
-        ok = _ff(["-i", cp, "-i", ov, "-filter_complex", fc, "-map", "[vout]", "-map", "0:a?",
+        fc = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,"
+              f"{_grade_filter(colors)}[v];[v][1:v]overlay=0:0[vout]")
+        # input 2 = áudio silencioso: com generate_audio=False o clipe vem MUDO; garante faixa de áudio
+        # uniforme em TODO segmento p/ o concat final não falhar (a=1 exige áudio em todos os inputs).
+        ok = _ff(["-i", cp, "-i", ov, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                  "-filter_complex", fc, "-map", "[vout]", "-map", "2:a",
                   "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
                   "-ar", "44100", "-shortest", seg])
         if ok:
@@ -192,6 +269,10 @@ def compose_branded_video(clips: List[Dict[str, Any]], out_path: str,
         inputs += ["-i", s]
     streams = "".join(f"[{i}:v][{i}:a]" for i in range(n))
     fc = f"{streams}concat=n={n}:v=1:a=1[v][a]"
-    return _ff(inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
-                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", out_path],
-               timeout=300)
+    base = os.path.join(tmp, "base.mp4")
+    if not _ff(inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", base],
+               timeout=300):
+        return False
+    # áudio do briefing por cima do vídeo (que já tem faixa silenciosa): narração/trilha mixados
+    return _mux_audio(base, out_path, narration_path, music_path)

@@ -1840,6 +1840,56 @@ def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = 
     )
 
 
+def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
+    """Contexto REAL de produto/app pro vídeo — MESMA fonte que a ARTE usa (product_list + funções/objetivo/
+    knowledge/web_brief), filtrado pelos apps citados no tema. SÓ LEITURA: não dispara refresh, não toca no
+    motor de imagem (generate_carousel fica intacto). Vazio se não houver produto → vídeo segue como antes.
+    Faz a CENA e a NARRAÇÃO falarem do app de verdade, com fatos (não genérico)."""
+    try:
+        from ..db_companies import product_list as _plist
+        prods = _plist(company.get("id")) or []
+    except Exception:
+        return ""
+    if not prods:
+        return ""
+    import unicodedata as _ud
+
+    def _norm(s):
+        s = _ud.normalize("NFKD", (s or "").lower())
+        return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
+
+    tnorm = _norm(theme)
+    focus = [p for p in prods if _norm(p.get("name")) and _norm(p.get("name")) in tnorm] or prods[:2]
+    blocks = []
+    for p in focus[:3]:
+        fns = p.get("functions") or []
+        if isinstance(fns, str):
+            try:
+                import json as _j
+                fns = _j.loads(fns)
+            except Exception:
+                fns = [fns] if fns else []
+        fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:800]
+        obj = (p.get("objective") or "").strip()
+        kb = (p.get("knowledge") or "").strip()
+        web = (p.get("web_brief") or "").strip()
+        seg = []
+        if obj:
+            seg.append("Objetivo: " + obj)
+        if fns_t:
+            seg.append("Funções: " + fns_t)
+        if kb:
+            seg.append("Fatos (use SÓ o que está aqui, não invente recursos): " + kb[:2500])
+        if web:
+            seg.append("Web: " + web[:1000])
+        if seg:
+            blocks.append(f"[{p.get('name')}] " + " | ".join(seg))
+    if not blocks:
+        return ""
+    return ("PRODUTO/APP REAL EM FOCO (baseie a CENA e a locução NESTES fatos — específico, NÃO genérico): "
+            + (" || ".join(blocks))[:4000] + ". ")
+
+
 def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
                            target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8) -> List[Dict[str, str]]:
     """Roteiro em CENAS. Se n_scenes>0 (usuário TRAVOU a duração) gera EXATAMENTE n_scenes cenas distintas de
@@ -1862,6 +1912,9 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
         except Exception:
             bk = {}
     voice = (bk.get("voice") or bk.get("persona") or "").strip()
+    audience = (bk.get("audience") or "").strip()
+    rules = (bk.get("client_rules") or "").strip()
+    vbase = (bk.get("visual_prompt_base") or "").strip()
     tom_rule = (f"TOM/VOZ DA MARCA (mantenha CONSISTENTE em todo vídeo — define o clima, o ritmo e a energia das cenas): {voice}. " if voice else
                 "TOM consistente, brasileiro, premium e confiante. ")
     system = (
@@ -1873,11 +1926,18 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
         "Cada cena é uma CENA VISUAL REAL e cinematográfica: ambiente brasileiro real, sujeito (PESSOA natural OU produto/elemento "
         "— o que MELHOR ilustrar), com NO MÁXIMO 1 AÇÃO principal e 1 MOVIMENTO de câmera por cena (clareza). EMOÇÃO clara. "
         "CONTINUIDADE entre as cenas (mesmo personagem/clima/paleta da marca). MOSTRE a sensação/benefício, NÃO a tela do app. "
+        "ANCORE TODA cena no PRODUTO/SERVIÇO do briefing e no PÚBLICO — nada de cena genérica de banco de imagem que "
+        "serviria pra qualquer marca; a identidade do app vive no MUNDO, no benefício concreto e no clima, não em telas/texto. "
         'Responda SOMENTE JSON válido e compacto: {"scenes":[{"desc":"cena visual concreta: sujeito + 1 ação + 1 movimento de câmera + luz/clima","seconds":8}, ...]} . '
         "PROIBIDO em 'desc': qualquer TEXTO, letra, legenda, número; LOGO, marca, nome de marca; TELA/interface de app/celular com "
         "conteúdo legível, ícones ou nomes. Só a CENA fotográfica em movimento, em PT-BR."
     )
-    user = f"Empresa: {company.get('name','')} ({company.get('segment','')}). Briefing/tema: {theme}. Direção visual: {video_prompt}"
+    user = (f"Empresa: {company.get('name','')} ({company.get('segment','')}). "
+            + (f"Público-alvo: {audience}. " if audience else "")
+            + (f"Identidade visual base da marca: {vbase}. " if vbase else "")
+            + (f"Regras do cliente (RESPEITE): {rules}. " if rules else "")
+            + _video_brief_context(company, theme)
+            + f"Briefing/tema (O QUE PROMOVER): {theme}. Direção visual: {video_prompt}")
     allowed = [4, 8, 12]
     try:
         parsed = extract_json(complete_ai(config, system, user, 1500)) or {}
@@ -1901,6 +1961,110 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
     return fallback
 
 
+def tts_synthesize(text: str, out_path: str, voice: str = "onyx", model: str = "tts-1") -> bool:
+    """Locução (narração) via CometAPI /v1/audio/speech (OpenAI-compat). Salva mp3. True/False. ~$0.01.
+    NÃO chama nada sem texto ou sem chave (custo-seguro)."""
+    key = _cometapi_key()
+    txt = (text or "").strip()
+    if not key or not txt:
+        return False
+    try:
+        with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+            r = c.post(_COMETAPI_BASE + "/audio/speech",
+                       headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
+                       json={"model": model, "input": txt[:4096], "voice": (voice or "onyx"),
+                             "response_format": "mp3"})
+        if r.status_code >= 400 or not r.content:
+            return False
+        with open(out_path, "wb") as f:
+            f.write(r.content)
+        return os.path.getsize(out_path) > 200
+    except Exception:
+        return False
+
+
+def music_generate(vibe: str, out_path: str, max_wait: int = 150) -> bool:
+    """Trilha INSTRUMENTAL via CometAPI Suno (POST /suno/submit/music → poll GET /suno/fetch/{id} → baixa wav/mp3).
+    BEST-EFFORT: se falhar/estourar o tempo, retorna False e o vídeo segue SEM música (nunca quebra)."""
+    key = _cometapi_key()
+    vibe = (vibe or "").strip()
+    if not key or not vibe:
+        return False
+    base = _COMETAPI_BASE.replace("/v1", "")          # Suno fica FORA do /v1
+    H = {"Authorization": f"Bearer {key}", "content-type": "application/json"}
+    try:
+        import time as _t
+        with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+            sub = c.post(base + "/suno/submit/music", headers=H,
+                         json={"gpt_description_prompt": vibe[:300], "make_instrumental": True,
+                               "negative_tags": "vocals, lyrics, speech, voice", "mv": "chirp-v4"})
+            if sub.status_code >= 400:
+                return False
+            j = sub.json() or {}
+            dat = j.get("data")
+            tid = (dat if isinstance(dat, str) else (dat or {}).get("task_id") if isinstance(dat, dict) else None) or j.get("task_id")
+            if not tid:
+                return False
+            deadline = _t.time() + max_wait
+            while _t.time() < deadline:
+                _t.sleep(8)
+                q = c.get(base + f"/suno/fetch/{tid}", headers=H)
+                if q.status_code >= 400:
+                    continue
+                d = (q.json() or {}).get("data") or {}
+                status = str(d.get("status") or "").upper()
+                clips = d.get("data") if isinstance(d.get("data"), list) else []
+                url = (clips[0].get("audio_url") or clips[0].get("audio") or "") if (clips and isinstance(clips[0], dict)) else ""
+                if status in ("SUCCESS", "COMPLETED", "FINISHED") and url:
+                    audio = c.get(url)
+                    if audio.status_code < 400 and audio.content:
+                        with open(out_path, "wb") as f:
+                            f.write(audio.content)
+                        return os.path.getsize(out_path) > 1000
+                    return False
+                if status in ("FAILED", "ERROR", "CANCELED"):
+                    return False
+        return False
+    except Exception:
+        return False
+
+
+def build_video_audio_plan(company: Dict[str, Any], theme: str, video_prompt: str = "",
+                           total_seconds: int = 24) -> Dict[str, str]:
+    """QUEM MANDA NO ÁUDIO É O BRIEFING. Lê o briefing e decide: mode (none|music|narration|both), ROTEIRO de
+    locução (tamanho que CASA com a duração) e a VIBE da trilha. Custo-seguro: sem config de texto → 'none' ($0)."""
+    safe = {"mode": "none", "script": "", "music": "", "voice": "onyx"}
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        return safe
+    bk = company.get("brand_kit") or {}
+    voice_brand = (bk.get("voice") or bk.get("persona") or "").strip()
+    max_words = max(8, int((total_seconds or 24) * 2.3))     # ~2.3 palavras/seg de locução comercial PT-BR
+    system = (
+        "Você é DIRETOR DE ÁUDIO de reels publicitários. A PARTIR DO BRIEFING decida o áudio — QUEM MANDA É O "
+        "BRIEFING: se pede narração/locução/gravação, escreva a locução; se pede só trilha/música, sem locução; "
+        "se pede os dois, faça os dois; se pede mudo/sem som, mode='none'. "
+        f"Se houver locução: ROTEIRO em PT-BR de NO MÁXIMO {max_words} palavras, natural e persuasivo, no tom da "
+        "marca, que CASA com a duração (nem corre nem sobra). PROIBIDO ler preço/valores ou soletrar URL. "
+        "Se houver trilha: descreva a VIBE (gênero, andamento, energia) p/ gerar instrumental SEM vocais. "
+        'Responda SOMENTE JSON: {"mode":"none|music|narration|both","script":"<locução ou vazio>",'
+        '"music":"<vibe da trilha ou vazio>","voice":"onyx|nova|shimmer|echo|fable|alloy|sage|coral"}'
+    )
+    user = (f"Marca: {company.get('name','')} ({company.get('segment','')}). "
+            + (f"Tom/voz da marca: {voice_brand}. " if voice_brand else "")
+            + _video_brief_context(company, theme)
+            + f"Duração do vídeo ~{int(total_seconds or 24)}s. Briefing/tema: {theme}. Direção visual: {video_prompt}")
+    try:
+        p = extract_json(complete_ai(config, system, user, 600)) or {}
+        mode = (p.get("mode") or "none").strip().lower()
+        if mode not in ("none", "music", "narration", "both"):
+            mode = "none"
+        return {"mode": mode, "script": (p.get("script") or "").strip(),
+                "music": (p.get("music") or "").strip(), "voice": ((p.get("voice") or "onyx").strip() or "onyx")}
+    except Exception:
+        return safe
+
+
 def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
                      first_frame_url: Optional[str] = None, model: Optional[str] = None,
                      aspect_ratio: str = "9:16") -> Dict[str, Any]:
@@ -1914,10 +2078,12 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
     mdl = model or config["model"]
     if prov == "openrouter":
         # OpenRouter POST /api/v1/videos: duration inteiro + frame_images tipado.
-        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000], "generate_audio": True}
+        # generate_audio=False: a voz inventada pelo Veo sai garbled/2x E ele QUEIMA legenda da narração nos
+        # frames (fura a regra "sem texto"). Clipe sai mudo; o compositor garante faixa silenciosa (concat ok).
+        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000], "generate_audio": False}
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
-        body["duration"] = _video_seconds_value(seconds)
+        body["duration"] = min(_video_seconds_value(seconds), video_model_max_seconds(mdl) or 12)  # trava custo: nunca > máx do modelo
         body["resolution"] = "720p"
         if first_frame_url:
             # OpenRouter exige type=image_url; sem isso retorna ZodError em frame_images[0].type.
@@ -1948,7 +2114,7 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
         fields = [
             ("model", (None, mdl)),
             ("prompt", (None, prompt[:4000])),
-            ("seconds", (None, str(_video_seconds_value(seconds, 4)))),
+            ("seconds", (None, str(min(_video_seconds_value(seconds, 4), video_model_max_seconds(mdl) or 12)))),
             ("aspect_ratio", (None, aspect_ratio or "9:16")),
             ("resolution", (None, "720p")),
         ]

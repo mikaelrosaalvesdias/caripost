@@ -1205,7 +1205,8 @@ def _video_job_dir(company_id: str) -> str:
 
 
 def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, seconds: str,
-                              cta: dict, colors: dict, logo_path, site: str, handle: str, base_url: str) -> None:
+                              cta: dict, colors: dict, logo_path, site: str, handle: str, base_url: str,
+                              audio_plan: dict = None) -> None:
     """BACKGROUND: gera as cenas EM SEQUÊNCIA com continuidade (último frame → first_frame da próxima),
     baixa, e monta o vídeo branded. Escreve o progresso/custo num .json. SÓ roda quando o usuário confirma."""
     import json as _json, time as _time
@@ -1291,10 +1292,28 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
             clips.append({"path": cp})
             lf = os.path.join(jdir, f"{jid}_f{i}.png")           # último frame → first_frame da próxima (continuidade)
             first_frame_url = _pub(lf) if last_frame_png(cp, lf) else None
+        # ÁUDIO conforme o BRIEFING (plano): narração via TTS + trilha via Suno (best-effort, NUNCA quebra o vídeo)
+        narration_path = music_path = None
+        plan = audio_plan or {}
+        amode = (plan.get("mode") or "none")
+        try:
+            if amode in ("narration", "both") and (plan.get("script") or "").strip():
+                from ..services.ai import tts_synthesize
+                _np = os.path.join(jdir, jid + "_narr.mp3")
+                if tts_synthesize(plan.get("script"), _np, plan.get("voice") or "onyx"):
+                    narration_path = _np
+            if amode in ("music", "both") and (plan.get("music") or "").strip():
+                from ..services.ai import music_generate
+                _mp = os.path.join(jdir, jid + "_music.mp3")
+                if music_generate(plan.get("music"), _mp):
+                    music_path = _mp
+        except Exception:
+            pass
         _w({"status": "composing", "scene": total, "total": total,
             "cost_usd": round(cost, 2), "cost_source": cost_source})
         out = os.path.join(jdir, jid + ".mp4")
-        if not compose_branded_video(clips, out, colors, logo_path, cta, site, handle):
+        if not compose_branded_video(clips, out, colors, logo_path, cta, site, handle,
+                                     narration_path, music_path):
             raise ValueError("falha ao montar o vídeo final")
         try:                                          # APRENDE o preço real (usage.cost/cena) p/ a próxima previsão bater
             if total and usage_cost > 0:
@@ -1325,35 +1344,66 @@ async def generate_branded_video(request: Request):
     company = company_get(body.get("company_id"))
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
-    from ..services.ai import get_video_config, build_video_storyboard
+    from ..services.ai import get_video_config, build_video_storyboard, build_video_audio_plan, video_model_max_seconds
     if not get_video_config():
         return JSONResponse({"detail": "Escolha o modelo de vídeo no painel de IA antes."}, status_code=400)
     cid = company["id"]
     theme = (body.get("theme") or body.get("briefing") or "").strip()
     video_prompt = (body.get("video_prompt") or body.get("visual_prompt") or "").strip()
-    # O BRIEFING dita o nº de cenas/duração. Usa o roteiro vindo do preflight; senão monta na hora. Teto 8 (custo).
+    # DURAÇÃO É A RÉGUA MESTRA (8/15/30/60). Define segundos POR CLIPE + nº de cenas → custo BOUNDED (clipes × per).
+    # MESMA lógica do video-preflight. NUNCA manda o total como duração de cada clipe (era o bug que multiplicava o custo).
+    import math as _math
+    try:
+        target = int(float(body.get("seconds") or 0))         # total escolhido pelo usuário (0 = livre)
+    except Exception:
+        target = 0
+    mx = video_model_max_seconds()                            # máx de segundos POR CLIPE do modelo
+    if target > 0:
+        per = max(1, min(mx, target, 12))                     # segundos por clipe — nunca passa do máx do modelo
+        n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = trava de custo)
+    else:
+        per, n_want = (mx or 8), 0                            # livre → 1 clipe (custo mínimo)
     prompts = [p for p in (body.get("storyboard") or []) if isinstance(p, str) and p.strip()]
     if not prompts:
-        try:
-            sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt)
+        try:                                                  # roteiro CASADO com a duração (modo TRAVADO: n_want cenas de per s)
+            sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt, target, n_want, per)
         except Exception:
             sb = []
         prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
-    prompts = prompts[:8] or [video_prompt or theme or f"Cena da marca {company.get('name','')}"]
+    if n_want > 0:                                            # TRAVA o nº de cenas: sobra corta, falta completa → custo previsível
+        prompts = (prompts or [video_prompt or theme or f"Cena da marca {company.get('name','')}"])[:n_want]
+        while len(prompts) < n_want:
+            prompts.append(prompts[len(prompts) % len(prompts)])
+    else:
+        prompts = prompts[:8] or [video_prompt or theme or f"Cena da marca {company.get('name','')}"]
     n = len(prompts)
+    _per = per                                                # segundos POR CLIPE (NÃO o total) — corrige o custo
+    # ÁUDIO ditado pelo BRIEFING (modo + roteiro de locução + vibe da trilha). Custo-seguro: falha → mudo.
+    try:
+        audio_plan = await asyncio.to_thread(build_video_audio_plan, company, theme, video_prompt, max(1, n * _per))
+    except Exception:
+        audio_plan = {"mode": "none"}
     colors = (company.get("brand_kit") or {}).get("colors") or {}
     logo = (_all_raster_logos(asset_list_logos(cid)) or [None])[0]
     site = (company.get("website") or "").strip()
     handle = ((company.get("socials") or {}).get("instagram") or "").strip()
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
     phone = (f"({phone_raw[:2]}) {phone_raw[2:7]}-{phone_raw[7:]}" if len(phone_raw) == 11 else (company.get("phone") or "")).strip()
-    cta = {"title": (body.get("cta_title") or theme or "Leve isso pro seu provedor"),
-           "cta": (body.get("cta") or "Fale com a gente"), "phone": phone}
+    # CTA NÃO usa o briefing/theme cru como título (vira texto estranho no card). Headline = nome da marca
+    # (curto e on-brand); botão e telefone vêm do cadastro. Eyebrow opcional do segmento.
+    cta = {"eyebrow": (company.get("segment") or "").strip(),
+           "title": (body.get("cta_title") or company.get("name") or "Fale com a gente").strip(),
+           "cta": (body.get("cta") or "Fale com a gente").strip(), "phone": phone}
     jid = _uuid.uuid4().hex
     base_url = str(request.base_url).rstrip("/")
+    # Os provedores de vídeo (OpenRouter/Comet) BAIXAM o frame de continuidade por HTTP externo.
+    # Atrás do traefik, request.base_url volta http:// e o /uploads só responde em https → 404 no fetch
+    # do frame → a cena falha mas a anterior já gerou e COBROU. Força https (exceto host local de dev).
+    if base_url.startswith("http://") and not any(h in base_url for h in ("localhost", "127.0.0.1", "0.0.0.0")):
+        base_url = "https://" + base_url[len("http://"):]
     import threading as _th
     _th.Thread(target=_render_branded_video_job,
-               args=(cid, jid, prompts, body.get("seconds") or "", cta, colors, logo, site, handle, base_url),
+               args=(cid, jid, prompts, str(_per), cta, colors, logo, site, handle, base_url, audio_plan),
                daemon=True).start()
     return {"job": jid, "scenes": n}
 
