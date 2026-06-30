@@ -120,7 +120,7 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
   if (loading) return <div className="panel"><div className="hint">Carregando…</div></div>;
   if (!company) return null;
 
-  const tabs = [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']];
+  const tabs = [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']];
 
   return <div className="panel stack">
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -136,6 +136,7 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
     {tab === 'influencers' && <CompanyInfluencers company={company} />}
     {tab === 'events' && <CompanyEvents company={company} />}
     {tab === 'voz' && <CompanyVoz company={company} onSaved={load} />}
+    {tab === 'video' && <CompanyVideo company={company} />}
     {tab === 'criacao' && <CompanyCriacao company={company} />}
     {tab === 'conexoes' && <CompanyConexoes company={company} />}
     {tab === 'concorrentes' && <CompanyConcorrentes company={company} onSaved={load} />}
@@ -1055,11 +1056,10 @@ function CompanyCriacao({ company }) {
 
   if (!defaults) return <div className="hint">Carregando configuração criativa…</div>;
 
-  const GROUPS = { briefing: 'Briefing / roteiro (inclui vídeo)', image: 'Imagem — system prompt e cena', video: 'Vídeo — system prompt do modelo', layout_policy: 'Layout (liberdade controlada)', brand_logo: 'Logo da marca', text_fit: 'Ajuste de texto', quality_guard: 'Controle de qualidade', design: 'Design do slide (avançado)' };
+  const GROUPS = { briefing: 'Briefing / roteiro (carrossel e post)', image: 'Imagem — system prompt e cena', layout_policy: 'Layout (liberdade controlada)', brand_logo: 'Logo da marca', text_fit: 'Ajuste de texto', quality_guard: 'Controle de qualidade', design: 'Design do slide (avançado)' };
   const GROUP_HINTS = {
-    briefing: 'Controla o plano/roteiro antes da geração. Para vídeo, edite video_storyboard_system e video_storyboard_user.',
+    briefing: 'Controla o plano/roteiro de carrossel e post. As configurações de VÍDEO ficam na aba "Vídeo".',
     image: 'Controla o prompt da imagem. O padrão abaixo preserva a qualidade atual; mude só para este cliente.',
-    video: 'Controla o prompt final enviado ao provedor de vídeo. Texto/logo continuam entrando pela pós-produção.',
   };
   const asStr = v => (v && typeof v === 'object') ? JSON.stringify(v, null, 2) : (v == null ? '' : String(v));
   const isObjKey = (g, k) => { const dv = (defaults[g] || {})[k]; return dv && typeof dv === 'object'; };
@@ -1118,6 +1118,46 @@ function CompanyCriacao({ company }) {
       <button className="btn pri" disabled={busy} onClick={save}>{busy ? 'Salvando…' : 'Salvar configuração'}</button>
       <button className="btn ghost" disabled={busy} onClick={resetAll}>Restaurar tudo p/ padrão</button>
     </div>
+  </div>;
+}
+
+function CompanyVideo({ company }) {
+  // ÚNICA config de vídeo: o System Prompt — a estrutura que o briefing LÊ pra montar a instrução do vídeo.
+  const [defaults, setDefaults] = React.useState(null);
+  const [ov, setOv] = React.useState({});
+  const [sys, setSys] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    window.mpApi.getCreativeConfig(company.id).then(r => {
+      const d = r.defaults || {}, o = r.override || {};
+      setDefaults(d); setOv(o);
+      const ovv = o.video || {};
+      setSys('system_prompt' in ovv ? (ovv.system_prompt || '') : ((d.video || {}).system_prompt || ''));
+    }).catch(e => setMsg('Erro: ' + (e.message || e)));
+  }, [company.id]);
+  if (!defaults) return <div className="hint">Carregando configuração de vídeo…</div>;
+  const dSys = (defaults.video || {}).system_prompt || '';
+  async function save() {
+    setBusy(true); setMsg('');
+    try {
+      const out = JSON.parse(JSON.stringify(ov));
+      out.video = { ...(out.video || {}) };
+      if (sys.trim() === dSys.trim()) delete out.video.system_prompt; else out.video.system_prompt = sys;
+      if (!Object.keys(out.video).length) delete out.video;
+      await window.mpApi.saveCreativeConfig(company.id, out);
+      setOv(out); setMsg('Salvo! As próximas gerações de vídeo deste cliente usam este System Prompt.');
+    } catch (e) { setMsg('Erro: ' + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+  return <div className="stack">
+    <div className="sec mut">Configuração de <b>VÍDEO</b> — <b>só o System Prompt</b>. É a estrutura que o briefing LÊ pra montar a instrução que a IA usa pra fazer o vídeo. Nenhuma outra regra escondida.</div>
+    <Field label={'System Prompt do vídeo' + (sys.trim() !== dSys.trim() ? '  ·  personalizado' : '  ·  padrão')}>
+      <textarea className="inp" rows={14} value={sys} onChange={e => setSys(e.target.value)} style={{ resize: 'vertical', fontSize: 12 }} placeholder="A estrutura/instrução que o briefing usa pra montar o prompt do vídeo." />
+      {sys.trim() !== dSys.trim() && <button className="btn sm ghost" onClick={() => setSys(dSys)}>↺ voltar ao padrão</button>}
+    </Field>
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    <button className="btn pri" disabled={busy} onClick={save}>{busy ? 'Salvando…' : 'Salvar System Prompt do vídeo'}</button>
   </div>;
 }
 

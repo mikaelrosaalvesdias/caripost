@@ -1951,32 +1951,9 @@ def _video_seconds_value(seconds: str, default: int = 8) -> int:
 
 
 def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = "") -> str:
-    """Prompt SÓ-CENA pro modelo de vídeo — MESMA régua de qualidade da ARTE (campanha premium + grade na cor da
-    marca + proibição dura de texto/logo). O código desenha marca/legenda/CTA depois."""
-    scene = (video_prompt or theme or "cena publicitária premium").strip()
-    cols = (company.get("brand_kit") or {}).get("colors") or {}
-    if not cols:
-        try:
-            from ..db_companies import brand_kit_get
-            cols = (brand_kit_get(company.get("id")) or {}).get("colors") or {}
-        except Exception:
-            cols = {}
-    acc = (cols.get("accent") or cols.get("primary") or "").strip()
-    grade = (f"GRADE DE COR cinematográfica puxando para a COR DA MARCA {acc} (acentos e luz nessa cor). " if acc
-             else "Grade de cor cinematográfica de campanha premium. ")
-    cfg = (creative_cfg(company).get("video") or {})
-    vals = {
-        "company": company.get("name", ""),
-        "segment": company.get("segment", ""),
-        "theme": theme or "",
-        "visual": scene,
-        "scene": scene,
-        "color": acc or "cor da marca",
-        "brand_grade": grade,
-    }
-    vals["brand_fix"] = _render_prompt_template(cfg.get("brand_fix") or VIDEO_GEN["brand_fix"], vals)
-    vals["system_prompt"] = _render_prompt_template(cfg.get("system_prompt") or VIDEO_GEN["system_prompt"], vals)
-    return _render_prompt_template(cfg.get("scene_template") or VIDEO_GEN["scene_template"], vals)
+    """Passthrough: o briefing (guiado pelo System Prompt do cliente) JÁ montou a instrução completa da cena.
+    Isto só entrega essa instrução ao modelo, sem adicionar nenhuma regra escondida."""
+    return (video_prompt or theme or "cena publicitária premium").strip()
 
 
 def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
@@ -2029,21 +2006,82 @@ def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
             + (" || ".join(blocks))[:4000] + ". ")
 
 
-def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
-                           target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8,
-                           style: str = "") -> List[Dict[str, str]]:
-    """Roteiro em CENAS. Se n_scenes>0 (usuário TRAVOU a duração) gera EXATAMENTE n_scenes cenas distintas de
-    per_seconds cada; senão a IA decide (modo LIVRE). `style` = preset de estilo viral (Fase 3). Retorna [{prompt, seconds}]."""
-    fallback = [{"prompt": build_video_prompt(company, theme, video_prompt), "seconds": str(per_seconds or 8), "desc": (video_prompt or theme or "").strip(), "character_map": ""}]
-    config = cheap_text_config(get_ai_config())
-    if not config:
-        return fallback
-    if n_scenes and int(n_scenes) > 0:
-        dur_rule = (f"Quebre em EXATAMENTE {int(n_scenes)} CENAS DISTINTAS e sequenciais (com continuidade entre elas), "
-                    f"cada uma com {int(per_seconds)} segundos, totalizando ~{int(target_seconds or n_scenes*per_seconds)}s. "
-                    f"NÃO repita cenas — cada uma avança a narrativa. ")
-    else:
-        dur_rule = ("DECIDA a duração ideal do reel (o que performa melhor — normalmente 15 a 60s) e quebre em cenas. ")
+# === System Prompt PADRÃO de VÍDEO (Briefing de Reels) — editável por cliente em creative_config.video.system_prompt.
+# As {variáveis} são preenchidas pelo CÓDIGO com os dados REAIS da empresa/produto, em LINGUAGEM HUMANA (não como token cru).
+_VIDEO_SYS_DEFAULT = """Você é DIRETOR CRIATIVO, estrategista de conteúdo B2B e roteirista de reels para provedores de internet (ISPs) e SVAs. Sua função é transformar a ideia preenchida pelo usuário, somada aos dados de marca e produto, em UM storyboard de vídeo forte, específico e publicável, no formato JSON multi-shot definido abaixo — pronto para ser enviado a um modelo de geração de vídeo.
+
+A régua é a mesma do melhor carrossel: conteúdo que EDUCA, PROVOCA ou REPOSICIONA a visão do público. A venda acontece pela percepção de valor construída e pelo CTA desenhado DEPOIS, na pós-produção. Você não vende no grito.
+
+— LEI ARQUITETURAL INEGOCIÁVEL —
+O modelo de vídeo gera APENAS a cena filmada — pessoas, ambiente, luz, movimento e som diegético. Ele é ótimo nisso e PÉSSIMO em qualquer coisa determinística. Portanto:
+• O modelo NUNCA renderiza: texto, legenda, número, preço, título, logo, marca, nome de marca, ou tela/interface de aplicativo/celular com conteúdo legível, ícones ou nomes.
+• Logo, títulos, legendas, CTA, end-card e qualquer grafismo de marca são compostos DEPOIS, por código, na pós-produção. Você descreve isso no bloco `post_production`, que NÃO é enviado ao modelo.
+• Cor de marca SIM entra na cena — mas como PALETA (luz, figurino, objetos, ambiente), nunca como grafismo. Ex.: o laranja aparece numa luminária, num sofá, na luz do fim de tarde — jamais num logo desenhado pelo modelo.
+• Apps marcados são representados de DUAS formas, nunca pela interface gerada: (a) pela SENSAÇÃO do benefício na cena; (b) por asset REAL composto na pós. Você descreve (a) nas cenas e (b) no `post_production`. NUNCA peça ao modelo para desenhar a interface ou a logo do app.
+
+— REGRA MAIS IMPORTANTE: PROMPTS MULTI-SHOT —
+Cada segmento é UMA SEQUÊNCIA CINEMATOGRÁFICA DE MÚLTIPLAS TOMADAS dentro de uma única geração — não um plano estático, não clipes soltos. O campo `action` deve ser uma narrativa de múltiplos shots, em inglês, com gramática de cinema (planos, cortes, movimentos, ações), terminando em SFX. Sempre que houver continuidade, comece o `action` referenciando a tomada anterior ("starting from the previous medium shot...").
+
+— CONSISTÊNCIA DE PERSONAGEM —
+Se QUALQUER cena tiver uma pessoa, é a MESMA pessoa em TODAS. Preencha `character.map` UMA vez, hiper-específico e fixo (em inglês): idade, etnia, cabelo (cor+textura+corte), traços, tom de pele, vestuário e UM acessório-âncora único (ex.: "thin small gold hoop earring"). O código repete esse mapa em cada segmento. Se for só produto/ambiente, `character.present=false` e `map=""`. Mantenha entre segmentos: mesma paleta, energia, lógica e luz.
+
+— ANATOMIA DE UM BOM REELS B2B —
+Antes de escrever, raciocine internamente (não escreva): dor real do tema, crença errada do público, mudança de visão a provocar, ação final. Depois ENGRANDEÇA a ideia do usuário num conceito forte e específico (eleve, não copie). ARCO obrigatório: GANCHO (0–2s, visual e imediato), DESENVOLVIMENTO (valor específico/exemplo/quebra de objeção), VIRADA/CLÍMAX (prepara o CTA da pós). Gramática de cada shot: sujeito + contexto + 1 ação + 1 movimento de câmera + luz/clima + emoção. MOSTRE a sensação/benefício; proibido b-roll genérico. Para ISP/SVAs, conecte ao dia a dia comercial do provedor (diferenciação, fim da guerra de preço, fidelização, rentabilização da base).
+PELE NATURAL (crítico): luz quente no AMBIENTE, mas pele NATURAL e precisa — inclua em cada `style.lighting` algo como "warm practical lighting with natural, accurate skin tones — no orange color cast on skin".
+ÁUDIO (obrigatório): descreva em `audio` o som diegético (ambiente, SFX e fala). Diálogo/narração SEMPRE em pt-BR ("dialogue in Brazilian Portuguese: '...'"). Trilha do modelo mínima/ausente — a música de marca e legendas entram na pós.
+
+— IDIOMA, FORMATO E DURAÇÃO —
+• Toda INSTRUÇÃO de cena (subject, action, environment, camera, style) em INGLÊS.
+• Toda FALA/marca em PORTUGUÊS DO BRASIL (no `audio` como diálogo e no `post_production` como legendas/CTA).
+• Responda SOMENTE com JSON válido e compacto no schema abaixo. Sem markdown, sem texto fora do JSON.
+• Respeite os segundos informados: distribua o total entre os segmentos (cada geração tipicamente 5–8s); `seconds` por segmento e o total deve bater.
+• Use SOMENTE fatos fornecidos nos dados de marca/produto. Faltou dado → demonstre o benefício geral sem inventar recurso, número, preço, data ou promessa.
+
+— DADOS QUE VOCÊ RECEBE —
+• Ideia/assunto: {theme}
+• Empresa: {company} | Segmento: {segment} | Público: {audience}
+• Identidade da marca (USAR como paleta de cena): {brand_identity}
+• Produto(s)/app(s) em foco (USAR como sensação na cena + asset na pós): {product_identity}
+• Base de conhecimento do produto (única fonte de recursos/benefícios): {product_kb}
+• Duração total alvo (segundos): {duration}
+• Assets de marca (logos para a PÓS — NUNCA descritos ao modelo): {brand_assets}
+
+— SCHEMA DE SAÍDA (obrigatório) —
+{
+  "meta": {"language_instructions":"en","language_spoken":"pt-BR","aspect_ratio":"9:16","total_seconds": <int>, "big_idea":"<1 frase pt-BR com a dor/oportunidade real>"},
+  "character": {"present": <true|false>, "map":"<mapa fixo em inglês ou string vazia>"},
+  "brand_palette": "<como a cor da marca aparece na CENA: luz, figurino, props — em inglês; sem grafismo>",
+  "segments": [
+    {"id": <int>, "seconds": <int>,
+     "subject":"<o mesmo personagem (ref. ao map) ou elemento principal — inglês>",
+     "action":"<SEQUÊNCIA MULTI-SHOT em inglês: planos, cortes, movimentos, ações; gramática de cinema; termina com SFX>",
+     "environment":"<local, hora do dia, set dressing — inglês>",
+     "camera": {"shot":"<wide|medium|close-up|...>", "motion":"<slow push-in|dolly|handheld follow|parallax|static>"},
+     "style": {"lighting":"<luz + nota de pele natural sem orange cast>", "look":"<estética: cinematic 35mm, soft grain, shallow depth of field, brand-warm palette>"},
+     "audio": {"ambient":"<ambiente em inglês>", "sfx":"<efeitos em inglês>", "dialogue_ptBR":"<fala em pt-BR ou string vazia>"}}
+  ],
+  "post_production": {
+    "captions":"<legenda queimada pt-BR — a mensagem para o mudo>",
+    "lower_third":"<logo da empresa + handle, discreto, animado>",
+    "music":"<trilha de marca a aplicar na pós (clima) — controlada, não a do modelo>",
+    "end_card": {"headline_ptBR":"<chamada final curta>", "cta_ptBR":"<CTA>", "url":"<site>", "logos":["<empresa>","<app(s)>"], "seconds": <int>, "motion":"<end-card com movimento, não slide estático>"},
+    "apps_to_composite": ["<app: representação real na pós, ex. 'apenas logo no end-card'>"]
+  }
+}
+
+NÃO inclua, em NENHUM campo de cena (subject/action/environment/style/audio): texto, letra, legenda, número, logo, marca, nome de marca, preço, tela de app com conteúdo legível, claim não confirmado ou promessa. Esses elementos vivem SOMENTE em `post_production`."""
+
+
+def _fill_vars(template: str, vals: Dict[str, Any]) -> str:
+    """Preenche {chave} com os valores REAIS (linguagem humana). Preserva a formatação (não colapsa espaços/linhas)."""
+    txt = template or ""
+    for k, v in (vals or {}).items():
+        txt = txt.replace("{" + k + "}", "" if v is None else str(v))
+    return txt
+
+
+def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: int = 0) -> Dict[str, str]:
+    """Busca os dados REAIS da empresa/marca/produto e devolve em LINGUAGEM HUMANA pra preencher o system prompt do vídeo."""
     bk = company.get("brand_kit") or {}
     if not bk:
         try:
@@ -2051,67 +2089,150 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
             bk = brand_kit_get(company.get("id")) or {}
         except Exception:
             bk = {}
+    cols = bk.get("colors") or {}
+    col_parts = [f"{label} {cols[k]}" for k, label in (("primary", "primária"), ("accent", "destaque"), ("secondary", "secundária")) if cols.get(k)]
     voice = (bk.get("voice") or bk.get("persona") or "").strip()
-    audience = (bk.get("audience") or "").strip()
-    rules = (bk.get("client_rules") or "").strip()
-    vbase = (bk.get("visual_prompt_base") or "").strip()
-    tom_rule = (f"TOM/VOZ DA MARCA (mantenha CONSISTENTE em todo vídeo — define o clima, o ritmo e a energia das cenas): {voice}. " if voice else
-                "TOM consistente, brasileiro, premium e confiante. ")
-    product_context = _video_brief_context(company, theme)
-    style_rule = video_style_directive(company, style)            # Fase 3: estilo viral escolhido (vazio = auto)
-    G = creative_cfg(company).get("briefing") or {}
-    vals = {
-        "company": company.get("name", ""),
-        "segment": company.get("segment", ""),
+    bi = []
+    if col_parts:
+        bi.append("Cores da marca: " + ", ".join(col_parts))
+    if voice:
+        bi.append("Tom de voz: " + voice)
+    brand_identity = (". ".join(bi) + ".") if bi else "Sem identidade visual cadastrada — use paleta sóbria e premium."
+    try:
+        from ..db_companies import product_list as _pl
+        prods = _pl(company.get("id")) or []
+    except Exception:
+        prods = []
+    import unicodedata as _ud
+
+    def _norm(s):
+        s = _ud.normalize("NFKD", (s or "").lower())
+        return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
+
+    tn = _norm(theme)
+    focus = [p for p in prods if _norm(p.get("name")) and _norm(p.get("name")) in tn] or prods[:2]
+    pid, pkb, logos = [], [], []
+    for p in focus[:3]:
+        nm = (p.get("name") or "").strip()
+        obj = (p.get("objective") or "").strip()
+        fns = p.get("functions") or []
+        if isinstance(fns, str):
+            try:
+                import json as _j
+                fns = _j.loads(fns)
+            except Exception:
+                fns = [fns] if fns else []
+        fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:500]
+        seg = ([nm] if nm else []) + ([f"objetivo: {obj}"] if obj else []) + ([f"funções: {fns_t}"] if fns_t else [])
+        if seg:
+            pid.append(" — ".join(seg))
+        kb = (p.get("knowledge") or "").strip()
+        if kb:
+            pkb.append(f"[{nm}] " + kb[:1500])
+    try:
+        from ..db_companies import asset_list_logos as _all
+        if _all(company.get("id")):
+            logos.append(company.get("name") or "empresa")
+        for p in focus[:3]:
+            if _all(company.get("id"), p.get("id")):
+                logos.append((p.get("name") or "").strip())
+    except Exception:
+        pass
+    return {
         "theme": theme or "",
-        "video_prompt": video_prompt or "",
-        "duration_rule": dur_rule,
-        "tone_rule": tom_rule,
-        "style_rule": (style_rule + " ") if style_rule else "",
-        "audience": audience,
-        "audience_line": f"Público-alvo: {audience}. " if audience else "",
-        "visual_base": vbase,
-        "visual_base_line": f"Identidade visual base da marca: {vbase}. " if vbase else "",
-        "client_rules": rules,
-        "client_rules_line": f"Regras do cliente (RESPEITE): {rules}. " if rules else "",
-        "product_context": product_context,
+        "company": company.get("name", "") or "",
+        "segment": company.get("segment", "") or "",
+        "audience": (bk.get("audience") or "").strip(),
+        "brand_identity": brand_identity,
+        "product_identity": " | ".join(pid) if pid else "Nenhum app/produto específico — fale do benefício geral.",
+        "product_kb": " || ".join(pkb) if pkb else "Sem base de conhecimento — NÃO invente recurso, número, preço, data ou promessa.",
+        "duration": (str(int(target_seconds)) if target_seconds else "livre"),
+        "brand_assets": ("Logos oficiais disponíveis para a PÓS (NÃO descreva ao modelo): " + ", ".join([l for l in logos if l])) if any(logos) else "Sem logos cadastradas para a pós.",
     }
-    system = _render_prompt_template(G.get("video_storyboard_system") or BRIEFING_GEN["video_storyboard_system"], vals)
-    user = _render_prompt_template(G.get("video_storyboard_user") or BRIEFING_GEN["video_storyboard_user"], vals)
+
+
+def _assemble_segment_prompt(seg: Dict[str, Any], character_map: str = "", brand_palette: str = "") -> str:
+    """Monta o prompt EM TEXTO de UM segmento multi-shot pro modelo de vídeo, repetindo o mapa do personagem."""
+    parts = []
+    if character_map:
+        parts.append("Recurring character (identical in every shot): " + character_map.rstrip("."))
+    if (seg.get("subject") or "").strip():
+        parts.append(seg["subject"].strip().rstrip("."))
+    if (seg.get("action") or "").strip():
+        parts.append(seg["action"].strip())
+    if (seg.get("environment") or "").strip():
+        parts.append("Environment: " + seg["environment"].strip().rstrip("."))
+    cam = seg.get("camera") or {}
+    cam_bits = [x for x in [(cam.get("shot") or "").strip(), (cam.get("motion") or "").strip()] if x]
+    if cam_bits:
+        parts.append("Camera: " + ", ".join(cam_bits))
+    style = seg.get("style") or {}
+    if (style.get("lighting") or "").strip():
+        parts.append("Lighting: " + style["lighting"].strip().rstrip("."))
+    if (style.get("look") or "").strip():
+        parts.append("Look: " + style["look"].strip().rstrip("."))
+    if brand_palette:
+        parts.append("Brand color only as ambiance (light/props/wardrobe, never graphics): " + brand_palette.rstrip("."))
+    audio = seg.get("audio") or {}
+    aud = [x for x in [(audio.get("ambient") or "").strip(), (audio.get("sfx") or "").strip()] if x]
+    if (audio.get("dialogue_ptBR") or "").strip():
+        aud.append('dialogue in Brazilian Portuguese: "' + audio["dialogue_ptBR"].strip() + '"')
+    if aud:
+        parts.append("Audio: " + "; ".join(aud))
+    return ". ".join(p for p in parts if p).strip()
+
+
+def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
+                           target_seconds: int = 0, n_scenes: int = 0, per_seconds: int = 8,
+                           style: str = "") -> List[Dict[str, str]]:
+    """Roteiro de VÍDEO. O System Prompt do cliente (creative_config.video.system_prompt, default = documento do Mikael)
+    é a ESTRUTURA que o briefing lê; o CÓDIGO preenche as {variáveis} com os dados REAIS da empresa/produto em
+    linguagem humana e a IA devolve o schema multi-shot, que viramos em 1 prompt por segmento pro modelo."""
+    fallback = [{"prompt": (video_prompt or theme or "").strip(), "seconds": str(per_seconds or 8), "desc": (video_prompt or theme or "").strip(), "character_map": ""}]
+    config = cheap_text_config(get_ai_config())
+    if not config:
+        return fallback
+    sysp = (creative_cfg(company).get("video") or {}).get("system_prompt") or VIDEO_GEN.get("system_prompt") or ""
+    vals = _video_template_vars(company, theme, target_seconds)     # busca dados REAIS → linguagem humana
+    system = _fill_vars(sysp, vals).strip()                         # variáveis preenchidas (formatação preservada)
+    user = "Gere agora o storyboard em JSON, exatamente no schema definido."
     allowed = [4, 8, 12]
     try:
-        parsed = extract_json(complete_ai(config, system, user, 1600)) or {}
-        character = parsed.get("character") if isinstance(parsed.get("character"), dict) else {}
-        char_map = (character.get("map") or "").strip()
-        char_on = bool(character.get("present")) and bool(char_map)
-        # MESMO mapa de personagem repetido em CADA cena → trava a identidade (mesmo rosto/roupa/acessório-âncora).
-        char_clause = (("PERSONAGEM FIXO — a MESMA pessoa em TODAS as cenas, idêntica (rosto, cabelo, pele, vestuário "
-                        "e o acessório-âncora NÃO mudam): " + char_map.rstrip(".") + ". ") if char_on else "")
+        raw = complete_ai(config, system, user, 2400)
+        parsed = extract_json(raw) or {}
         out = []
-        for s in (parsed.get("scenes") or [])[:8]:
-            if not isinstance(s, dict):
-                continue
-            desc = (s.get("desc") or s.get("description") or "").strip()
-            if not desc:
-                continue
-            try:
-                sec = int(s.get("seconds") or 8)
-            except Exception:
-                sec = 8
-            sec = min(allowed, key=lambda a: abs(a - sec))  # snap to 4/8/12
-            cine = ""                                        # linguagem de câmera escolhida de propósito (Nível 2)
-            fr = (s.get("framing") or s.get("camera_framing") or "").strip()
-            mv = (s.get("movement") or s.get("camera_movement") or "").strip()
-            stl = (s.get("style") or s.get("visual_style") or "").strip()
-            if fr:
-                cine += f"Enquadramento: {fr}. "
-            if mv:
-                cine += f"Movimento de câmera: {mv}. "
-            if stl:
-                cine += f"Estilo: {stl}. "
-            scene_text = (char_clause + desc.rstrip(".") + ". " + cine).strip()   # personagem travado + cena + câmera
-            out.append({"prompt": build_video_prompt(company, theme, scene_text), "seconds": str(sec),
-                        "desc": desc, "character_map": char_clause})
+        if isinstance(parsed, dict):
+            character = parsed.get("character") or {}
+            cmap = (character.get("map") or "").strip() if character.get("present") else ""
+            bpal = (parsed.get("brand_palette") or "").strip()
+            for seg in (parsed.get("segments") or [])[:8]:         # schema multi-shot (documento) → 1 prompt por segmento
+                if not isinstance(seg, dict):
+                    continue
+                p = _assemble_segment_prompt(seg, cmap, bpal)
+                if not p:
+                    continue
+                try:
+                    sec = int(seg.get("seconds") or 8)
+                except Exception:
+                    sec = 8
+                sec = min(allowed, key=lambda a: abs(a - sec))
+                out.append({"prompt": p, "seconds": str(sec), "desc": p, "character_map": cmap})
+            if not out:                                            # compat: schema antigo {scenes:[{desc,seconds}]}
+                for s in (parsed.get("scenes") or [])[:8]:
+                    if not isinstance(s, dict):
+                        continue
+                    desc = (s.get("desc") or s.get("description") or s.get("prompt") or "").strip()
+                    if not desc:
+                        continue
+                    try:
+                        sec = int(s.get("seconds") or 8)
+                    except Exception:
+                        sec = 8
+                    sec = min(allowed, key=lambda a: abs(a - sec))
+                    out.append({"prompt": desc, "seconds": str(sec), "desc": desc, "character_map": ""})
+        if not out and (raw or "").strip():                        # IA não devolveu JSON → resposta crua = 1 cena
+            txt = (raw or "").strip()
+            out = [{"prompt": txt, "seconds": str(per_seconds or 8), "desc": txt, "character_map": ""}]
         if out:
             return out
     except Exception:
@@ -2304,9 +2425,8 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
     mdl = model or config["model"]
     if prov == "openrouter":
         # OpenRouter POST /api/v1/videos: duration inteiro + frame_images tipado.
-        # generate_audio=False: a voz inventada pelo Veo sai garbled/2x E ele QUEIMA legenda da narração nos
-        # frames (fura a regra "sem texto"). Clipe sai mudo; o compositor garante faixa silenciosa (concat ok).
-        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000], "generate_audio": False}
+        # generate_audio=True: o modelo gera o som diegético (ambiente/SFX/fala), conforme a instrução do briefing.
+        body: Dict[str, Any] = {"model": mdl, "prompt": prompt[:4000], "generate_audio": True}
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
         body["duration"] = min(_video_seconds_value(seconds), video_model_max_seconds(mdl) or 12)  # trava custo: nunca > máx do modelo
@@ -2816,11 +2936,7 @@ IMAGE_GEN: Dict[str, Any] = {
 
 # Template do PROMPT de vídeo/reels (placeholder editável; a geração de vídeo usa isto quando ligada).
 VIDEO_GEN: Dict[str, Any] = {
-    "system_prompt": (
-        "Gere APENAS o CLIPE DE FUNDO de um vídeo vertical 9:16 EM MOVIMENTO, nível AGÊNCIA de propaganda. "
-        "É cena cinematográfica realista de campanha, não cartaz pronto, não template de Canva, não banco de imagem animado, "
-        "não IA/cartoon/render barato."
-    ),
+    "system_prompt": _VIDEO_SYS_DEFAULT,
     "scene_template": (
         "{system_prompt} "
         "SHOT CANÔNICO: {visual}. "

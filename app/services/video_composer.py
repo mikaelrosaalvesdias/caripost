@@ -26,6 +26,41 @@ def _ff(args: List[str], timeout: int = 240) -> bool:
         return False
 
 
+def concat_raw_clips(paths: List[str], out_path: str) -> bool:
+    """Junta os clipes CRUS do modelo SEM reprocessar (stream copy) — preserva exatamente imagem e áudio gerados.
+    1 clipe = copia direto. Se o stream-copy falhar (params diferentes), reencoda só pra juntar, SEM corte/grade."""
+    import shutil
+    paths = [p for p in (paths or []) if p and os.path.exists(p)]
+    if not paths:
+        return False
+    if len(paths) == 1:
+        try:
+            shutil.copy(paths[0], out_path)
+            return True
+        except Exception:
+            return False
+    lst = tempfile.mktemp(suffix=".txt")
+    try:
+        with open(lst, "w") as f:
+            for p in paths:
+                f.write("file '%s'\n" % os.path.abspath(p).replace("'", "'\\''"))
+        if _ff(["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", "-movflags", "+faststart", out_path], timeout=300):
+            return True
+        # fallback: reencoda concatenando (sem mexer no enquadramento) quando o stream-copy não casa
+        inputs = []
+        for p in paths:
+            inputs += ["-i", p]
+        n = len(paths)
+        fc = "".join(f"[{i}:v][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
+        return _ff(inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+                             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", out_path], timeout=420)
+    finally:
+        try:
+            os.remove(lst)
+        except Exception:
+            pass
+
+
 def last_frame_png(clip_path: str, out_path: str) -> bool:
     """Extrai o ÚLTIMO frame do clipe → PNG. Vira o first_frame da próxima cena (CONTINUIDADE). True/False.
     O PNG precisa ficar numa URL pública (sem cookie/redirect) p/ a OpenRouter baixar."""

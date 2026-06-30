@@ -1297,29 +1297,17 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
             clips.append({"path": cp, "seconds": clip_seconds})
             lf = os.path.join(jdir, f"{jid}_f{i}.png")           # último frame → first_frame da próxima (continuidade)
             first_frame_url = _pub(lf) if last_frame_png(cp, lf) else None
-        # ÁUDIO conforme o BRIEFING (plano): narração via TTS + trilha via Suno (best-effort, NUNCA quebra o vídeo)
-        narration_path = music_path = None
-        plan = audio_plan or {}
-        amode = (plan.get("mode") or "none")
-        try:
-            if amode in ("narration", "both") and (plan.get("script") or "").strip():
-                from ..services.ai import tts_synthesize
-                _np = os.path.join(jdir, jid + "_narr.mp3")
-                if tts_synthesize(plan.get("script"), _np, plan.get("voice") or "onyx"):
-                    narration_path = _np
-            if amode in ("music", "both") and (plan.get("music") or "").strip():
-                from ..services.ai import music_generate
-                _mp = os.path.join(jdir, jid + "_music.mp3")
-                if music_generate(plan.get("music"), _mp):
-                    music_path = _mp
-        except Exception:
-            pass
         _w({"status": "composing", "scene": total, "total": total,
             "cost_usd": round(cost, 2), "cost_source": cost_source})
         out = os.path.join(jdir, jid + ".mp4")
-        if not compose_branded_video(clips, out, colors, co_logos, cta, site, handle,
-                                     narration_path, music_path, app_logos):
-            raise ValueError("falha ao montar o vídeo final")
+        # SEM COMPOSITOR: o vídeo final é EXATAMENTE o que o modelo gerou (imagem + áudio do modelo). Sem corte,
+        # grade, overlay, legenda, CTA ou áudio extra. 1 clipe = entrega direto; vários = concat cru (stream copy).
+        clip_paths = [c.get("path") for c in clips if c.get("path") and os.path.exists(c.get("path"))]
+        if not clip_paths:
+            raise ValueError("nenhum clipe gerado")
+        from ..services.video_composer import concat_raw_clips
+        if not concat_raw_clips(clip_paths, out):
+            raise ValueError("falha ao entregar o vídeo")
         try:                                          # APRENDE o preço real (usage.cost/cena) p/ a próxima previsão bater
             if total and usage_cost > 0:
                 from ..services.ai import get_setting as _gs
@@ -1370,11 +1358,9 @@ async def generate_branded_video(request: Request):
         n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = trava de custo)
     else:
         per, n_want = (mx or 8), 0                            # livre → 1 clipe (custo mínimo)
-    _char_lock = (body.get("character") or "").strip()
     _edited = [d for d in (body.get("scene_descs") or []) if isinstance(d, str) and d.strip()]
-    if _edited:                                               # usuário editou o roteiro por cena → recompõe MANTENDO o personagem travado
-        from ..services.ai import build_video_prompt as _bvp
-        prompts = [_bvp(company, theme, ((_char_lock + " " if _char_lock else "") + d.strip())) for d in _edited]
+    if _edited:                                               # usuário editou o roteiro por cena → usa os prompts como estão (já completos)
+        prompts = [d.strip() for d in _edited]
     else:
         prompts = [p for p in (body.get("storyboard") or []) if isinstance(p, str) and p.strip()]
         if not prompts:
