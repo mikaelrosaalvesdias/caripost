@@ -1848,6 +1848,25 @@ def video_scene_count(target_seconds: int, max_seconds: int, cap: int = 8) -> in
     return max(1, min(cap, math.ceil(t / m)))
 
 
+def video_segment_plan(target_seconds: int, max_seconds: int, ai_count: int,
+                       cap: int = 8, min_clip: int = 4) -> Tuple[int, int]:
+    """Plano de cenas RESPEITANDO quantas cenas a IA realmente gerou (ai_count), dentro dos limites:
+    cobre a duração travada (mín = ceil(t/máx)), não estoura o custo (cap) nem faz clipe curto demais (min_clip).
+    Devolve (nº_de_cenas, segundos_por_clipe). Os segundos são distribuídos pra somar ≈ duração travada — é o que
+    impede o bug de '15s viram 24s e a 3ª cena some'. target<=0 (livre) → nº = o que a IA fez (cap), per = máx do modelo."""
+    import math
+    mx = max(1, int(max_seconds or 8))
+    ai = max(0, int(ai_count or 0))
+    t = int(target_seconds or 0)
+    if t <= 0:                                              # livre → segue a IA (1..cap)
+        return (max(1, min(cap, ai or 1)), mx)
+    n_min = max(1, math.ceil(t / mx))                       # mínimo de clipes p/ cobrir a duração
+    n_max = max(n_min, min(cap, max(1, t // max(1, min_clip))))   # máx p/ não estourar custo nem fazer clipe curto demais
+    k = max(n_min, min(ai if ai > 0 else n_min, n_max))     # usa a contagem da IA, limitada à faixa [n_min, n_max]
+    per = max(1, min(mx, round(t / k)))                     # segundos/clipe pra somar ≈ duração travada
+    return (k, per)
+
+
 def _video_catalog_entry(model_id: str):
     """Acha (preço, max_seconds, nome) do modelo no catálogo (OpenRouter+Comet). None se não achar."""
     mid = (model_id or "").strip()

@@ -1337,7 +1337,8 @@ async def generate_branded_video(request: Request):
     company = company_get(body.get("company_id"))
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
-    from ..services.ai import get_video_config, build_video_storyboard, build_video_audio_plan, video_model_max_seconds
+    from ..services.ai import (get_video_config, build_video_storyboard, build_video_audio_plan,
+                               video_model_max_seconds, video_scene_count, video_segment_plan)
     if not get_video_config():
         return JSONResponse({"detail": "Escolha o modelo de vídeo no painel de IA antes."}, status_code=400)
     cid = company["id"]
@@ -1353,30 +1354,28 @@ async def generate_branded_video(request: Request):
     except Exception:
         target = 0
     mx = video_model_max_seconds()                            # máx de segundos POR CLIPE do modelo
-    if target > 0:
-        per = max(1, min(mx, target, 12))                     # segundos por clipe — nunca passa do máx do modelo
-        n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = trava de custo)
-    else:
-        per, n_want = (mx or 8), 0                            # livre → 1 clipe (custo mínimo)
+    n_hint = video_scene_count(target, mx) if target > 0 else 0   # palpite (só fallback); o nº real segue as cenas geradas/editadas
+    per_hint = max(1, min(mx, round(target / n_hint))) if n_hint else (mx or 8)
     _edited = [d for d in (body.get("scene_descs") or []) if isinstance(d, str) and d.strip()]
     if _edited:                                               # usuário editou o roteiro por cena → usa os prompts como estão (já completos)
         prompts = [d.strip() for d in _edited]
     else:
         prompts = [p for p in (body.get("storyboard") or []) if isinstance(p, str) and p.strip()]
         if not prompts:
-            try:                                              # roteiro CASADO com a duração (modo TRAVADO: n_want cenas de per s)
-                sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt, target, n_want, per, (body.get("style") or "").strip())
+            try:                                              # roteiro CASADO com a duração
+                sb = await asyncio.to_thread(build_video_storyboard, company, theme, video_prompt, target, n_hint, per_hint, (body.get("style") or "").strip())
             except Exception:
                 sb = []
             prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
-    if n_want > 0:                                            # TRAVA o nº de cenas: sobra corta, falta completa → custo previsível
-        prompts = (prompts or [video_prompt or theme or f"Cena da marca {company.get('name','')}"])[:n_want]
-        while len(prompts) < n_want:
+    if target > 0:                                            # nº de cenas = as que vieram (boxes/roteiro), dentro dos limites; segundos somam ≈ duração travada
+        k, _per = video_segment_plan(target, mx, len(prompts))
+        prompts = (prompts or [video_prompt or theme or f"Cena da marca {company.get('name','')}"])[:k]
+        while len(prompts) < k:                               # cobre a duração travada quando vieram poucas cenas
             prompts.append(prompts[len(prompts) % len(prompts)])
     else:
         prompts = prompts[:8] or [video_prompt or theme or f"Cena da marca {company.get('name','')}"]
-    n = len(prompts)
-    _per = per                                                # segundos POR CLIPE (NÃO o total) — corrige o custo
+        _per = (mx or 8)                                      # livre → clipe no máx do modelo
+    n = len(prompts)                                          # nº de clipes que serão gerados (= caixas do roteiro)
     # ÁUDIO ditado pelo BRIEFING (modo + roteiro de locução + vibe da trilha). Custo-seguro: falha → mudo.
     try:
         audio_plan = await asyncio.to_thread(build_video_audio_plan, company, theme, video_prompt, max(1, n * _per))
@@ -1444,7 +1443,7 @@ async def video_preflight(request: Request):
     body = await request.json()
     from ..services.ai import (build_video_storyboard, get_video_config, get_setting,
                                video_model_max_seconds, _video_catalog_entry, usd_to_brl, video_clip_price,
-                               video_price_per_second)
+                               video_price_per_second, video_scene_count, video_segment_plan)
     if not get_video_config():
         return {"configured": False}
     company = company_get(body.get("company_id"))
@@ -1456,24 +1455,23 @@ async def video_preflight(request: Request):
     except Exception:
         target = 0
     mx = video_model_max_seconds()
-    if target > 0:
-        per = max(1, min(mx, target, 12))
-        n_want = max(1, min(8, _math.ceil(target / per)))     # nº de cenas determinístico (teto 8 = custo)
-    else:
-        per, n_want = mx, 0
+    n_hint = video_scene_count(target, mx) if target > 0 else 0   # palpite determinístico (só p/ fallback/áudio; NÃO trava o nº)
+    per_hint = max(1, min(mx, round(target / n_hint))) if n_hint else mx
     try:
-        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp, target, n_want, per, (body.get("style") or "").strip()) if company else []
+        sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp, target, n_hint, per_hint, (body.get("style") or "").strip()) if company else []
     except Exception:
         sb = []
     prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
     descs = [(s.get("desc") or "") for s in (sb or []) if s.get("prompt")]          # roteiro legível por cena (editável no front)
     char_lock = next((s.get("character_map") for s in (sb or []) if (s.get("character_map") or "").strip()), "")
-    if n_want > 0:                                             # duração TRAVADA → exatamente n_want cenas
-        prompts = prompts[:n_want]; descs = descs[:n_want]
-        while len(prompts) < n_want:
-            prompts.append((prompts[len(prompts) % len(prompts)] if prompts else (vp or theme or "cena da marca")))
-            descs.append((descs[0] if descs else (vp or theme or "")))
-        secs = [per] * n_want
+    if target > 0:                                            # TRAVADA → nº de caixas = as cenas que a IA gerou (dentro de [mín p/ cobrir a duração, teto de custo])
+        k, per = video_segment_plan(target, mx, len(prompts))
+        if not prompts:
+            prompts = [vp or theme or "cena da marca"]; descs = [""]
+        prompts = prompts[:k]; descs = descs[:k]
+        while len(prompts) < k:                               # IA gerou MENOS que o mínimo p/ cobrir a duração → completa repetindo a última
+            prompts.append(prompts[-1]); descs.append(descs[-1] if descs else "")
+        secs = [per] * len(prompts)                           # segundos por clipe somam ≈ duração travada (sem overshoot)
     else:                                                      # LIVRE → a IA decide
         prompts = prompts[:8] or [vp or theme or "cena"]
         secs = [min(int(s.get("seconds") or 8), mx) for s in (sb or [])][:len(prompts)] or [mx]
