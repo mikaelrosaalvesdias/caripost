@@ -103,7 +103,8 @@ function VideoCreator({ company }) {
   }
   async function gerar() {
     if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
-    if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ≈ R$ ' + pf.total_brl + '.\n\nISSO GASTA DINHEIRO REAL. Confirmar?')) return;
+    const _custo = pf.is_credits ? ('≈ ' + pf.total_credits + ' créditos kie (' + pf.credits_per_clip + '/clipe' + (pf.credits_learned ? '' : ', estimado') + ')') : ('≈ R$ ' + pf.total_brl);
+    if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ' + _custo + '.\n\nISSO GASTA ' + (pf.is_credits ? 'CRÉDITOS' : 'DINHEIRO') + ' REAL. Confirmar?')) return;
     setBusy(true); setMsg(''); setStatus(null);
     videoStartRef.current = Date.now();
     lastPctRef.current = 3;
@@ -137,8 +138,8 @@ function VideoCreator({ company }) {
         }
         else if (s.status === 'composing') { lastPctRef.current = 95; setProc({ open: true, pct: 95, detail: 'Juntando as cenas em 1 vídeo só + logo e CTA da marca…', phase: '' }); }
         else if (s.status === 'done') {
-          const costLabel = s.cost_source === 'catalog_estimate' ? 'Custo estimado' : 'Custo REAL';
-          setProc({ open: true, pct: 100, phase: 'done', detail: 'Vídeo pronto! ' + costLabel + ': ' + brl(s.cost_usd) });
+          const costLabel = s.is_credits ? ('Consumiu ' + s.credits_used + ' créditos kie') : ((s.cost_source === 'catalog_estimate' ? 'Custo estimado' : 'Custo REAL') + ': ' + brl(s.cost_usd));
+          setProc({ open: true, pct: 100, phase: 'done', detail: 'Vídeo pronto! ' + costLabel });
           setBusy(false); return;
         }
         else if (s.status === 'error') { setProc({ open: true, phase: 'error', detail: (s.detail || 'falhou') + ' · ' + _videoCostText(s, brl) }); setBusy(false); return; }
@@ -147,9 +148,9 @@ function VideoCreator({ company }) {
     } catch (e) { setProc({ open: true, phase: 'error', detail: e.message }); setBusy(false); }
   }
   const DURS = [[0, 'Livre (IA decide)'], [8, '8s'], [15, '15s'], [30, '30s'], [60, '60s']];
-  const PLAB = { cometapi: 'CometAPI', openrouter: 'OpenRouter', openai: 'OpenAI' };
+  const PLAB = { kie: 'kie.ai (créditos)', cometapi: 'CometAPI', openrouter: 'OpenRouter', openai: 'OpenAI' };
   const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
-  const vlabel = (m) => (m.name || m.id) + (m.quality ? ' (' + m.quality + ')' : '') + (m.max_seconds ? ' · até ' + m.max_seconds + 's' : '') + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + '/clipe' + imgPriceKind(m) : '');
+  const vlabel = (m) => (m.name || m.id) + (m.max_seconds ? ' · até ' + m.max_seconds + 's' : '') + (m.credits ? ' · ' + m.credits + ' cr/clipe' + (m.credits_learned ? '' : '~') : (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + '/clipe' + imgPriceKind(m) : ''));
   if (!theme) return <div className="panel stack"><div className="hint">Volte ao Briefing, escreva o assunto e gere o roteiro do vídeo primeiro.</div></div>;
   return <div className="panel stack">
     <div className="sec"><Icon name="video" />Gerar vídeo branded (9:16, com áudio)</div>
@@ -172,7 +173,7 @@ function VideoCreator({ company }) {
     </Field>}
     <div className="sec mut">Assunto: {theme.slice(0, 100)}</div>
     {planning && <div className="hint">Montando o roteiro e calculando o custo…</div>}
-    {pf && pf.configured && !planning && <div className="hint">→ <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) · custo estimado ≈ <b>R$ {pf.total_brl}</b> <span style={{ opacity: .7 }}>(o real vem ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
+    {pf && pf.configured && !planning && <div className="hint">→ <b>{pf.scenes} cena(s)</b> (~{pf.total_seconds}s) · {pf.is_credits ? <span>custo ≈ <b>{pf.total_credits} créditos kie</b> <span style={{ opacity: .7 }}>({pf.credits_per_clip}/clipe{pf.credits_learned ? '' : ', estimado'})</span></span> : <span>custo estimado ≈ <b>R$ {pf.total_brl}</b></span>} <span style={{ opacity: .7 }}>(o real vem ao final). As cenas viram <b>1 vídeo só</b>.</span></div>}
     {pf && pf.configured && !planning && scenes.length > 0 && <Field label="Roteiro por cena — edite antes de gerar (gasto só ao confirmar)">
       <div className="stack" style={{ gap: 6 }}>
         {pf.character && <div className="hint" style={{ opacity: .85 }}>🎭 <b>Personagem travado</b> (igual em todas as cenas): {String(pf.character).replace(/^PERSONAGEM FIXO[^:]*:\s*/, '').slice(0, 180)}</div>}

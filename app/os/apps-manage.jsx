@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.27.22';
+const MP_OS_VERSION = 'v1.27.23';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -721,8 +721,8 @@ function ImageModelPicker() {
     if (m.price_source) return ' · estimado';
     return '';
   };
-  const price = m => m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + priceKind(m) : (m.free ? ' · grátis' : '');
-  const PLAB = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
+  const price = m => m.credits ? ' · ' + m.credits + ' cr/clipe' + (m.credits_learned ? '' : '~') : (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + priceKind(m) : (m.free ? ' · grátis' : ''));
+  const PLAB = { kie: 'kie.ai (créditos)', omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
   const groups = (() => { const g = {}; models.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
   const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
 

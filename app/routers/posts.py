@@ -18,7 +18,7 @@ from ..db_companies import (
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
     generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, generate_image_with_person, verify_same_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config,
-    openrouter_image_models, openrouter_video_models, cometapi_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
+    openrouter_image_models, openrouter_video_models, cometapi_video_models, omniroute_video_models, kie_video_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
 )
 
@@ -243,7 +243,7 @@ def ai_models(request: Request):
            + _prov(cometapi_image_models(), "cometapi")
            + _prov(piapi_image_models(), "piapi")
            + _prov(openrouter_image_models(), "openrouter"))
-    vid = (_prov(openrouter_video_models(), "openrouter") + _prov(cometapi_video_models(), "cometapi"))
+    vid = (_prov(kie_video_models(), "kie") + _prov(openrouter_video_models(), "openrouter") + _prov(cometapi_video_models(), "cometapi"))
     for m in img:
         m["price_brl"] = usd_to_brl(m.get("price_per_image") or 0)
     for m in vid:
@@ -1151,7 +1151,10 @@ async def set_ai_model(request: Request):
         settings_set(key="video.model", value=vm, updated_at=now)
         # 'cometapi:' → CometAPI · slug com '/' → OpenRouter · senão OpenAI (Sora)
         settings_set(key="video.provider",
-                     value=("cometapi" if vm.startswith("cometapi:") else ("openrouter" if "/" in vm else "openai")),
+                     value=("kie" if vm.startswith("kie:")
+                            else "omniroute" if vm.startswith("omni:")
+                            else "cometapi" if vm.startswith("cometapi:")
+                            else ("openrouter" if "/" in vm else "openai")),
                      updated_at=now)
     return {"ok": True, "image_current": get_setting("image.model"), "video_current": get_setting("video.model")}
 
@@ -1229,6 +1232,7 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
 
     total = len(scene_prompts)
     clips, cost, usage_cost, first_frame_url = [], 0.0, 0.0, None
+    credits_used = 0.0                                        # kie.ai cobra em créditos (somados das cenas)
     cost_source = "provider_usage"
     try:
         provider_config = get_video_config() or {}
@@ -1282,6 +1286,10 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
                         cost += scene_cost
                         if src == "provider_usage":
                             usage_cost += scene_cost
+                        try:
+                            credits_used += float(st.get("creditsConsumed") or 0)   # kie: crédito real da cena
+                        except Exception:
+                            pass
                         done = True; break
                     if status in ("failed", "error", "canceled", "cancelled"):
                         raise ValueError(f"cena {i + 1} falhou no provedor")
@@ -1320,7 +1328,8 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
         except Exception:
             pass
         _w({"status": "done", "url": _pub(out), "cost_usd": round(cost, 2),
-            "cost_source": cost_source, "scenes": total})
+            "cost_source": cost_source, "scenes": total,
+            "is_credits": provider_name == "kie", "credits_used": round(credits_used, 1)})
     except Exception as e:
         _w({"status": "error", "detail": str(e)[:300],
             "cost_usd": round(cost, 2), "cost_source": cost_source})
@@ -1492,10 +1501,23 @@ async def video_preflight(request: Request):
         price = video_clip_price(_vm)
         total_usd = round(price * n, 2)
         real = bool(get_setting("video.price." + _vm))
+    # kie.ai cobra em CRÉDITOS (não R$): mostra crédito/clipe (aprendido por uso, senão default por tier) × nº de cenas
+    kie_credits = kie_credits_per_clip = 0.0
+    is_credits = _vm.startswith("kie:")
+    if is_credits:
+        from ..services.ai import _KIE_BY_MODEL
+        mdl = _vm[len("kie:"):]
+        learned = get_setting("kie.credits." + mdl)
+        tier = (_KIE_BY_MODEL.get(mdl) or ("", "", "medium", 8))[2]
+        kie_credits_per_clip = float(learned) if learned else {"top": 90, "medium": 30, "fast": 15}.get(tier, 30)
+        kie_credits = round(kie_credits_per_clip * n, 1)
+        name = name + (" · " + tier.upper())
     return {"configured": True, "model": name, "scenes": n, "total_seconds": total_s,
             "seconds_per_scene": (secs[0] if secs else 8), "scene_seconds": secs,
             "price_per_clip_usd": price, "total_usd": total_usd, "total_brl": round(usd_to_brl(total_usd), 2),
-            "price_real": real, "storyboard": prompts, "scene_descs": descs, "character": char_lock}
+            "price_real": real, "is_credits": is_credits, "credits_per_clip": kie_credits_per_clip,
+            "total_credits": kie_credits, "credits_learned": bool(get_setting("kie.credits." + _vm[len("kie:"):]) if is_credits else False),
+            "storyboard": prompts, "scene_descs": descs, "character": char_lock}
 
 
 @router.post("/video-styles")

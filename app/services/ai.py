@@ -843,6 +843,179 @@ def cometapi_video_models() -> List[Dict[str, Any]]:
     return out
 
 
+# ===================== VÍDEO via kie.ai (DIRETO, async createTask/recordInfo) =====================
+# Pago em CRÉDITOS (1 crédito ≈ $0,005). id da nossa UI = "kie:" + model_id real do market da kie.
+# Custo real vem do recordInfo.creditsConsumed (aprendido por modelo em setting 'kie.credits.<model>').
+_KIE_BASE = "https://api.kie.ai/api/v1"
+
+# (model_id real no market da kie, nome amigável, tier top|medium|fast, max_segundos)
+CURATED_VIDEO_KIE = [
+    # ---- TOP (melhor qualidade) ----
+    ("sora2/sora-2-pro-text-to-video",      "Sora 2 Pro",          "top",    12),
+    ("sora2/sora-2-text-to-video",          "Sora 2",              "top",    12),
+    ("kling/v3-turbo-text-to-video",        "Kling 3 Turbo",       "top",    10),
+    ("kling/v25-turbo-text-to-video-pro",   "Kling 2.5 Turbo Pro", "top",    10),
+    ("kling/v2-1-master-text-to-video",     "Kling 2.1 Master",    "top",    10),
+    ("bytedance/seedance-1-5-pro",          "Seedance 1.5 Pro",    "top",    10),
+    ("hailuo/02-text-to-video-pro",         "Hailuo 02 Pro",       "top",    10),
+    # ---- MEDIUM (equilíbrio) ----
+    ("bytedance/v1-pro-text-to-video",      "Seedance V1 Pro",     "medium", 10),
+    ("bytedance/seedance-2",                "Seedance 2",          "medium", 10),
+    ("bytedance/seedance-2-fast",           "Seedance 2 Fast",     "medium", 10),
+    ("wan/2-7-text-to-video",               "Wan 2.7",             "medium", 8),
+    ("wan/2-6-text-to-video",               "Wan 2.6",             "medium", 8),
+    ("wan/2-5-text-to-video",               "Wan 2.5",             "medium", 8),
+    ("kling/text-to-video",                 "Kling",               "medium", 10),
+    ("hailuo/02-text-to-video-standard",    "Hailuo 02 Standard",  "medium", 10),
+    # ---- FAST (barato/rápido) ----
+    ("grok-imagine/text-to-video",          "Grok Imagine",        "fast",   6),
+    ("bytedance/v1-lite-text-to-video",     "Seedance V1 Lite",    "fast",   10),
+    ("bytedance/seedance-2-mini",           "Seedance 2 Mini",     "fast",   10),
+    ("wan/2-2-a14b-text-to-video-turbo",    "Wan 2.2 Turbo",       "fast",   8),
+    ("happyhorse/text-to-video",            "HappyHorse",          "fast",   8),
+    ("happyhorse-1-1/text-to-video",        "HappyHorse 1.1",      "fast",   8),
+]
+_KIE_BY_MODEL = {m: (m, n, t, sec) for (m, n, t, sec) in CURATED_VIDEO_KIE}
+_KIE_TIER_RANK = {"top": 0, "medium": 1, "fast": 2}
+_KIE_TIER_LABEL = {"top": "TOP", "medium": "MÉDIO", "fast": "RÁPIDO"}
+
+
+def _kie_key() -> str:
+    """Chave da kie.ai (setting 'kie.api_key' / credencial / env). Vazio = kie desligado."""
+    try:
+        return (get_setting("kie.api_key") or get_credential("video", "kie")
+                or os.environ.get("KIE_API_KEY") or "").strip()
+    except Exception:
+        return (os.environ.get("KIE_API_KEY") or "").strip()
+
+
+def _kie_resolution(tier: str) -> str:
+    return "1080p" if tier == "top" else "720p"        # nunca 480p; top em 1080p
+
+
+def _kie_build_input(model: str, prompt: str, aspect: str, duration: int, resolution: str) -> Dict[str, Any]:
+    """Monta o 'input' do createTask conforme a FAMÍLIA do modelo (schemas variam na kie)."""
+    p = (prompt or "")[:4000]
+    dur = str(int(duration or 5) or 5)
+    if model.startswith("grok-imagine/"):
+        return {"prompt": p, "aspect_ratio": aspect, "mode": "normal", "duration": dur, "resolution": resolution}
+    if model.startswith("kling/"):                      # kling t2v: sem resolution; usa negative_prompt/cfg_scale
+        return {"prompt": p, "aspect_ratio": aspect, "duration": dur,
+                "negative_prompt": "blur, distort, low quality", "cfg_scale": 0.5}
+    if model.startswith("sora2/"):                      # sora-2: prompt + aspect (+ duração)
+        return {"prompt": p, "aspect_ratio": aspect, "duration": dur}
+    # bytedance/seedance, wan, hailuo, happyhorse → schema comum
+    return {"prompt": p, "aspect_ratio": aspect, "resolution": resolution, "duration": dur}
+
+
+def kie_video_models() -> List[Dict[str, Any]]:
+    """Catálogo de VÍDEO da kie.ai (text-to-video), em tiers top/medium/fast. id prefixado 'kie:'.
+    Sem chave → vazio (não quebra a UI). Custo em CRÉDITOS (aprendido por modelo; default por tier)."""
+    if not _kie_key():
+        return []
+    out = []
+    cred_default = {"top": 90, "medium": 30, "fast": 15}    # estimativa inicial; o real é aprendido por uso
+    for i, (model, name, tier, sec) in enumerate(CURATED_VIDEO_KIE):
+        try:
+            learned = get_setting("kie.credits." + model)
+        except Exception:
+            learned = None
+        credits = float(learned) if learned else float(cred_default.get(tier, 30))
+        out.append({"id": "kie:" + model, "name": f"{name} · {_KIE_TIER_LABEL[tier]}",
+                    "quality": _KIE_TIER_LABEL[tier], "tier": tier,
+                    "credits": credits, "credits_learned": bool(learned),
+                    "price_per_video": 0.0, "price_per_second": 0.0,
+                    "max_seconds": sec, "rank": _KIE_TIER_RANK[tier] * 100 + i, "price_source": "credits"})
+    return out
+
+
+def _kie_create_task(model: str, prompt: str, seconds: Any, aspect: str = "9:16", tier: str = "medium") -> str:
+    """POST kie /jobs/createTask → devolve taskId. Levanta em erro."""
+    key = _kie_key()
+    if not key:
+        raise ValueError("kie.api_key não configurada.")
+    entry = _KIE_BY_MODEL.get(model)
+    sec = _video_seconds_value(str(seconds or ""), 5)
+    if entry:
+        sec = min(sec, entry[3]); tier = entry[2]
+    body = {"model": model, "input": _kie_build_input(model, prompt, aspect, sec, _kie_resolution(tier))}
+    with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+        r = c.post(_KIE_BASE + "/jobs/createTask",
+                   headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=body)
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    if r.status_code >= 400 or (j.get("code") not in (200, None)):
+        raise ValueError(f"kie createTask falhou (HTTP {r.status_code}): {r.text[:300]}")
+    tid = (j.get("data") or {}).get("taskId") or (j.get("data") or {}).get("recordId")
+    if not tid:
+        raise ValueError(f"kie sem taskId: {r.text[:200]}")
+    return tid
+
+
+def _kie_record(task_id: str) -> Dict[str, Any]:
+    """GET kie /jobs/recordInfo?taskId= → data (state/resultJson/creditsConsumed/...)."""
+    key = _kie_key()
+    with httpx.Client(timeout=httpx.Timeout(30.0, connect=15.0)) as c:
+        r = c.get(_KIE_BASE + "/jobs/recordInfo",
+                  headers={"Authorization": "Bearer " + key}, params={"taskId": task_id})
+    try:
+        return (r.json() or {}).get("data") or {}
+    except Exception:
+        return {}
+
+
+def _kie_result_urls(data: Dict[str, Any]) -> List[str]:
+    """Extrai resultUrls do recordInfo (resultJson é uma STRING JSON)."""
+    rj = data.get("resultJson")
+    if isinstance(rj, str) and rj.strip():
+        try:
+            rj = json.loads(rj)
+        except Exception:
+            rj = {}
+    if isinstance(rj, dict):
+        u = rj.get("resultUrls") or rj.get("urls") or []
+        return [x for x in u if isinstance(x, str) and x.startswith("http")]
+    return []
+
+
+# === VÍDEO via gateway OmniRoute (assinaturas do user: GPT/Sora, Gemini/Veo, Antigravity) — custo ~$0.
+# id da nossa UI = "omni:" + id real do gateway. (sid_real, nome, qualidade, max_segundos).
+CURATED_VIDEO_OMNI = [
+    ("chatgpt-web/sora-2-pro", "Sora 2 Pro · GPT (grátis na sua conta)", "Top", 12),
+    ("cgpt-web/sora-2-pro",    "Sora 2 Pro · GPT (grátis na sua conta)", "Top", 12),
+    ("gemini-web/veo3-pro",    "Veo 3 Pro · Gemini (grátis na sua conta)", "Top", 8),
+    ("gweb/veo3-pro",          "Veo 3 Pro · Gemini (grátis na sua conta)", "Top", 8),
+    ("veo-free/veo",           "Veo · grátis", "Alta", 8),
+    ("veoaifree-web/veo",      "Veo · grátis", "Alta", 8),
+    ("veo-free/seedance",      "Seedance · grátis", "Alta", 8),
+    ("veoaifree-web/seedance", "Seedance · grátis", "Alta", 8),
+]
+
+
+def omniroute_video_models() -> List[Dict[str, Any]]:
+    """Modelos de VÍDEO do gateway OmniRoute (Sora/Veo via assinaturas do user, ~$0). id prefixado 'omni:'.
+    Só lista os que o gateway realmente expõe agora (consulta /models). Sem chave/gateway → vazio (não quebra a UI)."""
+    key = _omniroute_key()
+    if not key:
+        return []
+    try:
+        r = httpx.get(_omniroute_base() + "/models", headers={"Authorization": "Bearer " + key}, timeout=15)
+        data = r.json()
+        items = data.get("data") if isinstance(data, dict) else data
+        avail = {(m.get("id") if isinstance(m, dict) else str(m)) for m in (items or [])}
+    except Exception:
+        return []
+    out, seen = [], set()
+    for i, (sid, nm, q, sec) in enumerate(CURATED_VIDEO_OMNI):
+        if sid in avail and nm not in seen:          # dedup por nome (mantém o 1º alias disponível)
+            seen.add(nm)
+            out.append({"id": "omni:" + sid, "name": nm, "quality": q, "price_per_video": 0.0,
+                        "price_per_second": 0.0, "max_seconds": sec, "rank": i, "price_source": "free"})
+    return out
+
+
 def omniroute_image_models() -> List[Dict[str, Any]]:
     """Modelos de IMAGEM do OmniRoute (gateway das assinaturas). Grátis pela assinatura.
     id prefixado 'omni:' p/ roteamento. Vazio se a key não estiver configurada."""
@@ -1812,7 +1985,24 @@ def get_video_config() -> Optional[Dict[str, Any]]:
     model = (get_setting("video.model") or "").strip()
     provider = (get_setting("video.provider") or "").strip()
     if not provider:
-        provider = "cometapi" if model.startswith("cometapi:") else ("openrouter" if "/" in model else "openai")
+        provider = ("kie" if model.startswith("kie:")
+                    else "omniroute" if model.startswith("omni:")
+                    else "cometapi" if model.startswith("cometapi:")
+                    else ("openrouter" if "/" in model else "openai"))
+    if provider == "kie" or model.startswith("kie:"):            # kie.ai direto (async createTask) — pago em créditos
+        key = _kie_key()
+        if not key:
+            return None
+        return {"provider": "kie", "apiKey": key,
+                "model": model[len("kie:"):] if model.startswith("kie:") else model,
+                "base": _KIE_BASE}
+    if provider == "omniroute" or model.startswith("omni:"):     # gateway das assinaturas (Sora/Veo) — ~$0
+        key = _omniroute_key()
+        if not key:
+            return None
+        return {"provider": "omniroute", "apiKey": key,
+                "model": model[len("omni:"):] if model.startswith("omni:") else model,
+                "base": _omniroute_base()}
     if provider == "openrouter":
         key, base = _openrouter_key(), "https://openrouter.ai/api/v1"
     elif provider == "cometapi":
@@ -1831,6 +2021,15 @@ def video_model_max_seconds(model_id: str = "") -> int:
     """Máximo de segundos/clipe do modelo (do catálogo CURATED_VIDEO*). Default 8."""
     mid = (model_id or get_setting("video.model") or "").strip()
     raw = mid[len("cometapi:"):] if mid.startswith("cometapi:") else mid
+    if mid.startswith("kie:"):
+        e = _KIE_BY_MODEL.get(mid[len("kie:"):])
+        return e[3] if e else 8
+    if mid.startswith("omni:"):
+        oraw = mid[len("omni:"):]
+        for sid, nm, q, sec in CURATED_VIDEO_OMNI:
+            if oraw == sid:
+                return sec
+        return 8
     for s, n, q, p, sec in CURATED_VIDEO:
         if mid in (s, n):
             return sec
@@ -2431,6 +2630,83 @@ def build_video_cta(company: Dict[str, Any], theme: str, event: Optional[Dict[st
         return safe
 
 
+# OmniRoute video é SÍNCRONO (1 POST bloqueia até o vídeo ficar pronto — esse é o "delay grande" do Sora/Veo web).
+# Para encaixar no fluxo async do render: create_video_job baixa os bytes na hora e guarda aqui; download_video lê daqui.
+_OMNI_VIDEO_JOBS: Dict[str, bytes] = {}
+
+
+def _omni_extract_video_bytes(data: Any, key: str = "") -> bytes:
+    """Acha a URL (ou b64) do vídeo na resposta do gateway (formato varia: data[].url, video_url, choices[].message.content
+    com link, data URI…) e devolve os bytes do mp4. Levanta se não achar."""
+    import re, base64 as _b64
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for v in o.values():
+                yield from _walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from _walk(v)
+        elif isinstance(o, str):
+            yield o
+
+    strs = list(_walk(data))
+    # 1) b64 explícito (estilo images) ou data URI
+    try:
+        b64 = data["data"][0]["b64_json"]
+        if isinstance(b64, str) and len(b64) > 100:
+            return _b64.b64decode(b64)
+    except Exception:
+        pass
+    for s in strs:
+        if s.startswith("data:") and ";base64," in s:
+            return _b64.b64decode(s.split(";base64,", 1)[1])
+    # 2) URL de vídeo em qualquer lugar (prioriza .mp4/.webm/.mov e quem tem 'video')
+    urls = []
+    for s in strs:
+        urls += re.findall(r"https?://[^\s\"'\)\]<>]+", s)
+    def _score(u):
+        ul = u.lower()
+        return (3 if any(e in ul for e in (".mp4", ".webm", ".mov")) else 0) + (1 if "video" in ul else 0)
+    for u in sorted(set(urls), key=_score, reverse=True):
+        try:
+            host = u.split("/", 3)[2]
+            needs = ("20128" in host) or ("172.17.0.1" in host) or ("213.199" in host) or host.endswith("openai.com") or host.endswith("googleapis.com")
+            with httpx.Client(timeout=httpx.Timeout(600.0, connect=20.0)) as c:
+                rr = c.get(u, headers=({"Authorization": "Bearer " + key} if needs else {}))
+            if rr.status_code < 400 and rr.content:
+                ct = (rr.headers.get("content-type") or "").lower()
+                if "video" in ct or u.lower().endswith((".mp4", ".webm", ".mov")) or len(rr.content) > 50000:
+                    return rr.content
+        except Exception:
+            continue
+    raise ValueError("OmniRoute vídeo: resposta sem URL/b64 reconhecível: " + (json.dumps(data)[:300] if not isinstance(data, str) else data[:300]))
+
+
+def _omniroute_create_video(model: str, prompt: str, seconds: str, aspect_ratio: str = "9:16",
+                            size: str = "720x1280", first_frame_url: Optional[str] = None) -> bytes:
+    """POST síncrono no gateway /videos/generations e devolve os bytes do mp4. Timeout longo (Sora/Veo web demoram)."""
+    base, key = _omniroute_base(), _omniroute_key()
+    body: Dict[str, Any] = {"model": model, "prompt": (prompt or "")[:4000]}
+    body["seconds"] = _video_seconds_value(seconds, 8)
+    if aspect_ratio:
+        body["aspect_ratio"] = aspect_ratio
+    if size:
+        body["size"] = size
+    if first_frame_url:
+        body["image"] = first_frame_url            # continuidade best-effort (gateway pode ignorar)
+    with httpx.Client(timeout=httpx.Timeout(600.0, connect=20.0)) as c:
+        r = c.post(base + "/videos/generations",
+                   headers={"Authorization": "Bearer " + key, "content-type": "application/json"}, json=body)
+    if r.status_code >= 400:
+        raise ValueError(f"Falha OmniRoute vídeo (HTTP {r.status_code}): {r.text[:300]}")
+    try:
+        data = r.json()
+    except Exception:
+        data = r.text
+    return _omni_extract_video_bytes(data, key)
+
+
 def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
                      first_frame_url: Optional[str] = None, model: Optional[str] = None,
                      aspect_ratio: str = "9:16") -> Dict[str, Any]:
@@ -2442,6 +2718,17 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
         raise ValueError("Geração de vídeo não configurada — escolha o modelo de vídeo no painel.")
     prov = config["provider"]
     mdl = model or config["model"]
+    if prov == "kie":
+        # ASSÍNCRONO de verdade: cria a task e devolve o taskId; o render faz o polling (get_video_job).
+        tid = _kie_create_task(mdl, prompt, seconds, aspect_ratio or "9:16")
+        return {"id": tid, "status": "queued", "provider": "kie"}
+    if prov == "omniroute":
+        # SÍNCRONO: gera e baixa agora (bloqueia minutos), guarda os bytes e devolve job já "completed".
+        import uuid as _uuid
+        data = _omniroute_create_video(mdl, prompt, seconds, aspect_ratio, size, first_frame_url)
+        jid = "omni_" + _uuid.uuid4().hex
+        _OMNI_VIDEO_JOBS[jid] = data
+        return {"id": jid, "status": "completed", "provider": "omniroute"}
     if prov == "openrouter":
         # OpenRouter POST /api/v1/videos: duration inteiro + frame_images tipado.
         # generate_audio=True: o modelo gera o som diegético (ambiente/SFX/fala), conforme a instrução do briefing.
@@ -2495,6 +2782,23 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
 
 def get_video_job(job_id: str, config_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     config = config_override or get_video_config()
+    if config and config.get("provider") == "kie":
+        d = _kie_record(job_id)
+        st = (d.get("state") or "").lower()
+        status = {"success": "completed", "fail": "failed"}.get(st, "processing")
+        cc = d.get("creditsConsumed")
+        if status == "completed" and cc:                    # aprende o custo REAL em créditos por modelo
+            try:
+                from ..db import settings_set as _ss
+                from datetime import datetime, timezone
+                _ss(key="kie.credits." + (config.get("model") or ""), value=str(float(cc)),
+                    updated_at=datetime.now(timezone.utc).isoformat())
+            except Exception:
+                pass
+        return {"id": job_id, "status": status, "state": st, "progress": d.get("progress"),
+                "creditsConsumed": cc, "failMsg": d.get("failMsg"), "_result_urls": _kie_result_urls(d)}
+    if (config and config.get("provider") == "omniroute") or (job_id or "").startswith("omni_"):
+        return {"id": job_id, "status": "completed" if job_id in _OMNI_VIDEO_JOBS else "failed"}
     base = config["base"] if config else "https://api.openai.com/v1"
     key = config["apiKey"] if config else ""
     with httpx.Client(timeout=60) as client:
@@ -2538,6 +2842,20 @@ def download_video(job_id: str, config_override: Optional[Dict[str, Any]] = None
         raise ValueError("Geração de vídeo não configurada.")
     prov, base = config["provider"], config["base"]
     H = {"Authorization": f"Bearer {config['apiKey']}"}
+    if prov == "kie":
+        urls = _kie_result_urls(_kie_record(job_id))
+        if not urls:
+            raise ValueError("kie: vídeo sem resultUrls (job não concluído).")
+        with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+            res = client.get(urls[0])
+        if res.status_code >= 400 or not res.content:
+            raise ValueError(f"kie: falha ao baixar vídeo (HTTP {res.status_code})")
+        return res.content
+    if prov == "omniroute" or (job_id or "").startswith("omni_"):
+        data = _OMNI_VIDEO_JOBS.pop(job_id, None)
+        if not data:
+            raise ValueError("OmniRoute vídeo: bytes não encontrados (job expirado ou falhou).")
+        return data
     if prov == "openai":
         with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
             res = client.get(f"{base}/videos/{job_id}/content", headers=H)
