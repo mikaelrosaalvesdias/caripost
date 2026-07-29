@@ -17,6 +17,7 @@ const APPS = {
   thumbnail:  { title: 'Thumbnail',       icon: 'thumbnail',  C: 'ThumbnailApp',  w: 1020, h: 710, grp: 'edit' },
   // Operação e Distribuição
   conteudo:   { title: 'Conteúdo',        icon: 'sparkles',   C: 'ConteudoApp',   w: 1140, h: 800, grp: 'op' },
+  video:      { title: 'Vídeo',           icon: 'video',      C: 'VideoApp',      w: 1080, h: 800, grp: 'op' },
   criacao:    { title: 'Criação',         icon: 'post',       C: 'CriacaoApp',    w: 1060, h: 730, grp: 'op' },
   publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'PublisherApp',  w: 980,  h: 690, grp: 'op' },
   calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'CalendarApp',   w: 1100, h: 740, grp: 'op' },
@@ -32,13 +33,31 @@ const APPS = {
   settings:    { title: 'Settings',        icon: 'settings',   C: 'SettingsApp',   w: 840,  h: 660, grp: 'ges' },
   wizard:     { title: 'Assistente',      icon: 'flow',       C: 'WizardApp',     w: 960,  h: 720, grp: null },
 };
+// TENANCY: usuário de CLIENTE (company_id no token) vê só os apps de operação da própria empresa.
+const CLIENT_APPS = ['conteudo', 'video', 'criacao', 'publisher', 'calendar', 'clientes', 'acervo', 'aprovacao', 'notificacoes', 'wizard'];
+function isClientUser(u) {
+  u = u || window.__mpUser;
+  return !!(u && (u.role === 'owner' || u.role === 'agency'));   // cliente final OU agência compradora
+}
+function appVisible(id, u) {
+  return true;   // cliente vê TODOS os apps — os não liberados ficam apagadinhos (upsell)
+}
+function appLocked(id, u) {
+  u = u || window.__mpUser;
+  if (!isClientUser(u)) return false;
+  const f = (u && u.features) || {};
+  if (f[id] === true) return false;    // admin liberou explicitamente
+  if (f[id] === false) return true;    // admin bloqueou explicitamente
+  return !CLIENT_APPS.includes(id);    // sem definição: default do plano (apps de cliente liberados)
+}
+const LOCK_MSG = 'Função não liberada no seu plano. Chame o seu consultor de vendas.';
 const GROUPS = [
   ['int', 'Inteligência e Mídia'],
   ['edit', 'Edição & Conteúdo'],
   ['op', 'Operação e Distribuição'],
   ['ges', 'Gestão de Agência'],
 ];
-const PINNED = ['conteudo', 'clientes', 'criacao', 'publisher', 'notificacoes'];
+const PINNED = ['conteudo', 'video', 'clientes', 'criacao', 'publisher', 'notificacoes'];
 
 const TOURS = {
   autoeditor: [
@@ -53,6 +72,14 @@ const TOURS = {
 
 function App() {
   const [booting, setBooting] = React.useState(true);
+  const [mpUser, setMpUser] = React.useState(window.__mpUser || null);
+  const [lockMsg, setLockMsg] = React.useState(false);
+  React.useEffect(() => {
+    const upd = () => setMpUser(window.__mpUser || null);
+    window.addEventListener('mp-user', upd);
+    const t = setInterval(() => { if (window.__mpUser) { upd(); clearInterval(t); } }, 400);
+    return () => { window.removeEventListener('mp-user', upd); clearInterval(t); };
+  }, []);
   const [bootPct, setBootPct] = React.useState(0);
   const [bootMsg, setBootMsg] = React.useState('Iniciando Caripost OS…');
   const [wins, setWins] = React.useState([]);
@@ -91,7 +118,7 @@ function App() {
 
   function open(appId) {
     setStart(false);
-    if (appId === 'auto') { setAuto(true); return; }
+    if (appId === 'auto') { if (appLocked('auto', mpUser)) { setLockMsg(true); return; } setAuto(true); return; }
     const existing = wins.find(w => w.appId === appId);
     if (existing) {
       // Re-monta o app para ele reler o contexto (mpCtx.file)
@@ -101,6 +128,7 @@ function App() {
     }
     const a = APPS[appId];
     if (!a) return;
+    if (appLocked(appId, mpUser)) { setLockMsg(true); return; }
     const vw = window.innerWidth, vh = window.innerHeight;
     const w = Math.min(a.w, vw - 40), h = Math.min(a.h, vh - 110);
     const offset = wins.length * 28 % 120;
@@ -146,10 +174,18 @@ function App() {
       {GROUPS.map(([g, label]) => <div className="desk-col" key={g}>
         <div className="desk-col-label">{label}</div>
         <div className="desk-col-grid">
-          {Object.keys(APPS).filter(id => APPS[id].grp === g && id !== 'autoeditor').map(id =>
-            <div key={id} className="dicon" onClick={() => open(id)}><div className="ig"><Icon name={APPS[id].icon} /></div><span>{APPS[id].title}</span></div>)}
+          {Object.keys(APPS).filter(id => APPS[id].grp === g && id !== 'autoeditor' && appVisible(id, mpUser)).map(id =>
+            <div key={id} className="dicon" onClick={() => open(id)} style={appLocked(id, mpUser) ? { opacity: 0.35, filter: 'grayscale(1)' } : undefined}><div className="ig"><Icon name={APPS[id].icon} /></div><span>{APPS[id].title}{appLocked(id, mpUser) ? ' 🔒' : ''}</span></div>)}
         </div>
       </div>)}
+      {lockMsg && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 9999, display: 'grid', placeItems: 'center' }} onClick={() => setLockMsg(false)}>
+        <div style={{ background: 'var(--panel, #17171f)', border: '1px solid var(--line, #333)', borderRadius: 16, padding: '28px 32px', maxWidth: 420, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+          <div style={{ fontSize: 34, marginBottom: 10 }}>🔒</div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Função não liberada no seu plano</div>
+          <div style={{ opacity: .8, fontSize: 13, marginBottom: 18 }}>Chame o seu consultor de vendas para liberar esta função.</div>
+          <button className="btn pri" onClick={() => setLockMsg(false)}>Entendi</button>
+        </div>
+      </div>}
     </div>
 
     {/* windows */}
@@ -199,7 +235,7 @@ function Boot({ pct, msg, onSkip }) {
     <div className="boot-logo">Cari<em>post</em><span style={{ fontSize: 20, color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>OS</span></div>
     <div className="boot-bar"><i style={{ width: pct + '%' }} /></div>
     <div className="boot-status">{msg} {pct < 100 && pct + '%'}</div>
-    <div className="boot-ver">v1.27.13 · vídeo com duração travada</div>
+    <div className="boot-ver">v1.27.103 · Kie entrega e vídeo respeita o modelo escolhido</div>
   </div>;
 }
 

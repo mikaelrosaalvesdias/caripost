@@ -3,7 +3,13 @@
    Reaproveita os endpoints existentes (social/companies/posts). */
 
 // Modelos de imagem agrupados por PROVEDOR (OmniRoute/CometAPI/PiAPI/OpenRouter) — seletor provedor+modelo.
-const IMG_PROV_LABELS = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
+function isClientUser() { const u = window.__mpUser; return !!(u && (u.role === 'owner' || u.role === 'agency')); }
+function clientMaxVer() { const u = window.__mpUser; const f = (u && u.features) || {}; return Math.max(1, Math.min(4, parseInt(f.versoes_max) || 2)); }
+const IMG_PROV_LABELS = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter', kie: 'kie.ai (créditos)' };
+function addRunPosts(cid, ids) {   // registra os posts criados NESTE run/projeto (a Aprovação mostra só eles)
+  const cur = (ContState.get(cid).runPostIds) || [];
+  ContState.set(cid, { runPostIds: Array.from(new Set([...cur, ...(ids || []).filter(Boolean)])) });
+}
 function imgGroups(list) {
   const g = {}; (list || []).forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); });
   return Object.keys(g).map(p => ({ provider: p, label: IMG_PROV_LABELS[p] || p, models: g[p] }));
@@ -15,7 +21,7 @@ function imgPriceKind(m) {
   if (m.price_source) return ' · estimado';
   return '';
 }
-function imgOptLabel(m) { return m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : (m.free ? ' · grátis' : '')); }
+function imgOptLabel(m) { return m.name + (m.credits ? ' · ' + m.credits + ' cr/img' + (m.credits_learned ? '' : '~') : (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : (m.free ? ' · grátis' : ''))); }
 
 function _videoNum(v) {
   const n = Number(v);
@@ -88,7 +94,9 @@ function VideoCreator({ company }) {
   React.useEffect(() => {
     if (!model || !theme) return;
     setPlanning(true);
-    window.mpApi.videoPreflight(company.id, theme, dur, style).then(p => { setPf(p); setScenes((p && p.scene_descs) || []); }).catch(() => {}).finally(() => setPlanning(false));
+    // REUSA o roteiro do BRIEFING (determinístico, sem re-gerar e sem custo). "↻ Regerar roteiro" (nonce>0) força nova geração.
+    const _seed = (nonce === 0) ? ((ContState.get(company.id) || {}).videoStoryboard || []) : [];
+    window.mpApi.videoPreflight(company.id, theme, dur, style, _seed, [], model).then(p => { setPf(p); setScenes((p && p.scene_descs) || []); }).catch(() => {}).finally(() => setPlanning(false));
   }, [model, dur, nonce, style]);   // custo AUTOMÁTICO · nonce = ↻ regerar roteiro · style = estilo viral
   async function selectModel(id) { setModel(id); setPf(null); try { await window.mpApi.setAiModel({ video_model: id }); } catch (e) {} }
   function setDuration(d) { setDur(d); ContState.set(company.id, { videoSeconds: d }); }
@@ -115,6 +123,7 @@ function VideoCreator({ company }) {
       const sceneSeconds = pf.seconds_per_scene || ((pf.scene_seconds || [])[0]) || 8;
       const r = await window.mpApi.generateBrandedVideo({
         company_id: company.id,
+        model,
         theme,
         storyboard: pf.storyboard,
         scene_descs: scenes,              // roteiro (possivelmente editado) por cena
@@ -159,13 +168,13 @@ function VideoCreator({ company }) {
         {DURS.map(([v, t]) => <button key={v} className={'btn sm' + (dur === v ? ' pri' : ' ghost')} onClick={() => setDuration(v)}>{t}</button>)}
       </div>
     </Field>
-    <Field label="Modelo de VÍDEO (OpenRouter / CometAPI)">
+    {!isClientUser() && <Field label="Modelo de VÍDEO (OpenRouter / CometAPI)">
       <select className="inp" value={model} onChange={e => selectModel(e.target.value)}>
         {vgroups.length ? vgroups.map(g => <optgroup key={g.provider} label={g.label}>
           {g.models.map(m => <option key={m.id} value={m.id}>{vlabel(m)}</option>)}
         </optgroup>) : <option value="">Configure CometAPI/OpenRouter no painel de IA</option>}
       </select>
-    </Field>
+    </Field>}
     {styleList.length > 0 && <Field label="Estilo do vídeo (vira a linguagem das cenas)">
       <select className="inp" value={style} onChange={e => setStyleSel(e.target.value)}>
         {styleList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -191,6 +200,307 @@ function VideoCreator({ company }) {
     {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
     <button className="btn pri" disabled={busy || !pf || !pf.configured} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.total_brl ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
     {proc.open && <ProcessModal open={proc.open} title="Gerando vídeo" detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
+  </div>;
+}
+
+/* ══════════════ APP VÍDEO — hub findável das 3 funções: Criar / Animar / Editar bruto ══════════════ */
+function VideoCriarStandalone({ company }) {
+  const [theme, setTheme] = React.useState(((ContState.get(company.id) || {}).assunto || '').trim());
+  const [go, setGo] = React.useState(false);
+  function start() { const t = theme.trim(); if (!t) return; ContState.set(company.id, { assunto: t, formato: 'video' }); setGo(true); }
+  if (go) return <div className="stack">
+    <button className="btn sm ghost" onClick={() => setGo(false)}>← Trocar assunto</button>
+    <VideoCreator key={company.id + ':' + theme} company={company} />
+  </div>;
+  return <div className="panel stack">
+    <div className="sec"><Icon name="video" />Criar vídeo do zero</div>
+    <div className="hint">Escreva o assunto. A IA monta o roteiro em cenas, você trava a duração e vê o custo ANTES de gerar. Sai um vídeo 9:16 com áudio, logo e CTA da marca.</div>
+    <Field label="Assunto do vídeo">
+      <textarea className="inp" rows={3} value={theme} onChange={e => setTheme(e.target.value)}
+        placeholder="Ex.: Plano gamer 500 Mega com baixa latência pra jogar sem lag" />
+    </Field>
+    <button className="btn pri" disabled={!theme.trim()} onClick={start}>Montar roteiro →</button>
+  </div>;
+}
+
+function VideoAnimar({ company }) {
+  const [arts, setArts] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [sel, setSel] = React.useState('');
+  const [motion, setMotion] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [out, setOut] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  React.useEffect(() => {
+    setLoading(true); setSel(''); setOut('');
+    window.mpApi.listPosts().then(r => {
+      const list = (r.posts || []).filter(p => p.company_id === company.id && p.media_url)
+        .map(p => ({ id: p.id, url: p.media_url, title: p.title || 'Peça', status: p.status }));
+      setArts(list); setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [company.id]);
+  async function animar() {
+    if (!sel) { setMsg('Escolha uma arte do portfólio.'); return; }
+    setBusy(true); setMsg('Animando… (pode levar ~1–2 min)'); setOut('');
+    try {
+      const r = await window.mpApi.animateArt(company.id, sel, motion.trim() || undefined);
+      if (r && r.url) { setOut(r.url); setMsg('Pronto!'); } else setMsg('Falhou: ' + ((r && (r.detail || r.error)) || 'sem retorno'));
+    } catch (err) { setMsg('Erro: ' + (err.message || err)); }
+    finally { setBusy(false); }
+  }
+  return <div className="panel stack">
+    <div className="sec"><Icon name="video" />Animar uma arte do portfólio</div>
+    <div className="hint">Clique numa arte JÁ criada desta empresa e transforme num clipe curto com movimento (paga em créditos kie). Nada de subir imagem — é o portfólio dela.</div>
+    <Field label="Movimento (opcional)"><input className="inp" value={motion} onChange={e => setMotion(e.target.value)} placeholder="Ex.: leve zoom in, partículas, brilho pulsando" /></Field>
+    {loading ? <div className="hint">Carregando portfólio de {company.name}…</div>
+      : arts.length === 0 ? <div className="hint">Nenhuma arte gerada ainda para <b>{company.name}</b>. Gere na aba <b>Criar vídeo</b> ou no app <b>Conteúdo</b> primeiro.</div>
+      : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(108px,1fr))', gap: 8 }}>
+          {arts.map(a => <div key={a.id} title={a.title} onClick={() => setSel(a.url)}
+            style={{ cursor: 'pointer', border: '2px solid ' + (sel === a.url ? 'var(--pri)' : 'transparent'), borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
+            <img loading="lazy" decoding="async" src={a.url} style={{ width: '100%', height: 120, objectFit: 'cover', display: 'block' }} />
+            {sel === a.url && <div style={{ position: 'absolute', top: 4, right: 4, background: 'var(--pri)', color: '#fff', borderRadius: 999, width: 20, height: 20, fontSize: 13, textAlign: 'center', lineHeight: '20px' }}>✓</div>}
+          </div>)}
+        </div>}
+    {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
+    <button className="btn pri" disabled={busy || !sel} onClick={animar}>{busy ? 'Animando…' : (sel ? 'Animar arte selecionada' : 'Escolha uma arte acima')}</button>
+    {out && <video src={out} controls style={{ width: '100%', maxWidth: 300, borderRadius: 12 }} />}
+  </div>;
+}
+
+function VideoEditarBruto({ company }) {
+  return <div className="panel stack">
+    <div className="sec"><Icon name="video" />Editar um vídeo bruto</div>
+    <div className="hint">Sobe um vídeo seu (gravado no celular, sem edição) e a plataforma aplica a identidade da marca: cortes, transições, logo, legendas e CTA. <b>Em construção</b> — é a próxima função de vídeo do roadmap.</div>
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+      <button className="btn ghost" onClick={() => window.__mpOpen && window.__mpOpen('enhancer')}><Icon name="enhance" />Melhorar vídeo (upscale) — disponível agora</button>
+    </div>
+    <small className="hint">Enquanto a edição com marca não fica pronta, o <b>Video Enhancer</b> já melhora a qualidade/resolução de vídeos antigos ou de baixa resolução.</small>
+  </div>;
+}
+
+function VideoApp() {
+  const [companies, setCompanies] = React.useState([]);
+  const [companyId, setCompanyId] = React.useState('');
+  const [company, setCompany] = React.useState(null);
+  const [tab, setTab] = React.useState('criar');
+  React.useEffect(() => { window.mpApi.listCompanies().then(r => setCompanies(r || [])).catch(() => {}); }, []);
+  function pick(id) { setCompanyId(id); setCompany((companies || []).find(x => x.id === id) || null); }
+  const TABS = [['criar', '🎬 Criar vídeo'], ['animar', '🎞️ Animar imagem'], ['editar', '✂️ Editar vídeo bruto']];
+  return <div className="app">
+    <div className="app-head">
+      <div className="tb-ic" style={{ width: 40, height: 40, borderRadius: 12 }}><Icon name="video" style={{ width: 20, height: 20 }} /></div>
+      <div className="lead">
+        <div className="app-title">Vídeo</div>
+        <div className="app-desc">Três jeitos de fazer vídeo com a marca: criar do zero, animar uma arte ou editar um vídeo seu.</div>
+      </div>
+      {company && <Pill kind="cy" dot>{company.name}</Pill>}
+    </div>
+    <div className="panel stack">
+      <Field label="Empresa">
+        <select className="inp" value={companyId} onChange={e => pick(e.target.value)}>
+          <option value="">— escolha a empresa —</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </Field>
+    </div>
+    {!company ? <div className="panel stack"><div className="hint">Escolha a empresa acima para começar.</div></div> : <div className="stack">
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {TABS.map(([k, t]) => <button key={k} className={'btn sm' + (tab === k ? ' pri' : ' ghost')} onClick={() => setTab(k)}>{t}</button>)}
+      </div>
+      {tab === 'criar' && <VideoCriarStandalone key={company.id} company={company} />}
+      {tab === 'animar' && <VideoAnimar key={company.id} company={company} />}
+      {tab === 'editar' && <VideoEditarBruto company={company} />}
+    </div>}
+  </div>;
+}
+
+function TemplateVideoCreator({ company, onUseGenerative }) {
+  const st = ContState.get(company.id);
+  const baseSubject = (st.assuntoTema || st.assunto || (st.briefing || '').split('\n').find(Boolean) || '').trim();
+  const [templates, setTemplates] = React.useState([]);
+  const [templateId, setTemplateId] = React.useState('brand_pulse_15s');
+  const [format, setFormat] = React.useState(st.videoTemplateFormat || 'story');
+  const [duration, setDuration] = React.useState(st.videoTemplateDuration || st.videoSeconds || 12);
+  const [subject, setSubject] = React.useState(baseSubject || 'Oferta da marca');
+  const [eyebrow, setEyebrow] = React.useState(company.name || '');
+  const [title, setTitle] = React.useState(baseSubject || '');
+  const [subtitle, setSubtitle] = React.useState('');
+  const [cta, setCta] = React.useState(st.cta || 'Fale com a gente');
+  const [offer, setOffer] = React.useState('');
+  const [quote, setQuote] = React.useState('');
+  const [stat, setStat] = React.useState('');
+  const [leftLabel, setLeftLabel] = React.useState('ANTES');
+  const [leftText, setLeftText] = React.useState('');
+  const [rightLabel, setRightLabel] = React.useState(company.name || 'MARCA');
+  const [rightText, setRightText] = React.useState('');
+  const [punchline, setPunchline] = React.useState('');
+  const [benefits, setBenefits] = React.useState('');
+  const [scenes, setScenes] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  const [result, setResult] = React.useState(st.templateVideoResult || null);
+  const [proc, setProc] = React.useState({ open: false });
+
+  React.useEffect(() => {
+    window.mpApi.templateVideoTemplates().then(r => {
+      const list = r.templates || [];
+      setTemplates(list);
+      setTemplateId(id => id || (list[0] && list[0].id) || 'brand_pulse_15s');
+    }).catch(() => {});
+  }, []);
+
+  function persist(patch) {
+    ContState.set(company.id, { videoTemplateFormat: format, videoTemplateDuration: duration, templateVideoResult: result, ...patch });
+  }
+
+  function applySuggestion(s) {
+    if (!s) return;
+    if (s.template_id) setTemplateId(s.template_id);
+    if (s.eyebrow) setEyebrow(s.eyebrow);
+    if (s.title) setTitle(s.title);
+    if (s.subtitle) setSubtitle(s.subtitle);
+    if (s.cta) setCta(s.cta);
+    if (s.offer) setOffer(s.offer);
+    if (s.quote) setQuote(s.quote);
+    if (s.stat) setStat(s.stat);
+    if (Array.isArray(s.benefits)) setBenefits(s.benefits.join('\n'));
+    if (Array.isArray(s.scenes)) setScenes(s.scenes.join('\n'));
+    if (s.left_label) setLeftLabel(s.left_label);
+    if (s.left_text) setLeftText(s.left_text);
+    if (s.right_label) setRightLabel(s.right_label);
+    if (s.right_text) setRightText(s.right_text);
+    if (s.punchline) setPunchline(s.punchline);
+    if (s.duration_sec) { setDuration(Number(s.duration_sec) || duration); persist({ videoTemplateDuration: Number(s.duration_sec) || duration }); }
+  }
+
+  async function sugerir() {
+    if (!subject.trim()) { setMsg('Escreva o assunto primeiro.'); return; }
+    setBusy(true); setMsg('IA criando uma direcao de video controlada pela marca…');
+    try {
+      const r = await window.mpApi.suggestTemplateVideo({
+        company_id: company.id, subject, template_id: templateId, format,
+        objective: st.objetivo || 'engajar', cta: cta || st.cta || ''
+      });
+      applySuggestion(r.suggestion);
+      setMsg((r.source === 'ai_text' ? 'Sugestao criativa pronta.' : 'Sugestao base pronta.') + (r.warning ? ' Aviso: ' + r.warning : ''));
+    } catch (e) { setMsg('Erro: ' + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  function payload() {
+    return {
+      company_id: company.id,
+      template_id: templateId,
+      format,
+      duration_sec: Number(duration) || 12,
+      eyebrow,
+      title: title || subject,
+      subtitle,
+      cta,
+      offer,
+      quote,
+      stat,
+      benefits: benefits.split('\n').map(s => s.trim()).filter(Boolean),
+      scenes: scenes.split('\n').map(s => s.trim()).filter(Boolean),
+      left_label: leftLabel,
+      left_text: leftText,
+      right_label: rightLabel,
+      right_text: rightText,
+      punchline: punchline || title || subject,
+    };
+  }
+
+  async function renderizar() {
+    if (!(title || subject).trim()) { setMsg('Titulo/assunto obrigatorio.'); return; }
+    setBusy(true); setResult(null); setMsg('');
+    setProc({ open: true, pct: 8, detail: 'Montando video por template, sem token de imagem/video…', phase: '' });
+    try {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const pct = Math.min(94, 8 + ((Date.now() - started) / 14000) * 86);
+        setProc(p => p.open && !p.phase ? { ...p, pct } : p);
+      }, 500);
+      const r = await window.mpApi.renderTemplateVideo(payload());
+      clearInterval(timer);
+      setResult(r); persist({ templateVideoResult: r });
+      setProc({ open: true, pct: 100, phase: 'done', detail: 'Video pronto. Render com token zero.' });
+      setMsg('Video pronto: ' + r.artifact_type.toUpperCase() + ' · token_cost=' + r.token_cost);
+    } catch (e) {
+      setProc({ open: true, phase: 'error', detail: e.message || String(e) });
+      setMsg('Erro: ' + (e.message || e));
+    } finally { setBusy(false); }
+  }
+
+  async function enviarAprovacao() {
+    if (!result || !result.url) return;
+    setBusy(true); setMsg('Enviando video para aprovacao…');
+    try {
+      const post = await window.mpApi.createPost({
+        company_id: company.id,
+        title: title || subject || 'Video',
+        copy: subtitle || st.briefing || '',
+        networks: st.networks || ['instagram'],
+        media_url: result.url,
+        intent: 'review',
+        meta: {
+          content_type: 'video',
+          engine: result.engine,
+          template_id: templateId,
+          preview_url: result.preview_url,
+          manifest_url: result.manifest_url,
+          token_cost: result.token_cost,
+        },
+      });
+      if (post && post.id) { addRunPosts(company.id, [post.id]); await window.mpApi.transitionPost(post.id, 'REVIEW'); }
+      setMsg('Video enviado para Aprovação.');
+    } catch (e) { setMsg('Erro ao enviar: ' + (e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  const current = templates.find(t => t.id === templateId) || {};
+  return <div className="stack">
+    {proc.open && <ProcessModal open={proc.open} title="Video por template" detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
+    <div className="row" style={{ justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+      <div className="sec"><Icon name="video" />Video Studio Template</div>
+      <button className="btn sm ghost" onClick={onUseGenerative}>Usar video IA generativo</button>
+    </div>
+    <div className="hint">A IA ajuda na ideia e no texto. O render respeita logo, cores, layout e CTA com custo zero de token de video.</div>
+    <Field label="Template criativo">
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        {templates.map(t => <button key={t.id} className={'btn sm' + (templateId === t.id ? ' pri' : ' ghost')} onClick={() => setTemplateId(t.id)} title={t.description}>{t.name}</button>)}
+      </div>
+      {current.description && <small className="hint">{current.description}</small>}
+    </Field>
+    <div className="grid2">
+      <Field label="Assunto para a IA"><input className="inp" value={subject} onChange={e => setSubject(e.target.value)} placeholder="Ex.: jogar online sem lag" /></Field>
+      <Field label="Formato / duração"><div className="row" style={{ gap: 6 }}>
+        <select className="inp" value={format} onChange={e => { setFormat(e.target.value); persist({ videoTemplateFormat: e.target.value }); }}><option value="story">Story 9:16</option><option value="feed">Feed 4:5</option></select>
+        <select className="inp" value={duration} onChange={e => { setDuration(Number(e.target.value)); persist({ videoTemplateDuration: Number(e.target.value) }); }}><option value="8">8s</option><option value="10">10s</option><option value="12">12s</option><option value="15">15s</option><option value="20">20s</option></select>
+      </div></Field>
+    </div>
+    <button className="btn pri" disabled={busy} onClick={sugerir}>{busy ? 'Processando…' : 'IA sugerir roteiro controlado'}</button>
+    <div className="grid2">
+      <Field label="Selo / editoria"><input className="inp" value={eyebrow} onChange={e => setEyebrow(e.target.value)} /></Field>
+      <Field label="CTA"><input className="inp" value={cta} onChange={e => setCta(e.target.value)} /></Field>
+    </div>
+    <Field label="Titulo"><input className="inp" value={title} onChange={e => setTitle(e.target.value)} /></Field>
+    <Field label="Subtitulo"><textarea className="inp" rows={2} value={subtitle} onChange={e => setSubtitle(e.target.value)} /></Field>
+    {templateId === 'offer_snap_10s' && <Field label="Oferta / beneficio destaque"><input className="inp" value={offer} onChange={e => setOffer(e.target.value)} placeholder="Ex.: planos com streaming incluso" /></Field>}
+    {templateId === 'proof_wave_12s' && <div className="grid2"><Field label="Frase de prova"><textarea className="inp" rows={2} value={quote} onChange={e => setQuote(e.target.value)} /></Field><Field label="Selo / métrica"><input className="inp" value={stat} onChange={e => setStat(e.target.value)} placeholder="Ex.: mais estabilidade" /></Field></div>}
+    {templateId === 'meme_vs_10s' && <div className="grid2"><Field label="Lado A"><input className="inp" value={leftLabel} onChange={e => setLeftLabel(e.target.value)} /><textarea className="inp" rows={2} value={leftText} onChange={e => setLeftText(e.target.value)} /></Field><Field label="Lado B"><input className="inp" value={rightLabel} onChange={e => setRightLabel(e.target.value)} /><textarea className="inp" rows={2} value={rightText} onChange={e => setRightText(e.target.value)} /></Field><Field label="Punchline"><input className="inp" value={punchline} onChange={e => setPunchline(e.target.value)} /></Field></div>}
+    {templateId === 'benefit_stack_12s' && <Field label="Beneficios (1 por linha)"><textarea className="inp" rows={4} value={benefits} onChange={e => setBenefits(e.target.value)} /></Field>}
+    {templateId === 'cinematic_story_15s' && <Field label="Cenas (1 por linha)"><textarea className="inp" rows={4} value={scenes} onChange={e => setScenes(e.target.value)} /></Field>}
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+      <button className="btn pri" disabled={busy} onClick={renderizar}>Renderizar MP4 token zero</button>
+      <button className="btn" disabled={!result || busy} onClick={() => result && window.open(result.url, '_blank')}>Abrir video</button>
+      <button className="btn" disabled={!result || busy} onClick={enviarAprovacao}>Enviar para Aprovação</button>
+    </div>
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    {result && <div className="panel stack">
+      <div className="sec mut">{result.artifact_type.toUpperCase()} · {result.width}×{result.height} · {result.duration_sec}s · token_cost={result.token_cost}</div>
+      {result.url && result.artifact_type === 'mp4' ? <video src={result.url} controls style={{ width: '100%', maxWidth: 360, borderRadius: 10 }} /> : result.preview_url ? <img src={result.preview_url} style={{ width: '100%', maxWidth: 260, borderRadius: 10 }} /> : null}
+      <small className="hint">{location.origin + result.url}</small>
+    </div>}
   </div>;
 }
 
@@ -279,7 +589,7 @@ function StepCliente({ companyId, onPick, onContinue }) {
     if (ex) { continuar(ex.id); return; }
     ContState.novo(companyId);
     ContState.set(companyId, {
-      carouselResults: [{ model: m.model || 'editorial', slides: (urls || []).map(u => ({ url: u })), cost: 0, post_id: p.id }],
+      carouselResults: [{ model: m.model || 'Estúdio IA', slides: (urls || []).map(u => ({ url: u })), cost: 0, post_id: p.id }],
       telas: [], assunto: p.title || '', assuntoTema: p.title || '', briefing: '',
       formato: m.content_type === 'carousel' ? 'carrossel' : (m.content_type || 'post'), copy: p.copy, hashtags: p.hashtags,
     });
@@ -437,7 +747,7 @@ function StepBriefing({ company }) {
         } else if (isSingle) {
           tl = [tl[0]];   // 1 arte só
         }
-        setBriefing(text); persist({ briefing: text, telas: tl, formato, assuntoTema: seed });
+        setBriefing(text); persist({ briefing: text, telas: tl, formato, assuntoTema: seed, videoStoryboard: (r && r.storyboard) || [], videoSceneSecs: (r && r.scene_seconds) || [] });
         setMsg(`Briefing (${fmtLabel}) pronto — revise e vá para Criação${formato === 'carrossel' ? ' (modo Carrossel com ' + tl.length + ' telas)' : ' (1 arte ' + (formato === 'story' ? '9:16' : '4:5') + ')'}.`);
         return;
       }
@@ -564,14 +874,17 @@ function CarrosselCreator({ company, format }) {
   const allTelas = st.telas || [];
   const telas = fmt === 'carrossel' ? allTelas : allTelas.slice(0, 1);   // post/story = 1 arte; carrossel = N telas
   const fmtName = { carrossel: 'Carrossel', post: 'Post fixo', story: 'Story (9:16)' }[fmt] || 'Carrossel';
+  const fmtGer = { carrossel: 'carrossel', post: 'post fixo', story: 'story' }[fmt] || 'arte';   // rótulo do loading/mensagens
+  const unTela = (nOrArr) => { const nn = Array.isArray(nOrArr) ? nOrArr.length : nOrArr; return nn === 1 ? 'arte' : 'telas'; };
   const [imgModels, setImgModels] = React.useState([]);
-  const [versions, setVersions] = React.useState(st.carouselVersions || [{ model: 'editorial' }]);  // modelo escolhido PERSISTIDO (não reseta no F5)
+  const [versions, setVersions] = React.useState(st.carouselVersionsV2 || [{ model: '' }]);  // '' = 🎨 Estúdio IA (padrão do motor); chave V2 mata o default 'editorial' antigo persistido
   const [results, setResults] = React.useState(st.carouselResults || []);   // [{model, slides, cost, post_id}] — persistido
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
   const [proc, setProc] = React.useState({ open: false });   // modal de loading fullscreen (igual teaser)
   const [influencers, setInfluencers] = React.useState([]);
   const [useInf, setUseInf] = React.useState(st.useInfluencer || false);   // opt-in: usar influencer na capa/CTA
+  const [useStudio, setUseStudio] = React.useState(st.useStudio || false);   // ESTÚDIO IA: arte inteira por referências (logo+manual+refs+KB)
   const [infId, setInfId] = React.useState(st.influencerId || '');
   const [viewer, setViewer] = React.useState(null);   // {vi, si}
   const [templates, setTemplates] = React.useState([]);
@@ -595,25 +908,31 @@ function CarrosselCreator({ company, format }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [viewer, results]);
 
-  React.useEffect(() => { window.mpApi.aiModels().then(r => setImgModels(r.image || [])).catch(() => {}); }, []);
+  const [modelChoice, setModelChoice] = React.useState(true);   // admin decide: usuário escolhe modelo? (image.choice.enabled)
+  const [refCur, setRefCur] = React.useState('');               // modelo FIXADO do Estúdio (mostra no rótulo da opção padrão)
+  React.useEffect(() => { window.mpApi.aiModels().then(r => { setImgModels(r.image || []); setModelChoice((r && r.choice_enabled) !== false); setRefCur((r && r.image_ref_current) || ''); }).catch(() => {}); }, []);
   React.useEffect(() => { window.mpApi.listInfluencers(company.id).then(l => setInfluencers((l || []).filter(i => (i.photos || []).length))).catch(() => {}); }, [company.id]);
-  React.useEffect(() => { ContState.set(company.id, { useInfluencer: useInf, influencerId: infId }); }, [useInf, infId]);
-  React.useEffect(() => { ContState.set(company.id, { carouselVersions: versions }); }, [versions]);  // salva a escolha do modelo
-  React.useEffect(() => {   // sem escolha salva + modelos carregados → padrão = 1º modelo de IA (gera imagem, não editorial)
-    if (!st.carouselVersions && imgModels.length && versions.length === 1 && versions[0].model === 'editorial') {
-      setVersions([{ model: imgModels[0].id }]);
+  React.useEffect(() => { ContState.set(company.id, { useInfluencer: useInf, influencerId: infId, useStudio }); }, [useInf, infId, useStudio]);
+  React.useEffect(() => { ContState.set(company.id, { carouselVersionsV2: versions }); }, [versions]);  // salva a escolha do modelo (V2)
+  React.useEffect(() => {   // SANEIA escolha morta: 'editorial' (removido) ou modelo de provedor escondido no
+    if (!modelChoice) {                                   // admin desligou a escolha → TUDO usa o modelo FIXADO
+      setVersions(vs => vs.some(v => v.model) ? vs.map(() => ({ model: '' })) : vs);
+      return;
     }
-  }, [imgModels]);
-  const MODEL_OPTS = [{ id: 'editorial', name: 'Editorial — só tipografia (grátis, instantâneo)' }, ...imgModels];
-  const PROV_LABELS = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
+    if (!imgModels.length) return;                        // admin → volta pro Estúdio (padrão). Era o "buga e fica
+    const ok = new Set(imgModels.map(m => m.id));         // naquele grátis/editorial": valor salvo fora da lista.
+    setVersions(vs => vs.map(v => (v.model && !ok.has(v.model)) ? { model: '' } : v));
+  }, [imgModels, modelChoice]);
+  const MODEL_OPTS = [{ id: '', name: '🎨 Estúdio IA — identidade do cadastro (padrão)' }, ...imgModels];
+  const PROV_LABELS = { omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter', kie: 'kie.ai (créditos)' };
   const MODEL_GROUPS = (() => {
     const g = {}; imgModels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); });
     return Object.keys(g).map(p => ({ provider: p, label: PROV_LABELS[p] || p, models: g[p] }));
   })();
-  const optLabel = (m) => m.name + (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : (m.free ? ' · grátis' : ''));
+  const optLabel = (m) => m.name + (m.credits ? ' · ' + m.credits + ' cr/img' + (m.credits_learned ? '' : '~') : (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + imgPriceKind(m) : (m.free ? ' · grátis' : '')));
 
   function setVerModel(i, m) { setVersions(vs => vs.map((v, k) => k === i ? { model: m } : v)); }
-  function addVer() { setVersions(vs => vs.length < 4 ? [...vs, { model: (imgModels[0] && imgModels[0].id) || 'editorial' }] : vs); }
+  function addVer() { setVersions(vs => vs.length < 4 ? [...vs, { model: '' }] : vs); }
   function delVer(i) { setVersions(vs => vs.length > 1 ? vs.filter((_, k) => k !== i) : vs); }
   const totalImgs = telas.length * versions.length;
 
@@ -633,43 +952,64 @@ function CarrosselCreator({ company, format }) {
       for (let i = 0; i < versions.length; i++) {
         setProc(p => ({ ...p, detail: `Versão ${i + 1}/${versions.length} — gerando a arte com IA e checando a composição (juiz de visão)…` }));
         setMsg(`Renderizando versão ${i + 1}/${versions.length} (${versions[i].model})…`);
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId });
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined });
         out.push({ model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] });
         setResults([...out]); ContState.set(company.id, { carouselResults: out });
       }
       const cost = out.reduce((a, b) => a + (b.cost || 0), 0);
       const warns = out.filter(o => o.warning);
       clearInterval(tick);
-      setProc({ open: true, pct: 100, phase: 'done', detail: `${out.length} versão(ões) × ${telas.length} telas prontas · Custo: R$ ${cost.toFixed(2)}` });
+      setProc({ open: true, pct: 100, phase: 'done', detail: `${out.length} versão(ões) × ${telas.length} ${unTela(telas)} pronta(s) · Custo: R$ ${cost.toFixed(2)}` });
       setMsg((warns.length ? '⚠ ' + warns[0].warning + ' ' : '')
-        + `${out.length} versão(ões) × ${telas.length} telas = ${telas.length * out.length} imagens. Custo: R$ ${cost.toFixed(2)}. Clique numa imagem pra ver a instrução + modo Instagram.`);
+        + `${out.length} versão(ões) × ${telas.length} ${unTela(telas)} = ${telas.length * out.length} ${telas.length * out.length === 1 ? 'imagem' : 'imagens'}. Custo: R$ ${cost.toFixed(2)}. Clique numa imagem pra ver a instrução + modo Instagram.`);
     } catch (e) { clearInterval(tick); setProc({ open: true, phase: 'error', detail: String(e.message || e) }); setMsg('Erro: ' + (e.message || e)); }
     finally { setBusy(false); }
   }
 
   // Re-render GRÁTIS (cache): reusa as fotos já geradas (base_urls) e só redesenha a arte
   // (texto/logo/rodapé) — não chama a IA, custo R$ 0. Útil pra iterar diagramação sem pagar.
+  // Progresso animado p/ operações que chamam a IA (regenerar) — mesma tela de loading da geração.
+  function _runWithProc(estMs, detail, fn) {
+    const t0 = Date.now();
+    setProc({ open: true, pct: 2, detail, phase: '' });
+    const tick = setInterval(() => {
+      const pct = Math.min(95, ((Date.now() - t0) / estMs) * 100);
+      setProc(p => (p.open && p.phase !== 'done' && p.phase !== 'error') ? { ...p, pct } : p);
+    }, 400);
+    return fn()
+      .then((okDetail) => { clearInterval(tick); setProc({ open: true, pct: 100, phase: 'done', detail: okDetail || 'Pronto.' }); })
+      .catch((e) => { clearInterval(tick); setProc({ open: true, phase: 'error', detail: String((e && e.message) || e) }); throw e; });
+  }
+
   async function regerarArte(rv, vi) {
     if (!(rv.base_urls || []).some(Boolean)) { setMsg('Esta versão não tem fotos salvas pra reusar (gere com um modelo de IA primeiro).'); return; }
-    setBusy(true); setMsg(`Regerando a arte da versão ${vi + 1} (grátis — reusando as fotos)…`);
+    const aiSlow = /gpt-5\.4|chatgpt/i.test(rv.model || '');
+    setBusy(true); setMsg('');
     try {
-      const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId });
-      const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
-      setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
-      setMsg(`Arte da versão ${vi + 1} regerada. Custo: R$ ${(r.cost || 0).toFixed(2)} (reusou as fotos, não pagou IA).`);
+      await _runWithProc(aiSlow ? 300000 : 60000, `Regerando a arte da versão ${vi + 1}${(rv.base_urls || []).some(Boolean) && !useStudio ? ' (reusando as fotos)' : ''}…`, async () => {
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined });
+        const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
+        setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
+        setMsg(`Arte da versão ${vi + 1} regerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
+        return `Arte pronta · Custo: R$ ${(r.cost || 0).toFixed(2)}`;
+      });
     } catch (e) { setMsg('Erro: ' + (e.message || e)); }
     finally { setBusy(false); }
   }
 
   async function regerarSlide(rv, vi, si) {
-    setBusy(true); setMsg(`Regerando só a tela ${si + 1} (paga só ela)…`);
+    const aiSlow = /gpt-5\.4|chatgpt/i.test(rv.model || '');
+    setBusy(true); setMsg('');
     try {
-      const bases = (rv.base_urls && rv.base_urls.length ? rv.base_urls.slice() : telas.map(() => null));
-      bases[si] = null;   // zera SÓ esta → regenera (paga 1 slide); as outras reusam a foto salva (grátis)
-      const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases });
-      const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
-      setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
-      setMsg(`Tela ${si + 1} regenerada. Custo: R$ ${(r.cost || 0).toFixed(2)} (só ela — as outras reusaram a foto).`);
+      await _runWithProc(aiSlow ? 300000 : 60000, `Regerando ${fmt === 'carrossel' ? 'a tela ' + (si + 1) : 'a arte'} (paga só ela)…`, async () => {
+        const bases = (rv.base_urls && rv.base_urls.length ? rv.base_urls.slice() : telas.map(() => null));
+        bases[si] = null;   // zera SÓ esta → regenera (paga 1 slide); as outras reusam a foto salva (grátis)
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: useStudio ? 'reference_full' : undefined });
+        const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
+        setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
+        setMsg(`${fmt === 'carrossel' ? 'Tela ' + (si + 1) : 'Arte'} regenerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
+        return `Pronto · Custo: R$ ${(r.cost || 0).toFixed(2)}`;
+      });
     } catch (e) { setMsg('Erro: ' + (e.message || e)); }
     finally { setBusy(false); }
   }
@@ -683,12 +1023,13 @@ function CarrosselCreator({ company, format }) {
         await window.mpApi.transitionPost(rv.post_id, 'REVIEW');
       } else {
         const urls = rv.slides.map(s => s.url);
-        await window.mpApi.createPost({
+        const np = await window.mpApi.createPost({
           company_id: company.id, title: st.assuntoTema || 'Carrossel',
           copy: (st.briefing || '').split('\n')[0] || (telas[0] && telas[0].title) || '',
           networks: ['instagram'], media_url: urls[0], intent: 'review',
           meta: { content_type: 'carousel', carousel_urls: urls, model: rv.model, telas_count: telas.length },
         });
+        if (np && np.id) addRunPosts(company.id, [np.id]);
       }
       setMsg(`Versão ${vi + 1} enviada para Aprovação (carrossel ${rv.slides.length} telas). Veja na aba Aprovação.`);
     } catch (e) { setMsg('Erro ao enviar: ' + (e.message || e)); }
@@ -697,13 +1038,13 @@ function CarrosselCreator({ company, format }) {
 
   if (!telas.length) {
     return <div className="stack"><div className="hint" style={{ padding: 16 }}>
-      Esse conteúdo é um <b>Carrossel</b>, mas ainda não há plano de telas.<br />
-      Volte ao <b>Briefing</b>, escolha um <b>assunto</b> + formato <b>Carrossel</b> e clique em <b>“Gerar plano de telas”</b>. As telas aparecem aqui pra renderizar.
+      Esse conteúdo é um <b>{fmtName}</b>, mas ainda não há {fmt === 'carrossel' ? 'plano de telas' : 'briefing'}.<br />
+      Volte ao <b>Briefing</b>, escolha um <b>assunto</b> + formato <b>{fmtName}</b> e gere o {fmt === 'carrossel' ? 'plano de telas' : 'briefing'}. {fmt === 'carrossel' ? 'As telas aparecem' : 'A arte aparece'} aqui pra renderizar.
     </div></div>;
   }
 
   return <div className="stack">
-    {proc.open && <ProcessModal open={proc.open} title="Gerando carrossel" detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
+    {proc.open && <ProcessModal open={proc.open} title={'Gerando ' + fmtGer} detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
     <div className="sec mut">{fmtName} · <b>{telas.length} {telas.length === 1 ? 'arte' : 'telas'}</b> {fmt === 'carrossel' ? 'do plano' : (fmt === 'story' ? '(vertical 9:16)' : '(4:5)')} (vindas do Briefing). Sem selecionar app — só escolha o modelo.</div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 6 }}>
       {telas.map((t, i) => <div key={i} className="card" style={{ padding: 8 }}>
@@ -722,21 +1063,28 @@ function CarrosselCreator({ company, format }) {
       <div className="stack" style={{ gap: 6 }}>
         {versions.map((v, i) => <div key={i} className="row" style={{ gap: 6, alignItems: 'center' }}>
           <b style={{ width: 30 }}>v{i + 1}</b>
-          <select className="inp" value={v.model} onChange={e => setVerModel(i, e.target.value)} style={{ flex: 1 }}>
-            <option value="editorial">Editorial — só tipografia (grátis, instantâneo)</option>
-            {MODEL_GROUPS.map(grp => <optgroup key={grp.provider} label={grp.label}>
-              {grp.models.map(m => <option key={m.id} value={m.id}>{optLabel(m)}</option>)}
-            </optgroup>)}
-          </select>
+          {(isClientUser() || !modelChoice)
+            ? <span className="mut" style={{ flex: 1 }}>IA Caripost — modelo padrão da plataforma</span>
+            : <select className="inp" value={v.model} onChange={e => setVerModel(i, e.target.value)} style={{ flex: 1 }}>
+              <option value="">{'🎨 Estúdio IA — ' + (refCur ? refCur.replace(':', ' · ') : 'identidade do cadastro') + ' (padrão)'}</option>
+              {!imgModels.length && <option disabled>carregando modelos…</option>}
+              {MODEL_GROUPS.map(grp => <optgroup key={grp.provider} label={grp.label}>
+                {grp.models.map(m => <option key={m.id} value={m.id}>{optLabel(m)}</option>)}
+              </optgroup>)}
+            </select>}
           {versions.length > 1 && <button className="btn sm ghost" onClick={() => delVer(i)}>✕</button>}
         </div>)}
-        {versions.length < 4 && <button className="btn sm ghost" onClick={addVer}>+ versão (outro modelo)</button>}
+        {versions.length < (isClientUser() ? clientMaxVer() : 4) && <button className="btn sm ghost" onClick={addVer}>{(isClientUser() || !modelChoice) ? '+ versão' : '+ versão (outro modelo)'}</button>}
       </div>
     </Field>
     {influencers.length > 0 && <Field label="Influencer (opcional — entra só na capa e no CTA)">
       <label className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
         <input type="checkbox" checked={useInf} onChange={e => setUseInf(e.target.checked)} />
         <span>Usar influencer — foto real composta na <b>capa</b> e no <b>CTA</b> (custa nano-banana). Desligue p/ não ficar repetitivo.</span>
+      </label>
+      <label className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+        <input type="checkbox" checked={useStudio} onChange={e => setUseStudio(e.target.checked)} />
+        <span>🎨 <b>Estúdio IA</b> — a IA arquiteta a arte inteira seguindo as <b>referências do cliente</b> (versões da logo, artes de referência, manual de marca, base de conhecimento). Sua ideia é respeitada e enriquecida.</span>
       </label>
       {useInf && <select className="inp" value={infId} onChange={e => setInfId(e.target.value)} style={{ marginTop: 6 }}>
         <option value="">Automático (1º cadastrado)</option>
@@ -747,7 +1095,7 @@ function CarrosselCreator({ company, format }) {
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     {results.map((rv, vi) => <div key={vi} className="stack" style={{ gap: 6 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="sec mut">Versão {vi + 1} · {rv.model}{rv.cost ? ` · R$ ${rv.cost.toFixed(2)}` : ' · grátis'}</div>
+        <div className="sec mut">Versão {vi + 1}{isClientUser() ? '' : ` · ${rv.model}`}{rv.cost ? ` · R$ ${rv.cost.toFixed(2)}` : (isClientUser() ? '' : ' · grátis')}</div>
         <div className="row" style={{ gap: 6 }}>
           {(rv.base_urls || []).some(Boolean) && <button className="btn sm ghost" disabled={busy} title="Reusa as fotos já geradas e só redesenha a arte — não paga IA" onClick={() => regerarArte(rv, vi)}>↻ Regerar arte (grátis)</button>}
           <button className="btn sm pri" disabled={busy} onClick={() => enviarAprovacao(rv, vi)}>Enviar esta versão → Aprovação</button>
@@ -759,6 +1107,21 @@ function CarrosselCreator({ company, format }) {
           <img loading="lazy" decoding="async" src={s.url} onClick={() => setViewer({ vi, si })} style={{ width: '100%', borderRadius: 8, cursor: 'zoom-in', display: 'block' }} />
           <button className="btn sm" disabled={busy} title="Regenerar SÓ esta tela (paga só ela; as outras reusam a foto)" onClick={() => regerarSlide(rv, vi, si)}
             style={{ position: 'absolute', top: 4, right: 4, padding: '2px 8px', fontSize: 12, background: 'rgba(0,0,0,.72)', color: '#fff', borderRadius: 6, border: 'none' }}>↻</button>
+          <button className="btn sm" disabled={busy} title="Editar com IA: descreva a mudança — o resto da arte é preservado" onClick={async () => {
+            const inst = prompt('O que mudar nesta arte? (o resto é preservado)'); if (!inst) return;
+            setBusy(true); setMsg('Editando com IA…');
+            try { const r = await window.mpApi.editArt(company.id, s.url, inst);
+              if (r && r.url) { setResults(rs => rs.map((v, k) => k === vi ? { ...v, slides: v.slides.map((x, j) => j === si ? { ...x, url: r.url } : x) } : v)); setMsg('✓ Arte editada.'); }
+              else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
+            } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
+          }} style={{ position: 'absolute', top: 4, right: 36, padding: '2px 8px', fontSize: 12, background: 'rgba(0,0,0,.72)', color: '#fff', borderRadius: 6, border: 'none' }}>✏️</button>
+          <button className="btn sm" disabled={busy} title="Animar imagem: vira um clipe curto com movimento sutil" onClick={async () => {
+            setBusy(true); setMsg('Animando (1-2 min)…');
+            try { const r = await window.mpApi.animateArt(company.id, s.url);
+              if (r && r.url) { setMsg('✓ Animação pronta.'); window.open(r.url, '_blank'); }
+              else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
+            } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
+          }} style={{ position: 'absolute', top: 4, right: 68, padding: '2px 8px', fontSize: 12, background: 'rgba(0,0,0,.72)', color: '#fff', borderRadius: 6, border: 'none' }}>🎞️</button>
         </div>)}
       </div>
     </div>)}
@@ -784,9 +1147,16 @@ function StepCriacao({ company }) {
   // A tela de Criação ADAPTA ao tipo escolhido no Briefing.
   const st = ContState.get(company.id);
   const f = st.formato || 'carrossel';
+  const [videoMode, setVideoMode] = React.useState(st.videoMode || 'template');
   // carrossel/post/story usam o MESMO criador moderno (modelo, versões, influencer, card de vidro) — só muda a dimensão.
   if (f === 'carrossel' || f === 'post' || f === 'story') return <CarrosselCreator company={company} format={f} />;
-  return <VideoCreator company={company} />;   // VÍDEO tem tela PRÓPRIA (duração + modelo de vídeo + cenas), não a de imagem
+  if (videoMode === 'generative') return <div className="stack">
+    <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <button className="btn sm ghost" onClick={() => { ContState.set(company.id, { videoMode: 'template' }); setVideoMode('template'); }}>Voltar para video por template</button>
+    </div>
+    <VideoCreator company={company} />
+  </div>;   // fluxo caro/IA continua disponível
+  return <TemplateVideoCreator company={company} onUseGenerative={() => { ContState.set(company.id, { videoMode: 'generative' }); setVideoMode('generative'); }} />;
 }
 
 function StepCriacaoPost({ company }) {
@@ -1048,14 +1418,18 @@ function StepAprovacao({ company }) {
     try {
       // 1) transforma as peças geradas (rascunho local) em posts REVIEW (com a imagem)
       const drafts = (ContState.get(company.id).drafts) || [];
+      const _nids = [];
       for (const d of drafts) {
-        await window.mpApi.createPost({ company_id: company.id, title: d.title, copy: d.copy, hashtags: d.hashtags, networks: [d.network], media_url: d.media_url || null, intent: 'review',
+        const np = await window.mpApi.createPost({ company_id: company.id, title: d.title, copy: d.copy, hashtags: d.hashtags, networks: [d.network], media_url: d.media_url || null, intent: 'review',
           meta: { product: d.product, visual_prompt: d.visual_prompt, headline: d.headline, subheadline: d.subheadline, benefits: d.benefits, cta: d.cta, model: d.model } });
+        if (np && np.id) _nids.push(np.id);
       }
+      addRunPosts(company.id, _nids);
       if (drafts.length) ContState.set(company.id, { drafts: [] });
-      // 2) 1 link com TODAS as peças em revisão do cliente
+      // 2) 1 link com as peças em revisão DESTE run (não arrasta histórico antigo pro cliente)
       const all = await window.mpApi.listPosts();
-      const reviewIds = (all.posts || []).filter(p => p.company_id === company.id && p.status === 'REVIEW').map(p => p.id);
+      const _rl = runIdSet();
+      const reviewIds = (all.posts || []).filter(p => p.company_id === company.id && p.status === 'REVIEW' && _rl.has(p.id)).map(p => p.id);
       if (!reviewIds.length) { setMsg('Nenhuma peça gerada para enviar. Gere na Criação.'); setSending(false); return; }
       const r = await window.mpApi.createApprovalLink({ company_id: company.id, post_ids: reviewIds, stage: 'client' });
       setLinkUrl(r.url || '');
@@ -1076,9 +1450,12 @@ function StepAprovacao({ company }) {
     if (!drafts.length) { setMsg('Sem peças. Gere na etapa de Criação.'); return; }
     setBusy(true); setMsg('Enviando para aprovação…');
     try {
+      const _nids = [];
       for (const d of drafts) {
-        await window.mpApi.createPost({ company_id: company.id, title: d.title, copy: d.copy, hashtags: d.hashtags, networks: [d.network], media_url: d.media_url || null, intent: 'review' });
+        const np = await window.mpApi.createPost({ company_id: company.id, title: d.title, copy: d.copy, hashtags: d.hashtags, networks: [d.network], media_url: d.media_url || null, intent: 'review' });
+        if (np && np.id) _nids.push(np.id);
       }
+      addRunPosts(company.id, _nids);
       ContState.set(company.id, { drafts: [] });
       setMsg('Enviado para aprovação.'); load();
     } catch (e) { setMsg('Erro: ' + (e.message || e)); }
@@ -1117,12 +1494,16 @@ function StepAprovacao({ company }) {
     try {
       // cria as peças que ainda estão como rascunho na sessão
       const drafts = (ContState.get(company.id).drafts) || [];
+      const _nids = [];
       for (const d of drafts) {
-        await window.mpApi.createPost({ company_id: company.id, title: d.title, copy: d.copy, hashtags: d.hashtags, networks: [d.network], media_url: d.media_url || null, intent: 'review' });
+        const np = await window.mpApi.createPost({ company_id: company.id, title: d.title, copy: d.copy, hashtags: d.hashtags, networks: [d.network], media_url: d.media_url || null, intent: 'review' });
+        if (np && np.id) _nids.push(np.id);
       }
+      addRunPosts(company.id, _nids);
       if (drafts.length) ContState.set(company.id, { drafts: [] });
       const r = await window.mpApi.listPosts();
-      const pend = (r.posts || []).filter(p => p.company_id === company.id && (p.status === 'REVIEW' || p.status === 'DRAFT'));
+      const _rl = runIdSet();
+      const pend = (r.posts || []).filter(p => p.company_id === company.id && (p.status === 'REVIEW' || p.status === 'DRAFT') && _rl.has(p.id));
       for (const p of pend) {
         if (p.status === 'DRAFT') { try { await window.mpApi.transitionPost(p.id, 'REVIEW'); } catch (_) {} }
         try { await window.mpApi.transitionPost(p.id, 'APPROVED'); } catch (_) {}
@@ -1132,16 +1513,28 @@ function StepAprovacao({ company }) {
     finally { setBusy(false); }
   }
 
-  const review = posts.filter(p => p.status === 'REVIEW' || p.status === 'DRAFT');
-  const approved = posts.filter(p => p.status === 'APPROVED' || p.status === 'SCHEDULED');
+  // RUN ATUAL: mostra SÓ as peças produzidas neste projeto (artes geradas + rascunhos enviados nesta
+  // sessão). Histórico antigo aprovado/reprovado não polui a tela — toggle mostra tudo se precisar.
+  function runIdSet() {
+    const st0 = ContState.get(company.id) || {};
+    return new Set([...((st0.carouselResults || []).map(v => v.post_id)), ...((st0.runPostIds) || [])].filter(Boolean));
+  }
+  const [showAll, setShowAll] = React.useState(false);
+  const _run = runIdSet();
+  const _seen = new Set();
+  const uniq = posts.filter(p => !_seen.has(p.id) && (_seen.add(p.id) || true));   // cada post aparece 1x
+  const scoped = showAll ? uniq : uniq.filter(p => _run.has(p.id));
+  const review = scoped.filter(p => p.status === 'REVIEW' || p.status === 'DRAFT');
+  const approved = scoped.filter(p => p.status === 'APPROVED' || p.status === 'SCHEDULED');
 
   return <div className="stack">
     <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <button className="btn pri" disabled={busy} onClick={enviarTodos}><Icon name="send" />Enviar peças p/ aprovação</button>
       <button className="btn" disabled={busy} onClick={aprovarTudo}><Icon name="check" />Aprovar tudo (teste)</button>
       <button className="btn sm ghost" onClick={load}><Icon name="refs" />Atualizar</button>
+      <button className="btn sm ghost" onClick={() => setShowAll(s => !s)}>{showAll ? '◉ Só esta produção' : '○ Histórico completo'}</button>
     </div>
-    <div className="hint">Modo teste: "Aprovar tudo" cria as peças e marca como aprovado direto, sem mandar pro cliente.</div>
+    <div className="hint">{showAll ? 'Mostrando TODO o histórico da empresa.' : 'Mostrando só as peças desta produção (run atual).'} Modo teste: "Aprovar tudo" cria as peças e marca como aprovado direto, sem mandar pro cliente.</div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
 
     {(() => {
@@ -1660,4 +2053,4 @@ const ContState = {
   excluir(id, pid) { const c = this._co(id); delete c.projetos[pid]; if (c.activeId === pid) c.activeId = null; this._save(); },
 };
 
-Object.assign(window, { ConteudoApp, NotifConfigApp, PainelApp, AcervoApp, ContState });
+Object.assign(window, { ConteudoApp, NotifConfigApp, PainelApp, AcervoApp, ContState, VideoApp });

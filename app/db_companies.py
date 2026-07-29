@@ -431,7 +431,7 @@ def company_update(company_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
     now = _now()
     fields = []
     values: List[Any] = []
-    for key in ("name", "segment", "city", "state", "website", "phone", "email", "notes"):
+    for key in ("name", "segment", "city", "state", "website", "phone", "email", "notes", "owner_user_id"):
         if key in data:
             fields.append(f"{key} = ?")
             values.append(data[key])
@@ -969,6 +969,37 @@ def product_get(product_id: str) -> Optional[Dict[str, Any]]:
         row["functions"] = json.loads(row.get("functions") or "[]")
         row["active"] = bool(row.get("active", 1))
         return row
+
+
+@_sqlite_retry
+def product_copy(source_product_id: str, target_company_id: str) -> Optional[Dict[str, Any]]:
+    """Duplica um produto de OUTRA empresa pra target_company_id: novo id + slug próprio, mantendo
+    nome/descrição/categoria/objetivo/funções/base de conhecimento/cores/web_brief. Cada cópia é
+    INDEPENDENTE (editar numa não afeta a origem). NÃO copia logos/fotos (assets do cliente de origem)
+    nem soluções — o núcleo que alimenta o briefing (texto/KB) é o que viaja. Retorna o produto ou None."""
+    with get_conn() as conn:
+        src = conn.execute("SELECT * FROM products WHERE id = ?", (source_product_id,)).fetchone()
+    if not src:
+        return None
+    src = dict(src)
+    pid = _uuid()
+    now = _now()
+    base = _slugify(src.get("name") or "produto")
+    slug = base
+    with get_conn() as conn:
+        n = 1
+        while conn.execute("SELECT 1 FROM products WHERE company_id = ? AND slug = ?", (target_company_id, slug)).fetchone():
+            slug = f"{base}-{n}"
+            n += 1
+        conn.execute("""
+            INSERT INTO products (id, company_id, name, slug, description, category, website, socials, colors,
+                                  active, created_at, updated_at, objective, functions, knowledge, web_brief, web_brief_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        """, (pid, target_company_id, src.get("name"), slug, src.get("description"), src.get("category"),
+              src.get("website"), src.get("socials") or "{}", src.get("colors") or "{}", now, now,
+              src.get("objective"), src.get("functions"), src.get("knowledge"),
+              src.get("web_brief"), src.get("web_brief_at")))
+    return product_get(pid)
 
 
 @_sqlite_retry

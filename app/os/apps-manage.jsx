@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.27.23';
+const MP_OS_VERSION = 'v1.27.103';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -678,6 +678,9 @@ function ImageModelPicker() {
   const [vmodels, setVmodels] = React.useState([]);
   const [vcurrent, setVcurrent] = React.useState('');
   const [vsel, setVsel] = React.useState('');
+  const [rmodels, setRmodels] = React.useState([]);
+  const [rcurrent, setRcurrent] = React.useState('');
+  const [rsel, setRsel] = React.useState('');
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -688,6 +691,9 @@ function ImageModelPicker() {
       const vlist = r.video || [];
       setVmodels(vlist); setVcurrent(r.video_current || '');
       setVsel(r.video_current || (vlist[0] && vlist[0].id) || '');
+      const rlist = r.image_ref_models || [];
+      setRmodels(rlist); setRcurrent(r.image_ref_current || '');
+      setRsel(r.image_ref_current || (rlist[0] && rlist[0].id) || '');
       setLoading(false);
     }).catch(() => setLoading(false));
     window.mpApi.getAISettings().then(s => setMasks((s && s.image && s.image.keyMasks) || {})).catch(() => {});
@@ -714,6 +720,11 @@ function ImageModelPicker() {
     try { const r = await window.mpApi.setAiModel({ video_model: vsel }); setVcurrent(r.video_current); setMsg('✓ Modelo de vídeo padrão: ' + r.video_current); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
+  async function saveRef() {
+    setMsg('Salvando…');
+    try { const r = await window.mpApi.setAiModel({ image_ref_model: rsel }); setRcurrent(r.image_ref_current); setMsg('✓ Motor de arte (Estúdio IA): ' + r.image_ref_current); }
+    catch (e) { setMsg('Erro: ' + e.message); }
+  }
   const priceKind = m => {
     if (m.free) return '';
     if (m.price_source === 'usage_learned') return ' · real';
@@ -721,7 +732,7 @@ function ImageModelPicker() {
     if (m.price_source) return ' · estimado';
     return '';
   };
-  const price = m => m.credits ? ' · ' + m.credits + ' cr/clipe' + (m.credits_learned ? '' : '~') : (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + priceKind(m) : (m.free ? ' · grátis' : ''));
+  const price = m => m.credits ? ' · ' + m.credits + ' cr/img' + (m.credits_learned ? '' : '~') : (m.price_brl ? ' · R$ ' + Number(m.price_brl).toFixed(2) + priceKind(m) : (m.free ? ' · grátis' : ''));
   const PLAB = { kie: 'kie.ai (créditos)', omniroute: 'OmniRoute (grátis · assinatura)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter' };
   const groups = (() => { const g = {}; models.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
   const vgroups = (() => { const g = {}; vmodels.forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); }); return Object.keys(g).map(p => ({ provider: p, label: PLAB[p] || p, models: g[p] })); })();
@@ -748,6 +759,20 @@ function ImageModelPicker() {
     </Field>
     <button className="btn sm pri" onClick={save}>Definir como padrão</button>
 
+    <div className="sec" style={{ marginTop: 14 }}><Icon name="image" />Motor de arte — Estúdio IA (padrão de TODAS as artes)</div>
+    <div className="hint">É o modelo que gera as artes com a identidade do cliente (logo, referências, contato). Escolha onde você TEM saldo — se ele falhar, o sistema cai sozinho pro próximo provedor com chave, então nunca trava a plataforma.</div>
+    {rcurrent && <div className="row"><span className="k">Motor atual</span><span className="v mono" style={{ color: 'var(--cyan)' }}>{rcurrent}</span></div>}
+    <Field label="Modelo do Estúdio IA">
+      <div className="rowx" style={{ gap: 8 }}>
+        <select className="inp" value={rsel} onChange={e => setRsel(e.target.value)}>
+          {rmodels.length ? rmodels.map(m => <option key={m.id} value={m.id}>{(m.name || m.id) + (m.note ? ' · ' + m.note : '')}</option>)
+            : <option value="">{loading ? 'Carregando…' : 'Sem modelos'}</option>}
+        </select>
+        <button className="btn sm ghost" onClick={load}><Icon name="refresh" />Recarregar</button>
+      </div>
+    </Field>
+    <button className="btn sm pri" onClick={saveRef}>Definir motor de arte</button>
+
     <div className="sec" style={{ marginTop: 14 }}><Icon name="video" />Modelos de VÍDEO (CometAPI + OpenRouter)</div>
     <div className="hint">{vmodels.length} modelos disponíveis. O preço mostra “catálogo” quando vem do provedor, “real” quando foi aprendido por uso e “estimado” quando o provedor não expõe tabela.</div>
     {vcurrent && <div className="row"><span className="k">Vídeo padrão</span><span className="v mono" style={{ color: 'var(--cyan)' }}>{vcurrent}</span></div>}
@@ -763,6 +788,94 @@ function ImageModelPicker() {
     </Field>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <button className="btn sm pri" onClick={saveVideo}>Definir vídeo como padrão</button>
+  </div>;
+}
+
+function UsersPanel() {
+  const [users, setUsers] = React.useState([]);
+  const [meId, setMeId] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [nu, setNu] = React.useState({ username: '', password: '', role: 'editor' });
+  const ROLES = ['admin', 'editor', 'viewer'];
+  const load = React.useCallback(() => {
+    window.mpApi.listUsers().then(r => {
+      if (r && r.users) { setUsers(r.users); setMsg(''); }
+      else setMsg('✗ ' + ((r && r.error) || 'sem permissão (apenas admin)'));
+    }).catch(e => setMsg('✗ ' + e.message));
+  }, []);
+  React.useEffect(() => {
+    load();
+    window.mpApi.whoami().then(r => setMeId((r && r.user && r.user.user_id) || '')).catch(() => {});
+  }, [load]);
+  async function act(fn, okMsg) {
+    setBusy(true); setMsg('');
+    try { const r = await fn(); if (r && r.ok) { if (okMsg) setMsg('✓ ' + okMsg); load(); return true; } setMsg('✗ ' + ((r && r.error) || 'falhou')); return false; }
+    catch (e) { setMsg('✗ ' + e.message); return false; }
+    finally { setBusy(false); }
+  }
+  async function create() {
+    if (!nu.username.trim() || !nu.password.trim()) { setMsg('Preencha usuário e senha.'); return; }
+    const ok = await act(() => window.mpApi.createUser({ username: nu.username.trim(), password: nu.password, role: nu.role }), 'Usuário criado.');
+    if (ok) setNu({ username: '', password: '', role: 'editor' });
+  }
+  return <div className="stack">
+    <div className="panel stack">
+      <div className="sec">Novo usuário</div>
+      <div className="rowx" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <input className="inp" style={{ flex: 1, minWidth: 160 }} placeholder="usuário (e-mail)" value={nu.username} onChange={e => setNu(s => ({ ...s, username: e.target.value }))} />
+        <input className="inp" style={{ flex: 1, minWidth: 140 }} type="password" placeholder="senha" value={nu.password} onChange={e => setNu(s => ({ ...s, password: e.target.value }))} />
+        <select className="inp" style={{ width: 130 }} value={nu.role} onChange={e => setNu(s => ({ ...s, role: e.target.value }))}>{ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select>
+        <button className="btn sm pri" disabled={busy} onClick={create}>Criar</button>
+      </div>
+      <small className="hint">Papéis: <b>admin</b> (tudo) · <b>editor</b> (cria/edita conteúdo) · <b>viewer</b> (só visualiza).</small>
+    </div>
+    <div className="panel stack">
+      <div className="sec">Usuários ({users.length})</div>
+      {users.map(u => <div key={u.user_id} className="litem" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <div className="li-main"><b>{u.username}</b><small>{u.active ? 'ativo' : 'inativo'}{u.user_id === meId ? ' · você' : ''}</small></div>
+        <select className="inp" style={{ width: 120 }} value={u.role} disabled={busy} onChange={e => act(() => window.mpApi.updateUser(u.user_id, { role: e.target.value }), 'Papel atualizado.')}>{ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select>
+        <button className="btn sm ghost" disabled={busy} onClick={() => act(() => window.mpApi.updateUser(u.user_id, { active: !u.active }), 'Atualizado.')}>{u.active ? 'Desativar' : 'Ativar'}</button>
+        <button className="btn sm ghost" disabled={busy} onClick={() => { const p = prompt('Nova senha p/ ' + u.username + ' (mín 4):'); if (p) act(() => window.mpApi.resetUserPassword(u.user_id, p), 'Senha redefinida.'); }}>Senha</button>
+        {u.user_id !== meId && <button className="btn sm ghost" style={{ color: 'var(--pri)' }} disabled={busy} onClick={() => { if (window.confirm('Excluir ' + u.username + '?')) act(() => window.mpApi.deleteUser(u.user_id), 'Excluído.'); }}>Excluir</button>}
+      </div>)}
+      {!users.length && <div className="hint">Nenhum usuário carregado.</div>}
+    </div>
+    {msg && <div className={msg.startsWith('✓') ? 'ok' : 'err'}>{msg}</div>}
+  </div>;
+}
+
+function ImageProvidersPanel() {
+  const [provs, setProvs] = React.useState([]);
+  const [choice, setChoice] = React.useState(true);   // usuário PODE escolher modelo na Criação?
+  const [msg, setMsg] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const LABELS = { omniroute: 'OmniRoute (grátis)', cometapi: 'CometAPI', piapi: 'PiAPI', openrouter: 'OpenRouter', kie: 'kie.ai (créditos)' };
+  React.useEffect(() => { window.mpApi.aiModels().then(r => { setProvs((r && r.image_providers) || []); setChoice((r && r.choice_enabled) !== false); }).catch(() => {}); }, []);
+  function toggle(id) { setProvs(ps => ps.map(p => p.id === id ? { ...p, enabled: !p.enabled } : p)); }
+  async function save() {
+    setBusy(true); setMsg('');
+    const hidden = provs.filter(p => !p.enabled).map(p => p.id);
+    try { const r = await window.mpApi.setImageProviders(hidden, choice); setMsg(r && r.ok ? '✓ Provedores atualizados.' : '✗ falhou'); }
+    catch (e) { setMsg('✗ ' + e.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="panel stack">
+    <div className="sec">Provedores na criação de imagem</div>
+    <div className="hint">Marque quais provedores aparecem na lista de modelos da criação. Não mexe nos modelos já configurados.</div>
+    {provs.map(p => <label key={p.id} className="row" style={{ gap: 8, cursor: 'pointer', alignItems: 'center' }}>
+      <input type="checkbox" checked={!!p.enabled} onChange={() => toggle(p.id)} />
+      <span>{LABELS[p.id] || p.id}</span>
+    </label>)}
+    {!provs.length && <div className="hint">Carregando…</div>}
+    <div className="sec" style={{ marginTop: 10 }}>Escolha de modelo na Criação</div>
+    <label className="row" style={{ gap: 8, cursor: 'pointer', alignItems: 'center' }}>
+      <input type="checkbox" checked={choice} onChange={() => setChoice(c => !c)} />
+      <span>Permitir que o usuário escolha o modelo</span>
+    </label>
+    <div className="hint">Desmarcado = seletor SOME da Criação e TODA arte usa o modelo FIXADO no "Motor de arte — Estúdio IA" acima. Marcado = o usuário escolhe entre os modelos dos provedores habilitados.</div>
+    {msg && <div className={msg.startsWith('✓') ? 'ok' : 'err'}>{msg}</div>}
+    <button className="btn sm pri" disabled={busy} style={{ alignSelf: 'flex-start' }} onClick={save}>{busy ? 'Salvando…' : 'Salvar provedores'}</button>
   </div>;
 }
 
@@ -785,7 +898,7 @@ function SettingsApp() {
 
   // AI settings state
   const [aiSettings, setAiSettings] = React.useState(null);
-  const [aiProvider, setAiProvider] = React.useState('anthropic');
+  const [aiProvider, setAiProvider] = React.useState('omniroute');
   const [aiModel, setAiModel] = React.useState('');
   const [aiKey, setAiKey] = React.useState('');
   const [aiKeyMask, setAiKeyMask] = React.useState('');
@@ -805,7 +918,7 @@ function SettingsApp() {
     // Load AI settings
     window.mpApi.getAISettings().then(s => {
       setAiSettings(s);
-      if (s.ai) { setAiProvider(s.ai.provider || 'anthropic'); setAiModel(s.ai.model || ''); setAiKeyMask(s.ai.keyMasks?.[s.ai.provider] || ''); }
+      if (s.ai) { setAiProvider(s.ai.provider || 'omniroute'); setAiModel(s.ai.model || ''); setAiKeyMask(s.ai.keyMasks?.[s.ai.provider] || ''); }
     }).catch(() => {});
   }, []);
 
@@ -860,7 +973,7 @@ function SettingsApp() {
     <AppHead icon="settings" title="Settings" desc="Tokens de IA, sistema e informações da plataforma."
       right={<Pill kind="cy" dot>{MP_OS_VERSION}</Pill>} />
     <div className="tabbar">
-      {[['tokens', 'Tokens & IA'], ['ai', 'IA Caripost'], ['sys', 'Sistema']].map(([k, l]) =>
+      {[['tokens', 'Tokens & IA'], ['ai', 'IA Caripost'], ['users', 'Usuários'], ['sys', 'Sistema']].map(([k, l]) =>
         <button key={k} className={'tabx' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>)}
     </div>
     {tab === 'tokens' && <div className="stack">
@@ -880,10 +993,9 @@ function SettingsApp() {
         <div className="hint">Copy de posts, planos editoriais e briefings de tendência.</div>
         <Field label="Provedor">
           <select className="inp" value={aiProvider} onChange={e => { setAiProvider(e.target.value); setAiModel(''); setAiModels([]); setAiKeyMask(aiSettings?.ai?.keyMasks?.[e.target.value] || ''); }}>
-            <option value="cometapi">CometAPI (Claude/GPT/Gemini · preserva acentos)</option>
-            <option value="anthropic">Anthropic (Claude)</option>
-            <option value="openai">OpenAI</option>
-            <option value="openrouter">OpenRouter</option>
+            <option value="omniroute">OmniRoute (Claude/GPT · grátis · assinatura)</option>
+            <option value="openrouter">OpenRouter (Claude/GPT/Grok/diversos)</option>
+            <option value="cometapi">CometAPI (Claude/GPT/Grok/Gemini · preserva acentos)</option>
           </select>
         </Field>
         <Field label="Modelo">
@@ -902,12 +1014,14 @@ function SettingsApp() {
         <button className="btn sm pri" disabled={aiSaving} onClick={saveAISettings}>{aiSaving ? 'Salvando…' : 'Salvar configurações'}</button>
       </div>
       <ImageModelPicker />
+      <ImageProvidersPanel />
       <div className="panel stack">
         <div className="sec">Testar IA</div>
         <button className="btn sm" disabled={aiTesting} onClick={testAI}>{aiTesting ? 'Testando…' : 'Testar conexão'}</button>
         {aiTestResult && <div className={aiTestResult.startsWith('✓') ? 'ok' : 'err'}>{aiTestResult}</div>}
       </div>
     </div>}
+    {tab === 'users' && <UsersPanel />}
     {tab === 'sys' && <div className="stack">
       <div className="panel stack">
         <div className="sec">Plataforma</div>

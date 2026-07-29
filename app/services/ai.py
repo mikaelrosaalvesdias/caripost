@@ -29,21 +29,43 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SETTINGS_WHITELIST: Dict[str, List[str]] = {
-    "ai": ["anthropic", "openai", "openrouter", "cometapi"],
+    # Texto SÓ via gateways unificados — anthropic/openai DIRETOS removidos. kie.ai não faz texto LLM
+    # (só imagem/vídeo via jobs async), por isso fica de fora aqui.
+    "ai": ["cometapi", "openrouter", "omniroute"],
     "image": ["openai", "openrouter", "fal", "cometapi", "piapi", "omniroute"],
+    "image_ref": ["openrouter", "kie", "cometapi", "omniroute"],   # ESTÚDIO IA (reference_full) — modelo escolhível
     "video": ["fal", "openai", "openrouter", "cometapi"],
 }
 
 EXTRA_KEYS = {"postiz.url", "postiz.apiKey", "ai.apiKey"}
 
+# Catálogo de TEXTO CURADO por gateway: ~5 Claude + 5 OpenAI + 5 Grok + 5 diversos (gemini/glm/deepseek/qwen),
+# com ids REAIS do catálogo de cada provedor (validados ao vivo). Onde o gateway não expõe uma família
+# (ex.: OmniRoute só libera os mirrors grátis das assinaturas), a lista traz só o que responde de verdade.
 DEFAULT_MODELS: Dict[str, Dict[str, List[str]]] = {
     "ai": {
-        "anthropic": ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
-        "openai": ["gpt-5.1", "gpt-5-mini", "gpt-4.1", "o4-mini"],
-        "openrouter": ["anthropic/claude-sonnet-4.6", "openai/gpt-5.1", "google/gemini-2.5-pro", "meta-llama/llama-4-maverick", "deepseek/deepseek-chat-v3.1"],
-        # CometAPI (texto/roteiro) — ids reais do catálogo; preservam acentos. Claude = melhor copy PT-BR.
-        "cometapi": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001",
-                     "gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gemini-3.5-pro", "gemini-3.1-flash", "deepseek-v3.2"],
+        "cometapi": [
+            # Claude (melhor copy PT-BR, preserva acentos)
+            "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5-20251001",
+            # OpenAI
+            "gpt-5", "gpt-5-pro", "gpt-5-mini", "gpt-5-thinking", "o4-mini",
+            # Grok
+            "grok-4", "grok-4.3", "grok-4-fast-reasoning", "grok-4-1-fast-reasoning", "grok-4.20-0309-reasoning",
+            # Diversos (Gemini / GLM / DeepSeek / Qwen)
+            "gemini-3-pro-preview", "gemini-3.1-pro-preview", "glm-5.2", "deepseek-v3.2", "qwen-max",
+        ],
+        "openrouter": [
+            "anthropic/claude-opus-4.8", "anthropic/claude-opus-4.7", "anthropic/claude-sonnet-4.6", "anthropic/claude-sonnet-4.5", "anthropic/claude-haiku-4.5",
+            "openai/gpt-5.5", "openai/gpt-5.5-pro", "openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/o4-mini",
+            "x-ai/grok-4.20", "x-ai/grok-4.3", "x-ai/grok-4.20-multi-agent",
+            "google/gemini-3.1-pro-preview", "google/gemini-3-flash-preview", "z-ai/glm-5.2", "z-ai/glm-5", "deepseek/deepseek-v3.2",
+        ],
+        # OmniRoute = mirrors GRÁTIS das assinaturas do usuário (só estes respondem com a chave atual;
+        # grok/gemini/glm dão 401/timeout). Claude preserva acento; GPT-web também.
+        "omniroute": [
+            "cc/claude-opus-4-8", "cc/claude-opus-4-7", "cc/claude-opus-4-6", "antigravity/claude-sonnet-4-6",
+            "cgpt-web/gpt-5.5", "cgpt-web/gpt-5.5-pro", "cgpt-web/gpt-5.4-pro",
+        ],
     },
     "image": {
         "openai": ["gpt-image-1", "dall-e-3"],
@@ -129,12 +151,12 @@ def get_credential(section: str, provider: str) -> Optional[str]:
 def get_ai_config() -> Optional[Dict[str, Any]]:
     """Get AI config for text generation. OpenAI is retired — anything pointing to OpenAI
     is forced through OpenRouter (same models, OpenRouter token)."""
-    provider = get_setting("ai.provider") or "anthropic"
+    provider = get_setting("ai.provider") or "omniroute"
     model = get_setting("ai.model")
-    if provider == "omniroute":   # gateway das assinaturas (grátis) — ATENÇÃO: remove acentos do texto
-        return {"provider": "omniroute", "apiKey": _omniroute_key() or "x", "model": model or "high-availability"}
+    if provider == "omniroute":   # gateway das assinaturas (grátis). Mirror cc/ preserva acento no texto.
+        return {"provider": "omniroute", "apiKey": _omniroute_key() or "x", "model": model or "cc/claude-opus-4-8"}
     if provider == "cometapi":    # texto via CometAPI (OpenAI-compat) — preserva acentos
-        return {"provider": "cometapi", "apiKey": _cometapi_key(), "model": model or "gpt-4o"}
+        return {"provider": "cometapi", "apiKey": _cometapi_key(), "model": model or "claude-sonnet-4-6"}
     if provider == "openai":
         provider = "openrouter"
         # Mantém o modelo, mas no formato do OpenRouter (precisa do prefixo do provedor).
@@ -163,6 +185,8 @@ _CHEAP_TEXT_MODELS = {
     "openrouter": "openai/gpt-4.1-mini",
     "anthropic": "claude-haiku-4-5",
     "cometapi": "gpt-4o",
+    # OmniRoute (grátis · assinaturas): Sonnet aguenta o JSON pesado do carrossel e preserva acento.
+    "omniroute": "antigravity/claude-sonnet-4-6",
 }
 
 
@@ -364,6 +388,10 @@ def list_models(section: str, provider: str, api_key: Optional[str] = None) -> L
         api_key = get_credential(section, provider)
     defaults = DEFAULT_MODELS.get(section, {}).get(provider, [])
 
+    # TEXTO: catálogo CURADO por gateway (não despeja a API inteira). ids validados em DEFAULT_MODELS["ai"].
+    if section == "ai" and provider in ("cometapi", "openrouter", "omniroute"):
+        return defaults
+
     try:
         if provider == "openrouter" and api_key:
             return _list_openrouter_models(api_key, section)
@@ -518,13 +546,26 @@ def generate_trends(company: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_image_config() -> Optional[Dict[str, Any]]:
-    """Image-gen config. Supports OpenAI and OpenRouter (Image API)."""
-    provider = (get_setting("image.provider") or "openrouter").strip()
+    """Image-gen config. Default = OmniRoute (grátis, assinaturas). CometAPI/PiAPI sem saldo."""
+    provider = (get_setting("image.provider") or "omniroute").strip()
     model = get_setting("image.model") or ""
     # OmniRoute (gateway das assinaturas) — imagem grátis pela assinatura.
     if provider == "omniroute" or model.lower().startswith("omni:"):
         return {"provider": "omniroute", "model": model or "omni:antigravity/gemini-3.1-flash-image",
                 "apiKey": _omniroute_key() or "x", "quality": get_setting("image.quality") or "high"}
+    # kie.ai / CometAPI / PiAPI (imagem em CRÉDITOS/$): roteados pelo prefixo do id — get_image_config
+    # NÃO pode cair no ramo openrouter só porque o id tem "/". O dispatch real usa o prefixo do model.
+    _ml = model.lower()
+    if (provider in ("kie", "cometapi", "cometapi_gemini", "piapi")
+            or _ml.startswith(("kie:", "cometapi:", "cometapi-gemini:", "piapi:"))):
+        prov = ("kie" if provider == "kie" or _ml.startswith("kie:")
+                else "cometapi_gemini" if provider == "cometapi_gemini" or _ml.startswith("cometapi-gemini:")
+                else "cometapi" if provider == "cometapi" or _ml.startswith("cometapi:")
+                else "piapi")
+        # cometapi_gemini/cometapi usam a MESMA conta CometAPI → _cometapi_key(); dispatch real vai pelo prefixo do model.
+        _kcred = _cometapi_key() if prov in ("cometapi", "cometapi_gemini") else (get_credential("image", prov) or "x")
+        return {"provider": prov, "model": model, "apiKey": _kcred or "x",
+                "quality": get_setting("image.quality") or "high"}
     # OpenAI image is retired — force everything to OpenRouter. A bare OpenAI model name
     # (no "/") gets dropped in favor of the OpenRouter default.
     if provider == "openai" or not provider:
@@ -957,27 +998,366 @@ def _kie_create_task(model: str, prompt: str, seconds: Any, aspect: str = "9:16"
 def _kie_record(task_id: str) -> Dict[str, Any]:
     """GET kie /jobs/recordInfo?taskId= → data (state/resultJson/creditsConsumed/...)."""
     key = _kie_key()
-    with httpx.Client(timeout=httpx.Timeout(30.0, connect=15.0)) as c:
-        r = c.get(_KIE_BASE + "/jobs/recordInfo",
-                  headers={"Authorization": "Bearer " + key}, params={"taskId": task_id})
+    if not key:
+        return {"_poll_error": "kie.api_key não configurada"}
     try:
-        return (r.json() or {}).get("data") or {}
-    except Exception:
-        return {}
+        with httpx.Client(timeout=httpx.Timeout(30.0, connect=15.0)) as c:
+            r = c.get(_KIE_BASE + "/jobs/recordInfo",
+                      headers={"Authorization": "Bearer " + key}, params={"taskId": task_id})
+        payload = r.json() or {}
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict) and data:
+            return data
+        detail = (payload.get("msg") if isinstance(payload, dict) else "") or r.text[:160]
+        return {"_poll_error": f"HTTP {r.status_code}: {detail}"}
+    except Exception as exc:
+        # Polling de job longo não pode morrer por uma oscilação curta da rede.
+        return {"_poll_error": str(exc)[:180]}
 
 
 def _kie_result_urls(data: Dict[str, Any]) -> List[str]:
-    """Extrai resultUrls do recordInfo (resultJson é uma STRING JSON)."""
-    rj = data.get("resultJson")
-    if isinstance(rj, str) and rj.strip():
+    """Extrai URLs dos formatos de retorno usados pela kie.
+
+    O Market documenta ``resultJson`` como JSON serializado, mas endpoints dedicados
+    e modelos novos também aninham o resultado em ``response``/``output`` ou
+    devolvem uma única URL. Não percorremos ``param`` para nunca confundir uma
+    imagem de entrada com a arte gerada.
+    """
+    found: List[str] = []
+    url_keys = {
+        "resultUrls", "result_urls", "urls", "url", "resultUrl", "result_url",
+        "imageUrl", "image_url", "videoUrl", "video_url",
+    }
+    container_keys = {"resultJson", "response", "output", "result", "data"}
+
+    def _decoded(value):
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if not raw or raw[0] not in "[{":
+            return value
         try:
-            rj = json.loads(rj)
+            return json.loads(raw)
         except Exception:
-            rj = {}
-    if isinstance(rj, dict):
-        u = rj.get("resultUrls") or rj.get("urls") or []
-        return [x for x in u if isinstance(x, str) and x.startswith("http")]
-    return []
+            return value
+
+    def _collect(value, allow_all_keys: bool = False) -> None:
+        value = _decoded(value)
+        if isinstance(value, str):
+            if value.startswith(("http://", "https://")):
+                found.append(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _collect(item, True)
+            return
+        if not isinstance(value, dict):
+            return
+        for key, item in value.items():
+            if key in url_keys:
+                _collect(item, True)
+            elif key in container_keys or allow_all_keys:
+                _collect(item, True)
+
+    if isinstance(data, dict):
+        for key in container_keys | url_keys:
+            if key in data:
+                _collect(data[key], key in container_keys)
+    return list(dict.fromkeys(found))
+
+
+# ===================== IMAGEM via kie.ai (text-to-image, CRÉDITOS) =====================
+# Mesma infra do vídeo (createTask/recordInfo/creditsConsumed). id da UI = "kie:" + model real do market.
+
+
+def _kie_credit_usd() -> float:
+    """Valor de 1 crédito kie em USD (setting kie.credit_usd; default 0.005 = $5/1000 créditos)."""
+    try:
+        return float(get_setting("kie.credit_usd") or 0.005)
+    except Exception:
+        return 0.005
+
+
+def _kie_cost_usd(model_key: str, credits_consumed, default_credits: float = 0.0) -> float:
+    """Custo REAL de uma geração kie em USD: creditsConsumed do recordInfo (e APRENDE no setting
+    kie.credits.<model> pra UI mostrar o preço certo); sem cc → usa o aprendido; sem nada → default do
+    tier. Antes as funções kie retornavam 0.0 → billing/UI mostravam 'grátis' pra geração PAGA."""
+    cc = None
+    try:
+        cc = float(credits_consumed) if credits_consumed is not None else None
+    except Exception:
+        cc = None
+    if cc:
+        try:
+            from ..db import settings_set as _ss
+            from datetime import datetime as _dt, timezone as _tz
+            _ss(key="kie.credits." + model_key, value=str(cc), updated_at=_dt.now(_tz.utc).isoformat())
+        except Exception:
+            pass
+    if cc is None:
+        try:
+            cc = float(get_setting("kie.credits." + model_key) or 0.0)
+        except Exception:
+            cc = 0.0
+    if not cc:
+        cc = float(default_credits or 0.0)
+    return round(cc * _kie_credit_usd(), 4)
+# IDs VALIDADOS ao vivo (createTask aceita o model name). NÃO adicionar sem validar (queima crédito).
+# (model_id real, nome amigável, tier top|medium|fast)
+CURATED_IMAGE_KIE = [
+    # (model_id REAL validado ao vivo no createTask, descrição clara p/ o usuário escolher, tier)
+    # 'chatgpt/*' NÃO usa o market de jobs: vai pelo endpoint dedicado /gpt4o-image (generate_image_kie_gpt)
+    ("chatgpt/gpt-5.4-image-2",             "GPT-5.4 Image 2 · ChatGPT — arte completa, texto perfeito, aceita referências", "top"),
+    ("bytedance/seedream-v4-text-to-image", "Seedream 4.0 · ByteDance — fotorrealismo forte, ótimo p/ pessoa e produto", "top"),
+    ("google/imagen4-ultra",                "Imagen 4 Ultra · Google — máxima qualidade e realismo fotográfico",       "top"),
+    ("google/nano-banana",                  "Nano-Banana · Gemini 2.5 Flash — versátil e rápido, bom em cenas com gente","top"),
+    ("google/imagen4",                      "Imagen 4 · Google — realismo alto, equilíbrio qualidade/custo",           "medium"),
+    ("qwen2/text-to-image",                 "Qwen-Image 2 · Alibaba — forte em texto/tipografia dentro da arte",       "medium"),
+    ("grok-imagine/text-to-image",          "Grok Imagine · xAI — estilo criativo/meme, cenas ousadas",               "medium"),
+    ("google/imagen4-fast",                 "Imagen 4 Fast · Google — o mais barato/rápido da linha Imagen",           "fast"),
+    ("qwen/text-to-image",                  "Qwen-Image · Alibaba — barato e rápido p/ rascunho",                      "fast"),
+]
+_KIE_IMG_BY_MODEL = {m: (m, n, t) for (m, n, t) in CURATED_IMAGE_KIE}
+# Seedream usa image_size em ENUM (não WxH). Mapeia o aspecto do nosso size pro enum mais próximo.
+_KIE_SEEDREAM_SIZE = {"1:1": "square_hd", "2:3": "portrait_4_3", "3:4": "portrait_4_3", "9:16": "portrait_16_9",
+                      "3:2": "landscape_4_3", "4:3": "landscape_4_3", "16:9": "landscape_16_9"}
+
+
+def _kie_image_aspect(size: str) -> str:
+    try:
+        import math as _m
+        w, h = (size or "1024x1024").lower().split("x"); w, h = int(w), int(h)
+        g = _m.gcd(w, h) or 1
+        return f"{w // g}:{h // g}"
+    except Exception:
+        return "1:1"
+
+
+def _kie_aspect_for(model: str, size: str) -> str:
+    """aspect_ratio no ENUM aceito por cada família (validado ao vivo: imagen4/qwen2 usam 3:4;
+    grok-imagine rejeita 3:4 e usa 2:3 no retrato)."""
+    try:
+        w, h = (size or "1024x1024").lower().split("x"); r = int(w) / max(1, int(h))
+    except Exception:
+        r = 1.0
+    if 0.97 <= r <= 1.03:
+        bucket = "square"
+    elif r < 0.65:
+        bucket = "tall"
+    elif r < 0.97:
+        bucket = "portrait"
+    elif r > 1.5:
+        bucket = "wide"
+    else:
+        bucket = "landscape"
+    if "grok-imagine" in model.lower():
+        return {"square": "1:1", "tall": "9:16", "portrait": "2:3", "wide": "16:9", "landscape": "3:2"}[bucket]
+    return {"square": "1:1", "tall": "9:16", "portrait": "3:4", "wide": "16:9", "landscape": "4:3"}[bucket]
+
+
+def _kie_build_image_input(model: str, prompt: str, size: str = "1024x1024") -> Dict[str, Any]:
+    """input do createTask p/ IMAGEM (schema varia por família — todos validados ao vivo)."""
+    p = (prompt or "")[:4000]
+    ml = model.lower()
+    if "seedream" in ml:                                   # Seedream: image_size em ENUM + resolução
+        ar = _kie_image_aspect(size)
+        return {"prompt": p, "image_size": _KIE_SEEDREAM_SIZE.get(ar, "portrait_4_3"),
+                "image_resolution": "2K", "max_images": 1}
+    if any(x in ml for x in ("imagen4", "grok-imagine", "qwen2")):   # exigem aspect_ratio
+        return {"prompt": p, "aspect_ratio": _kie_aspect_for(model, size)}
+    # google/nano-banana e qwen/text-to-image: só prompt (validado).
+    return {"prompt": p}
+
+
+def _kie_create_image_task(model: str, prompt: str, size: str = "1024x1024") -> str:
+    key = _kie_key()
+    if not key:
+        raise ValueError("kie.api_key não configurada.")
+    body = {"model": model, "input": _kie_build_image_input(model, prompt, size)}
+    with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+        r = c.post(_KIE_BASE + "/jobs/createTask",
+                   headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=body)
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    if r.status_code >= 400 or (j.get("code") not in (200, None)):
+        raise ValueError(f"kie image createTask falhou (HTTP {r.status_code}): {r.text[:300]}")
+    tid = (j.get("data") or {}).get("taskId") or (j.get("data") or {}).get("recordId")
+    if not tid:
+        raise ValueError(f"kie image sem taskId: {r.text[:200]}")
+    return tid
+
+
+def kie_image_models() -> List[Dict[str, Any]]:
+    """Catálogo de IMAGEM da kie.ai (text-to-image), tiers top/medium/fast. id 'kie:'. Custo em CRÉDITOS
+    (aprendido por modelo; default por tier). Sem chave → vazio (não quebra a UI)."""
+    if not _kie_key():
+        return []
+    out = []
+    cred_default = {"top": 6, "medium": 4, "fast": 2}      # estimativa inicial; real aprendido por uso
+    for i, (model, name, tier) in enumerate(CURATED_IMAGE_KIE):
+        try:
+            learned = get_setting("kie.credits." + model)
+        except Exception:
+            learned = None
+        credits = float(learned) if learned else float(cred_default.get(tier, 4))
+        out.append({"id": "kie:" + model, "name": f"{name} · {_KIE_TIER_LABEL[tier]}",
+                    "quality": _KIE_TIER_LABEL[tier], "tier": tier,
+                    "credits": credits, "credits_learned": bool(learned), "price_per_image": 0.0,
+                    "rank": _KIE_TIER_RANK[tier] * 100 + i, "price_source": "credits"})
+    return out
+
+
+def generate_image_kie(model_id: str, prompt: str, size: str = "1024x1024") -> Tuple[bytes, float]:
+    """Gera imagem via kie (createTask → poll recordInfo → baixa). Retorna (bytes, 0.0): custo é em CRÉDITOS
+    (aprende kie.credits.<model> do creditsConsumed). model_id pode vir com prefixo 'kie:'."""
+    import time as _t
+    real = model_id[len("kie:"):] if str(model_id).lower().startswith("kie:") else model_id
+    if real.startswith("chatgpt/"):                        # GPT image tem endpoint próprio na kie (não é o market)
+        return generate_image_kie_gpt(prompt, size)
+    tid = _kie_create_image_task(real, prompt, size)
+    _kie_ledger(tid, real, "jobs")
+    last: Dict[str, Any] = {}
+    poll_errors = 0
+    completed_without_url = 0
+    for _ in range(120):                                   # ~6min (fila da conta kie estica com paralelismo)
+        _t.sleep(3)
+        d = _kie_record(tid)
+        if d.get("_poll_error"):
+            poll_errors += 1
+            if poll_errors >= 10:
+                raise ValueError("kie image: consulta de status indisponível: " + str(d["_poll_error"])[:160])
+            continue
+        poll_errors = 0
+        st = (d.get("state") or "").lower()
+        if st == "success":
+            last = d
+            if _kie_result_urls(d):
+                break
+            # Às vezes o estado vira success alguns segundos antes de o CDN aparecer.
+            completed_without_url += 1
+            if completed_without_url >= 3:
+                raise ValueError("kie image concluiu, mas não publicou a URL do resultado.")
+            continue
+        if st == "fail":
+            raise ValueError("kie image falhou: " + str(d.get("failMsg") or "")[:200])
+    cost = _kie_cost_usd(real, last.get("creditsConsumed"), 4)
+    urls = _kie_result_urls(last)
+    if not urls:
+        raise ValueError("kie image sem resultUrls (não concluiu a tempo).")
+    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+        rr = c.get(urls[0])
+    if rr.status_code >= 400 or not rr.content:
+        raise ValueError(f"kie image: falha ao baixar (HTTP {rr.status_code})")
+    return rr.content, cost
+
+
+_KIE_GPT_BASE = "https://api.kie.ai/api/v1/gpt4o-image"
+
+
+def _kie_ledger(task_id: str, model: str, endpoint: str = "jobs"):
+    """LEDGER DURÁVEL de tasks kie (dinheiro do cliente): grava o taskId EM DISCO no momento da criação —
+    se o processo morrer/travar/reiniciar antes de baixar o resultado, /api/posts/kie-recover repesca
+    o que JÁ FOI PAGO. Nunca mais 'gerou na kie e sumiu na plataforma'."""
+    try:
+        import json as _json
+        import time as _tm
+        p = os.path.join(os.environ.get("ADULT_META_MEDIA_ROOT", "/media"), "_tmp", "kie_tasks.jsonl")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a") as f:
+            f.write(_json.dumps({"ts": _tm.time(), "task_id": task_id, "model": model, "endpoint": endpoint}) + "\n")
+    except Exception:
+        pass
+
+
+def kie_fetch_result(task_id: str) -> Optional[bytes]:
+    """Busca o RESULTADO de uma task kie JÁ CRIADA (market/jobs OU gpt4o-image) e baixa a 1ª imagem.
+    None = sem resultado ainda. Usado pelo resgate (/kie-recover)."""
+    key = _kie_key()
+    if not (key and task_id):
+        return None
+    url = None
+    try:
+        d = _kie_record(task_id)
+        if (d.get("state") or "").lower() == "success":
+            u = _kie_result_urls(d)
+            url = u[0] if u else None
+    except Exception:
+        pass
+    if not url:
+        try:
+            with httpx.Client(timeout=30) as c:
+                d2 = ((c.get(_KIE_GPT_BASE + "/record-info", params={"taskId": task_id},
+                             headers={"Authorization": "Bearer " + key}).json() or {}).get("data") or {})
+            if (d2.get("status") or "").upper() == "SUCCESS":
+                url = ((d2.get("response") or {}).get("resultUrls") or [None])[0]
+        except Exception:
+            pass
+    if not url:
+        return None
+    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+        rr = c.get(url)
+    return rr.content if (rr.status_code < 400 and rr.content) else None
+
+
+def generate_image_kie_gpt(prompt: str, size: str = "1024x1536", ref_urls: Optional[List[str]] = None) -> Tuple[bytes, float]:
+    """GPT Image via kie (endpoint dedicado /gpt4o-image, pago nos MESMOS créditos kie). size vira ratio
+    ('2:3'/'3:2'/'1:1'). ref_urls (PÚBLICAS) entram como filesUrl → serve o Estúdio IA com referências.
+    Validado ao vivo 2026-07-17 (t2i e com filesUrl). Retorna (png, 0.0) — custo em créditos."""
+    import time as _t
+    key = _kie_key()
+    if not key:
+        raise ValueError("kie não configurado (token).")
+    try:
+        w, h = (int(x) for x in str(size).lower().split("x"))
+    except Exception:
+        w, h = 1024, 1536
+    ratio = "2:3" if h > w else ("3:2" if w > h else "1:1")
+    body: Dict[str, Any] = {"prompt": prompt[:4000], "size": ratio}
+    urls = [u for u in (ref_urls or []) if u and str(u).startswith("http")]
+    if urls:
+        body["filesUrl"] = urls[:5]
+    H = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+        r = c.post(_KIE_GPT_BASE + "/generate", headers=H, json=body)
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    tid = (j.get("data") or {}).get("taskId")
+    if not tid:
+        raise ValueError(f"kie gpt-image createTask falhou (HTTP {r.status_code}): {r.text[:180]}")
+    _kie_ledger(tid, "chatgpt/gpt-5.4-image-2", "gpt4o-image")
+    out_url, _cc = None, None
+    completed_without_url = 0
+    for _ in range(150):                                   # ~10min: com telas em PARALELO a fila da conta kie
+        _t.sleep(4)                                        # estica a task — desistir cedo = pagar e jogar fora
+        try:
+            with httpx.Client(timeout=30) as c:
+                resp = c.get(_KIE_GPT_BASE + "/record-info", params={"taskId": tid}, headers=H)
+                d = ((resp.json() or {}).get("data") or {})
+        except Exception:
+            continue
+        st = (d.get("status") or "").upper()
+        if st == "SUCCESS":
+            out_url = (_kie_result_urls(d) or [None])[0]
+            _cc = d.get("creditsConsumed") or d.get("creditsUsed")
+            if out_url:
+                break
+            completed_without_url += 1
+            if completed_without_url >= 3:
+                raise ValueError("kie gpt-image concluiu, mas não publicou a URL do resultado.")
+            continue
+        if (d.get("errorMessage") or "").strip() or (st and st not in ("GENERATING", "QUEUING")):
+            raise ValueError("kie gpt-image falhou: " + (str(d.get("errorMessage") or st))[:150])
+    if not out_url:
+        raise ValueError("kie gpt-image sem resultado (timeout).")
+    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+        rr = c.get(out_url)
+    if rr.status_code >= 400 or not rr.content:
+        raise ValueError(f"kie gpt-image download falhou (HTTP {rr.status_code})")
+    return rr.content, _kie_cost_usd("chatgpt/gpt-5.4-image-2", _cc, 8)
 
 
 # === VÍDEO via gateway OmniRoute (assinaturas do user: GPT/Sora, Gemini/Veo, Antigravity) — custo ~$0.
@@ -1078,7 +1458,7 @@ def web_research(query: str, max_tokens: int = 700) -> str:
             with httpx.Client(timeout=httpx.Timeout(14.0, connect=6.0)) as c:
                 r = c.post(base + "/chat/completions",
                            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-                           json={"model": model, "max_tokens": max_tokens, "temperature": 0.2,
+                           json={"model": model, "stream": False, "max_tokens": max_tokens, "temperature": 0.2,
                                  "messages": [{"role": "system", "content": sysmsg},
                                               {"role": "user", "content": query[:1500]}]})
             if r.status_code >= 400:
@@ -1119,7 +1499,7 @@ def refresh_web_briefs(company_id: str, prods: List[Dict[str, Any]], theme: str 
             if not name:
                 continue
             q = ("Recursos, funções e novidades REAIS e ATUAIS de " + name
-                 + " (app/SVA para provedores de internet). Liste fatos concretos, específicos e recentes, com números quando houver.")
+                 + " (produto/serviço digital). Liste fatos concretos, específicos e recentes, com números quando houver.")
             txt = web_research(q, 700)
             if txt:
                 product_update(p.get("id"), {"web_brief": ("[" + name + "] " + txt)[:6000],
@@ -1220,6 +1600,220 @@ def generate_image_with_person(person_bytes: bytes, prompt: str, model: str = "g
     raise ValueError("nano-banana edit não retornou imagem.")
 
 
+# ── ESTÚDIO IA (reference_full): catálogo de modelos ESCOLHÍVEIS por provedor ──────────────────────
+# Todos aceitam REFERÊNCIAS (menos o omni text-to-image, marcado). O admin escolhe onde TEM saldo;
+# se o escolhido falhar (ex.: conta sem crédito), o motor CAI sozinho pro próximo provedor com chave.
+IMAGE_REF_MODELS: List[Dict[str, Any]] = [
+    {"id": "openai/gpt-5.4-image-2",                  "name": "gpt-5.4-image-2 — referências fiéis",         "provider": "openrouter", "note": "pago (OpenRouter)"},
+    {"id": "kie:google/nano-banana-edit",             "name": "nano-banana-edit — ótimo com texto/realismo", "provider": "kie",        "note": "créditos kie"},
+    {"id": "kie:bytedance/seedream-v4-edit",          "name": "seedream-v4-edit — fotorrealista",            "provider": "kie",        "note": "créditos kie"},
+    {"id": "cometapi:gemini-3.1-flash-image-preview", "name": "gemini-flash (CometAPI)",                     "provider": "cometapi",   "note": "pago (CometAPI)"},
+    {"id": "omni:antigravity/gemini-3.1-flash-image", "name": "gemini-flash (OmniRoute) — SEM referências",  "provider": "omniroute",  "note": "grátis · não usa referências"},
+]
+
+
+def image_ref_models() -> List[Dict[str, Any]]:
+    return [dict(m) for m in IMAGE_REF_MODELS]
+
+
+def get_image_ref_model() -> str:
+    """Modelo do ESTÚDIO IA (reference_full) — CONFIGURÁVEL. Default = OpenRouter gpt-5.4-image-2."""
+    return (get_setting("image_ref.model") or "openai/gpt-5.4-image-2").strip()
+
+
+def _iref_provider(model: str) -> str:
+    m = (model or "").lower()
+    if m.startswith("kie:chatgpt/"): return "kie_gpt"   # endpoint GPT da kie ≠ market (fallback entre eles é desejado)
+    if m.startswith("kie:"):      return "kie"
+    if m.startswith("cometapi:"): return "cometapi"
+    if m.startswith("omni:"):     return "omniroute"
+    return "openrouter"
+
+
+def _iref_openrouter(model: str, prompt: str, ref_images, size: str, quality: str) -> Tuple[bytes, Optional[float]]:
+    """Estúdio via OpenRouter /images: input_references tipado (dataURI). Retorna (png, custo)."""
+    import base64
+    key = _openrouter_key()
+    if not key:
+        raise ValueError("OpenRouter não configurado (token:openrouter).")
+    body: Dict[str, Any] = {"model": model, "prompt": prompt[:4000], "n": 1, "quality": quality, "size": size}
+    if ref_images:
+        body["input_references"] = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(b).decode()}}
+            for b in ref_images[:8] if b
+        ]
+    last_err = ""
+    for _att in range(2):
+        try:
+            with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as c:
+                r = c.post("https://openrouter.ai/api/v1/images",
+                           headers={"Authorization": f"Bearer {key}", "content-type": "application/json"}, json=body)
+            if r.status_code >= 400:
+                try:
+                    last_err = f"HTTP {r.status_code}: " + (r.json().get('error', {}).get('message') or r.text[:200])
+                except Exception:
+                    last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+                if r.status_code < 500 and r.status_code != 429:
+                    break
+                continue
+            d = r.json()
+            item = (d.get("data") or [{}])[0]
+            cost = _usage_cost(d) or None
+            if item.get("b64_json"):
+                return base64.b64decode(item["b64_json"]), cost
+            url = item.get("image_url") or item.get("url")
+            if url:
+                with httpx.Client(timeout=60) as c:
+                    return c.get(url).content, cost
+            last_err = "resposta sem imagem"
+        except httpx.HTTPError as e:
+            last_err = f"rede/timeout: {str(e)[:120]}"
+    raise ValueError(f"OpenRouter: {last_err}")
+
+
+def _iref_kie_edit(model_id: str, prompt: str, ref_urls: Optional[List[str]]) -> Tuple[bytes, Optional[float]]:
+    """Estúdio via kie image-EDIT (nano-banana-edit / seedream-v4-edit): as REFERÊNCIAS entram como
+    image_urls (precisam ser PÚBLICAS — o kie baixa). Custo em CRÉDITOS kie → (png, 0.0)."""
+    import time as _t
+    key = _kie_key()
+    urls = [u for u in (ref_urls or []) if u and str(u).startswith("http")]
+    if not key:
+        raise ValueError("kie não configurado (token).")
+    if not urls:
+        raise ValueError("kie edit exige referências com URL pública.")
+    body = {"model": model_id, "input": {"prompt": prompt[:4000], "image_urls": urls[:5]}}
+    with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+        r = c.post(_KIE_BASE + "/jobs/createTask",
+                   headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=body)
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    tid = (j.get("data") or {}).get("taskId")
+    if not tid:
+        raise ValueError(f"kie createTask falhou (HTTP {r.status_code}): {r.text[:180]}")
+    _kie_ledger(tid, model_id, "jobs")
+    last, done = {}, False
+    for _ in range(200):                                   # ~10min: fila da conta kie estica com telas em paralelo
+        _t.sleep(3)
+        d = _kie_record(tid)
+        st = (d.get("state") or "").lower()
+        if st == "success":
+            last, done = d, True
+            break
+        if st == "fail":
+            raise ValueError("kie edit falhou: " + str(d.get("failMsg") or "")[:150])
+    out = _kie_result_urls(last) if done else []
+    if not out:
+        raise ValueError("kie edit sem resultado (timeout).")
+    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+        rr = c.get(out[0])
+    if rr.status_code >= 400 or not rr.content:
+        raise ValueError(f"kie edit download falhou (HTTP {rr.status_code})")
+    return rr.content, _kie_cost_usd(model_id, last.get("creditsConsumed"), 4)
+
+
+def generate_image_reference_full(prompt: str, ref_images: Optional[List[bytes]] = None,
+                                  size: str = "1024x1536", model: Optional[str] = None,
+                                  quality: str = "medium",
+                                  ref_urls: Optional[List[str]] = None) -> Tuple[bytes, Optional[float]]:
+    """ESTÚDIO IA (reference_full): a IA arquiteta a ARTE INTEIRA guiada por REFERÊNCIAS reais (versões da
+    logo, artes de referência, foto do influencer, slide anterior). Modelo CONFIGURÁVEL (setting
+    image_ref.model). Roteia por PROVEDOR e, se o escolhido falhar (ex.: conta sem saldo), CAI sozinho pro
+    próximo provedor com chave — nunca fica preso a um só modelo. Retorna (png, custo)."""
+    chosen = (model or get_image_ref_model()).strip()
+    # cadeia: ESCOLHIDO primeiro; depois os outros provedores com chave (rede de segurança anti-quebra)
+    chain = [chosen]
+    if _kie_key():        chain.append("kie:google/nano-banana-edit")
+    if _openrouter_key(): chain.append("openai/gpt-5.4-image-2")
+    if _cometapi_key():   chain.append("cometapi:gemini-3.1-flash-image-preview")
+    if _omniroute_key():  chain.append("omni:antigravity/gemini-3.1-flash-image")
+    seen, ordered = set(), []
+    for mid in chain:                                      # dedup por MODELO (não por provedor): modelo quebrado
+        if mid in seen:                                    # ≠ provedor morto — ex.: seedream-edit falhando não pode
+            continue                                       # descartar o nano-banana como reserva do MESMO kie
+        seen.add(mid); ordered.append(mid)
+    errs = []
+    for mid in ordered:
+        prov = _iref_provider(mid)
+        try:
+            if prov == "kie_gpt":
+                return generate_image_kie_gpt(prompt, size, ref_urls)
+            if prov == "kie":
+                return _iref_kie_edit(mid.split(":", 1)[1], prompt, ref_urls)
+            if prov == "cometapi":
+                base = next((b for b in (ref_images or []) if b), None)
+                if not base:
+                    raise ValueError("cometapi exige ao menos 1 referência em bytes.")
+                return generate_image_with_person(base, prompt, mid.split(":", 1)[1])
+            if prov == "omniroute":
+                return generate_image_omniroute(mid.split(":", 1)[1], prompt, size)
+            return _iref_openrouter(mid, prompt, ref_images, size, quality)   # openrouter (default)
+        except Exception as e:
+            errs.append(f"{prov}: {str(e)[:110]}")
+            continue
+    raise ValueError("Estúdio IA falhou em todos os provedores (" + " | ".join(errs) + ")")
+
+
+def generate_image_person_kie(person_url: str, prompt: str, model: str = "google/nano-banana-edit") -> Tuple[bytes, float]:
+    """COMPÕE a pessoa real (foto PÚBLICA do influencer) numa cena via kie image-EDIT (nano-banana-edit /
+    seedream-v4-edit). Preserva rosto/expressão (é edição da foto, não redesenho). person_url TEM que ser
+    público (o kie baixa). Custo em CRÉDITOS kie → retorna (png, 0.0). Levanta em erro (chamador faz fallback)."""
+    import time as _t
+    key = _kie_key()
+    if not key or not person_url:
+        raise ValueError("kie/URL da foto ausente.")
+    body = {"model": model, "input": {"prompt": prompt[:4000], "image_urls": [person_url]}}
+    with httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0)) as c:
+        r = c.post(_KIE_BASE + "/jobs/createTask",
+                   headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=body)
+    j = {}
+    try:
+        j = r.json()
+    except Exception:
+        pass
+    tid = (j.get("data") or {}).get("taskId")
+    if not tid:
+        raise ValueError(f"kie edit createTask falhou (HTTP {r.status_code}): {r.text[:180]}")
+    last: Dict[str, Any] = {}
+    done = False
+    for _ in range(90):                                    # ~4.5min: edit (nano-banana) varia bastante (30s–3min)
+        _t.sleep(3)
+        d = _kie_record(tid)
+        st = (d.get("state") or "").lower()
+        if st == "success":
+            last = d
+            done = True
+            break
+        if st == "fail":
+            raise ValueError("kie edit falhou: " + str(d.get("failMsg") or "")[:150])
+    urls = _kie_result_urls(last) if done else []
+    if not urls:
+        raise ValueError("kie edit sem resultado (não concluiu a tempo).")
+    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+        rr = c.get(urls[0])
+    if rr.status_code >= 400 or not rr.content:
+        raise ValueError(f"kie edit download falhou (HTTP {rr.status_code})")
+    return rr.content, _kie_cost_usd(model, last.get("creditsConsumed"), 4)
+
+
+def compose_person_scene(person_bytes: bytes, prompt: str, person_url: str = "") -> Tuple[bytes, float]:
+    """Compõe a pessoa REAL do influencer numa cena, preservando rosto. Usa o provedor que FUNCIONA:
+    kie image-edit (foto pública, créditos) → CometAPI nano-banana (bytes). Como o CometAPI pode estar
+    SEM SALDO, o kie é o caminho primário quando há URL pública."""
+    errs = []
+    if person_url and _kie_key():
+        try:
+            return generate_image_person_kie(person_url, prompt)
+        except Exception as e:
+            errs.append("kie: " + str(e)[:90])
+    try:
+        return generate_image_with_person(person_bytes, prompt)
+    except Exception as e:
+        errs.append("comet: " + str(e)[:90])
+    raise ValueError("compose_person falhou (" + " | ".join(errs) + ")")
+
+
 def verify_same_person(ref_bytes: bytes, gen_bytes: bytes):
     """Confere por VISÃO (gpt-4o) se a pessoa da imagem GERADA é a MESMA da foto de referência.
     Retorna (is_same: bool, custo). Em erro de API → (True, 0) — não regenera à toa quando a visão cai."""
@@ -1239,16 +1833,18 @@ def verify_same_person(ref_bytes: bytes, gen_bytes: bytes):
              {"type": "image_url", "image_url": {"url": _thumb(ref_bytes)}},
              {"type": "image_url", "image_url": {"url": _thumb(gen_bytes)}}]
     chain = []
-    if _cometapi_key():
-        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
-    if _openrouter_key():
+    if _omniroute_key():    # ASSINATURA (custo ~$0) PRIMEIRO — visão validada: Claude Haiku responde em ~1s
+        chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))
+    if _openrouter_key():   # pago, só fallback
         chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    if _cometapi_key():     # último recurso (sem saldo hoje)
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
     for base, key, model in chain:
         try:
             with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
                 r = c.post(base + "/chat/completions",
                            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-                           json={"model": model, "max_tokens": 4, "temperature": 0, "messages": [{"role": "user", "content": parts}]})
+                           json={"model": model, "stream": False, "max_tokens": 4, "temperature": 0, "messages": [{"role": "user", "content": parts}]})
             if r.status_code >= 400:
                 continue
             t = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip().upper()
@@ -1287,15 +1883,17 @@ def pick_influencer_photo(photos, headline: str = "", slide_type: str = "cover",
     for b in photos:
         parts.append({"type": "image_url", "image_url": {"url": _thumb(b)}})
     chain = []
-    if _cometapi_key():
-        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
-    if _openrouter_key():
+    if _omniroute_key():    # ASSINATURA (custo ~$0) PRIMEIRO — visão validada: Claude Haiku responde em ~1s
+        chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))
+    if _openrouter_key():   # pago, só fallback
         chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    if _cometapi_key():     # último recurso (sem saldo hoje)
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
     for base, key, model in chain:
         try:
             with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
                 r = c.post(base + "/chat/completions", headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-                           json={"model": model, "max_tokens": 4, "temperature": 0, "messages": [{"role": "user", "content": parts}]})
+                           json={"model": model, "stream": False, "max_tokens": 4, "temperature": 0, "messages": [{"role": "user", "content": parts}]})
             if r.status_code >= 400:
                 continue
             t = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "")
@@ -1512,55 +2110,80 @@ def piapi_image_models() -> List[Dict[str, Any]]:
 
 
 def generate_image_openrouter(model: str, prompt: str, size: str = "1024x1024", ref_images: Optional[List[bytes]] = None):
-    """Generate via OpenRouter Image API. Returns (png_bytes, cost_usd)."""
+    """Generate via OpenRouter Image API. Returns (png_bytes, cost_usd).
+
+    Payload compat: modelos diferem no que aceitam. Alguns preferem aspect_ratio+
+    resolution; outros (seedream-4.5/doubao) EXIGEM um `size` grande em pixel
+    (>= 3.686.400 px) e rejeitam aspecto pequeno. Em vez de morrer no 1º HTTP 400
+    de schema, escalonamos o payload: (1) aspect_ratio+resolution → (2) size grande
+    no mesmo aspecto → (3) só model+prompt (default do modelo). Só troca de variante
+    em erro de schema (4xx); 5xx/429 repete a mesma variante.
+    """
     import base64
+    import math as _m
+    from math import gcd
     key = _openrouter_key()
     if not key:
         raise ValueError("OpenRouter não configurado (token:openrouter).")
-    body: Dict[str, Any] = {"model": model, "prompt": prompt[:4000], "n": 1}
-    if size and "x" in size:
-        try:
-            from math import gcd
-            w, h = [int(v) for v in size.split("x")[:2]]
-            g = gcd(w, h) or 1
-            body["aspect_ratio"] = f"{w // g}:{h // g}"          # ex.: 1080x1350 -> "4:5"
-            body["resolution"] = "2K" if max(w, h) >= 1200 else "1K"
-            # NÃO enviar size em pixel: vários modelos (riverflow) rejeitam size+aspect_ratio juntos.
-        except Exception:
-            pass
+
+    base_body: Dict[str, Any] = {"model": model, "prompt": prompt[:4000], "n": 1}
     if ref_images:
-        body["input_references"] = [
+        base_body["input_references"] = [
             "data:image/png;base64," + base64.b64encode(b).decode() for b in ref_images[:3] if b
         ]
-    last_err = ""
-    for attempt in range(3):                       # retry: modelos 'pro' (riverflow) falham intermitente
+
+    variants: List[Dict[str, Any]] = []
+    w = h = 0
+    if size and "x" in size:
         try:
-            with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0)) as client:
-                res = client.post("https://openrouter.ai/api/v1/images",
-                                  headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
-                                  json=body)
-            if res.status_code >= 400:
-                try:
-                    detail = res.json().get("error", {}).get("message") or res.text[:300]
-                except Exception:
-                    detail = res.text[:300]
-                last_err = f"HTTP {res.status_code}: {detail}"
-                if res.status_code < 500 and res.status_code != 429:
-                    raise ValueError(f"Falha OpenRouter imagem ({last_err})")   # 4xx não repete
+            w, h = [int(v) for v in size.split("x")[:2]]
+        except Exception:
+            w = h = 0
+    if w > 0 and h > 0:
+        g = gcd(w, h) or 1
+        aspect = f"{w // g}:{h // g}"                              # ex.: 1080x1350 -> "4:5"
+        variants.append({**base_body, "aspect_ratio": aspect, "resolution": "2K" if max(w, h) >= 1200 else "1K"})
+        # size explícito escalado p/ >= 4.2MP no MESMO aspecto (satisfaz o mínimo do seedream/doubao)
+        MIN_PX = 4_200_000
+        scale = _m.sqrt(MIN_PX / float(w * h)) if (w * h) else 1.0
+        scale = max(1.0, scale)
+        bw = max(8, int(round((w * scale) / 8.0)) * 8)
+        bh = max(8, int(round((h * scale) / 8.0)) * 8)
+        variants.append({**base_body, "size": f"{bw}x{bh}"})
+    variants.append(dict(base_body))                              # último recurso: default do modelo
+
+    last_err = ""
+    for body in variants:
+        for attempt in range(2):                   # retry transitório dentro da mesma variante
+            try:
+                with httpx.Client(timeout=httpx.Timeout(240.0, connect=15.0)) as client:
+                    res = client.post("https://openrouter.ai/api/v1/images",
+                                      headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
+                                      json=body)
+                if res.status_code >= 400:
+                    try:
+                        detail = res.json().get("error", {}).get("message") or res.text[:300]
+                    except Exception:
+                        detail = res.text[:300]
+                    last_err = f"HTTP {res.status_code}: {detail}"
+                    if res.status_code >= 500 or res.status_code == 429:
+                        continue                   # transitório → repete MESMA variante
+                    break                          # 4xx schema → próxima variante (payload diferente)
+                d = res.json()
+                item = (d.get("data") or [{}])[0]
+                cost = _usage_cost(d) or None
+                if item.get("b64_json"):
+                    return base64.b64decode(item["b64_json"]), cost
+                url = item.get("image_url") or item.get("url")
+                if url:
+                    with httpx.Client(timeout=60) as client:
+                        return client.get(url).content, cost
+                last_err = "resposta sem imagem"
+                break                              # sem imagem → próxima variante
+            except httpx.HTTPError as e:
+                last_err = f"rede/timeout: {str(e)[:120]}"
                 continue
-            d = res.json()
-            item = (d.get("data") or [{}])[0]
-            cost = _usage_cost(d) or None
-            if item.get("b64_json"):
-                return base64.b64decode(item["b64_json"]), cost
-            url = item.get("image_url") or item.get("url")
-            if url:
-                with httpx.Client(timeout=60) as client:
-                    return client.get(url).content, cost
-            last_err = "resposta sem imagem"
-        except httpx.HTTPError as e:
-            last_err = f"rede/timeout: {str(e)[:120]}"
-    raise ValueError(f"Falha OpenRouter imagem após 3 tentativas ({last_err}).")
+    raise ValueError(f"Falha OpenRouter imagem ({last_err}).")
 
 
 def _reve_key() -> str:
@@ -1626,16 +2249,18 @@ def vision_clear_side(img_bytes: bytes):
     ]}]
     # TRANSBORDO do juiz: CometAPI → OpenRouter (mesmo gpt-4o). Um sem saldo → usa o outro.
     chain = []
-    if _cometapi_key():
-        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
-    if _openrouter_key():
+    if _omniroute_key():    # ASSINATURA (custo ~$0) PRIMEIRO — visão validada: Claude Haiku responde em ~1s
+        chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))
+    if _openrouter_key():   # pago, só fallback
         chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    if _cometapi_key():     # último recurso (sem saldo hoje)
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
     for base, key, model in chain:
         try:
             with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
                 r = c.post(base + "/chat/completions",
                            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-                           json={"model": model, "max_tokens": 4, "temperature": 0, "messages": msgs})
+                           json={"model": model, "stream": False, "max_tokens": 4, "temperature": 0, "messages": msgs})
             if r.status_code >= 400:
                 continue   # provedor sem saldo/erro → tenta o próximo da cadeia
             txt = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip().lower()
@@ -1645,6 +2270,337 @@ def vision_clear_side(img_bytes: bytes):
         except Exception:
             continue
     return "", 0.0
+
+
+def vision_read_text(img_bytes: bytes) -> Tuple[str, float]:
+    """JUIZ DE TEXTO: transcreve VERBATIM todo o texto que a IA renderizou na arte (mesmo com erro), pra
+    conferir se saiu quebrado. Retorna (texto_lido, custo). Erro/sem imagem → ('', 0.0). Mesma cadeia de
+    visão do vision_clear_side (assinatura ~$0 primeiro)."""
+    import base64
+    if not img_bytes:
+        return "", 0.0
+    b64 = base64.b64encode(img_bytes).decode()
+    msgs = [{"role": "user", "content": [
+        {"type": "text", "text": ("Transcreva EXATAMENTE todo o texto escrito nesta imagem, palavra por palavra, "
+            "do jeito que está (mesmo com erro de ortografia ou letra faltando). NÃO descreva a imagem, NÃO "
+            "corrija nada, NÃO explique — responda só o texto visível, separando os blocos por espaço.")},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
+    ]}]
+    chain = []
+    if _omniroute_key():
+        chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))
+    if _openrouter_key():
+        chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    if _cometapi_key():
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
+    for base, key, model in chain:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
+                r = c.post(base + "/chat/completions",
+                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                           json={"model": model, "stream": False, "max_tokens": 400, "temperature": 0, "messages": msgs})
+            if r.status_code >= 400:
+                continue
+            txt = (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            _low = txt.lower()
+            if txt and not any(x in _low for x in (           # RECUSA do modelo ≠ transcrição → tenta o próximo
+                    "can't assist", "cannot assist", "can't help", "i'm sorry", "i am sorry",
+                    "unable to", "não posso", "nao posso", "desculpe")):
+                return txt, 0.004
+        except Exception:
+            continue
+    return "", 0.0
+
+
+def _norm_word(x: str) -> str:
+    """Normaliza p/ comparação: ascii minúsculo, só [a-z0-9] (foca no QUEBRADO, não no acento)."""
+    import re
+    import unicodedata
+    x = unicodedata.normalize("NFKD", x or "").encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "", x)
+
+
+def _expected_word_map(expected: List[str]) -> Dict[str, str]:
+    """Mapa palavra_normalizada → grafia ORIGINAL (com acento) do briefing."""
+    orig: Dict[str, str] = {}
+    for phrase in (expected or []):
+        for w in phrase.split():
+            wc = w.strip('.,:;!?"()«»–—')
+            k = _norm_word(wc)
+            if k and k not in orig:
+                orig[k] = wc
+    return orig
+
+
+def text_render_issues(rendered: str, expected: List[str]) -> List[str]:
+    """Palavras do BRIEFING (esperadas) que NÃO aparecem EXATAS na leitura da arte. SEM fuzzy de
+    aprovação: calibração real (v1.27.92→93) provou que erro PINTADO de 1 letra ('segurença',
+    'bacio', 'portóflio') cai na faixa 0.80-0.92 de similaridade — a MESMA do ruído de leitura do
+    OCR — então similaridade não separa os dois; quem separa é a arbitragem letra-a-letra
+    (judge_art_text). Fluxo contínuo cobre palavra que o leitor dividiu/colou ('bai xo').
+    Vazio = texto ok. `rendered` vazio (leitor falhou) → [] (quem decide é o judge)."""
+    import re
+    import unicodedata
+    if not (rendered or "").strip():
+        return []
+
+    def _n(x: str) -> str:
+        x = unicodedata.normalize("NFKD", x or "").encode("ascii", "ignore").decode().lower()
+        return re.sub(r"[^a-z0-9]+", " ", x)
+
+    toks = _n(rendered).split()
+    stream = "".join(toks)                          # fluxo sem espaços: acha palavra que o leitor dividiu/colou
+    miss, seen = [], set()
+    for phrase in (expected or []):
+        for w in _n(phrase).split():
+            if len(w) >= 5 and w not in seen:      # só palavras "de conteúdo" (>=5) — evita falso positivo em 'de/no/e'
+                seen.add(w)
+                if w not in stream:
+                    miss.append(w)
+    return miss
+
+
+def vision_spell_words(img_bytes: bytes, words: List[str]) -> Tuple[Dict[str, str], float]:
+    """ARBITRAGEM letra-a-letra: pra cada palavra SUSPEITA (OCR não achou exata), a visão copia COMO
+    ELA ESTÁ PINTADA na arte, letra por letra — e a comparação acontece em CÓDIGO. Transcrição livre
+    não serve: o modelo 'conserta' o typo ao ler ('entrenitemento'→'entretenimento') e aprova arte
+    quebrada. Retorna ({palavra_pedida: 'l-e-t-r-a-s' | 'AUSENTE'}, custo). {} = visão indisponível."""
+    import base64
+    import json as _json
+    import re as _re
+    if not (img_bytes and words):
+        return {}, 0.0
+    b64 = base64.b64encode(img_bytes).decode()
+    lista = "\n".join("- " + w for w in words[:8])
+    msgs = [{"role": "user", "content": [
+        {"type": "text", "text": (
+            "Isto é um TESTE DE ERRO DE PINTURA: as palavras da lista abaixo podem estar pintadas na arte "
+            "COM ERRO DE GRAFIA, e sua tarefa é COPIAR O ERRO — se você 'corrigir' a grafia, o teste "
+            "FALHA. Para CADA palavra da lista, encontre na arte a palavra IGUAL ou mais PARECIDA e copie "
+            "EXATAMENTE como está pintada, LETRA POR LETRA separadas por hífen (é PROIBIDO corrigir, "
+            "completar ou adivinhar). Se não existir nada parecido pintado, responda AUSENTE.\n"
+            "Responda SÓ um JSON, sem explicação: {\"palavra pedida\": \"l-e-t-r-a-s\" ou \"AUSENTE\"}.\n"
+            "Palavras:\n" + lista)},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
+    ]}]
+    chain = []
+    if _omniroute_key():    # ASSINATURA (custo ~$0) PRIMEIRO — visão validada: Claude Haiku responde em ~1s
+        chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))
+    if _openrouter_key():   # pago, só fallback
+        chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    if _cometapi_key():
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
+    for base, key, model in chain:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
+                r = c.post(base + "/chat/completions",
+                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                           json={"model": model, "stream": False, "max_tokens": 300, "temperature": 0, "messages": msgs})
+            if r.status_code >= 400:
+                continue
+            txt = (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            m = _re.search(r"\{.*\}", txt, _re.S)
+            if not m:
+                continue
+            try:
+                data = _json.loads(m.group(0))
+            except Exception:
+                continue
+            if isinstance(data, dict) and data:
+                out = {}
+                norm_map = {_norm_word(k): v for k, v in data.items() if isinstance(v, str)}
+                for w in words:
+                    v = data.get(w) or norm_map.get(_norm_word(w)) or ""
+                    out[w] = (v or "").strip()
+                return out, 0.004
+        except Exception:
+            continue
+    return {}, 0.0
+
+
+def judge_art_text(img_bytes: bytes, expected: List[str]) -> Tuple[List[str], float]:
+    """JUIZ DE TEXTO — 3 instâncias, FALHA FECHADA:
+    1ª OCR LOCAL (grátis, determinístico, nunca recusa): toda palavra EXATA → aprovado, custo 0.
+    2ª suspeita → ARBITRAGEM POR RECORTE (_ocr_crop_confirm, também local/determinística): recorta a
+       região da palavra, amplia 4x, relê. Releu exata → ruído de leitura, passa; diferente → QUEBROU.
+       Quem APROVA nunca é LLM (visão auto-corrige typo — provado em prod na v1.27.93).
+    3ª só palavra que o OCR NEM VIU (região estilizada) → visão soletra e o código compara.
+    Visão indisponível/recusou → suspeita CONTA COMO QUEBRA (regenera) — o juiz NUNCA passa cego.
+    Tesseract indisponível → transcrição livre da visão decide (legado). Retorna (quebradas, custo)."""
+    if not expected:
+        return [], 0.0
+    ocr, entries, variants = _ocr_scan(img_bytes, expect=expected)
+    if not ocr:                                     # sem tesseract → melhor esforço com visão livre
+        rendered, vc = vision_read_text(img_bytes)
+        return text_render_issues(rendered, expected), vc
+    suspects = text_render_issues(ocr, expected)
+    if not suspects:
+        return [], 0.0
+    orig = _expected_word_map(expected)
+    broken, unknown = [], []
+    for w in suspects:
+        verdict = _ocr_crop_confirm(entries, variants, w)
+        if verdict == "ok":
+            continue
+        (broken if verdict == "broken" else unknown).append(w)
+    vc = 0.0
+    if unknown:
+        spelled, vc = vision_spell_words(img_bytes, [orig.get(w, w) for w in unknown])
+        for w in unknown:
+            got = ((spelled.get(orig.get(w, w)) or spelled.get(w) or "") if spelled else "").strip()
+            if (not got) or got.upper().startswith("AUSENTE") \
+                    or _norm_word(got.replace("-", "").replace(" ", "")) != w:
+                broken.append(w)                    # inclui visão fora do ar → FALHA FECHADA
+    return broken, vc
+
+
+_OCR_GATE = None
+
+
+def _ocr_gate():
+    """PORTÃO GLOBAL de OCR: com telas em paralelo, N juízes × 4 workers = 16 tesseracts nos 8 núcleos →
+    CPU 100% e TUDO rasteja (arte pronta da kie ficava minutos presa no juiz). Máx. simultâneo no
+    processo inteiro = metade dos núcleos (2–4); os juízes se revezam e cada passe volta a ser rápido."""
+    global _OCR_GATE
+    if _OCR_GATE is None:
+        import os as _os
+        import threading
+        _OCR_GATE = threading.BoundedSemaphore(max(2, min(4, (_os.cpu_count() or 4) // 2)))
+    return _OCR_GATE
+
+
+def _ocr_scan(img_bytes: bytes, min_conf: float = 40.0, expect: Optional[List[str]] = None):
+    """Varre a arte com Tesseract em MÚLTIPLOS pré-processamentos (cinza, invertido, binarizados 150/200
+    ± invertidos, canais R/B, upscale) — texto sobre foto/pílula colorida some num passe único.
+    VELOCIDADE: os passes rodam em PARALELO (tesseract é subprocesso, 4 workers) e há SAÍDA RÁPIDA —
+    se os 2 passes baratos já leram TODAS as palavras esperadas (`expect`), não roda o resto (arte
+    limpa julga em segundos; antes eram ~30-40s por arte). Devolve (tokens_str,
+    entradas[(texto, conf, box, idx_variante)], variantes). ('', [], []) = tesseract indisponível."""
+    if not img_bytes:
+        return "", [], []
+    try:
+        import io as _io
+        import pytesseract
+        from concurrent.futures import ThreadPoolExecutor
+        from PIL import Image, ImageOps
+        rgb = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+        base = rgb.convert("L")
+        _r, _g, _b2 = rgb.split()
+        _bins = {}
+        for th in (150, 200):
+            _bins[th] = base.point(lambda p, t=th: 255 if p > t else 0)
+        # ORDEM POR UTILIDADE (o exit antecipado corta a cauda): cinza/invertido leem a maior parte;
+        # binarizado 200 pega texto branco em pílula colorida; canal AZUL pega texto laranja (vira preto,
+        # contraste alto — no cinza some); o resto é cauda de recall.
+        variants = [base, ImageOps.invert(base), _bins[200], ImageOps.invert(_bins[200]),
+                    _b2, ImageOps.invert(_b2), _bins[150], ImageOps.invert(_bins[150]), _r]
+        # (sem passe 2x: tesseract em 2048x3072 é brutal em CPU e toda quebra real foi pega em resolução nativa)
+
+        def _pass(v):
+            for lang in ("por", None):              # só 'por' (metade do tempo de 'por+eng'; lê nomes EN bem)
+                try:
+                    kw = {"lang": lang} if lang else {}
+                    with _ocr_gate():               # portão GLOBAL: não satura a CPU com juízes paralelos
+                        return pytesseract.image_to_data(v, output_type=pytesseract.Output.DICT, **kw)
+                except Exception:
+                    continue
+            return None
+
+        toks: set = set()
+        entries = []
+
+        def _collect(vi, data):
+            if not data:
+                return
+            for j in range(len(data.get("text") or [])):
+                t = (data["text"][j] or "").strip()
+                try:
+                    conf = float(data["conf"][j])
+                except Exception:
+                    conf = -1.0
+                if t and conf >= min_conf:
+                    toks.add(t)
+                    entries.append((t, conf, (data["left"][j], data["top"][j],
+                                              data["width"][j], data["height"][j]), vi))
+
+        from concurrent.futures import as_completed
+        ex = ThreadPoolExecutor(max_workers=4)
+        try:
+            futs = {ex.submit(_pass, v): vi for vi, v in enumerate(variants)}
+            for f in as_completed(futs):
+                _collect(futs[f], f.result())
+                if expect and toks and not text_render_issues(" ".join(toks), expect):
+                    break                           # SAÍDA RÁPIDA: já leu TODAS as palavras esperadas
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+        return " ".join(sorted(toks)), entries, variants
+    except Exception:
+        return "", [], []
+
+
+def ocr_read_text(img_bytes: bytes, min_conf: float = 40.0) -> str:
+    """JUIZ OCR LOCAL (Tesseract): lê o texto renderizado na arte SEM IA de visão — grátis, determinístico,
+    NUNCA recusa e NUNCA fica sem saldo. Junta os tokens de todos os passes (o juiz só checa PRESENÇA)."""
+    return _ocr_scan(img_bytes, min_conf)[0]
+
+
+def _ocr_crop_confirm(entries, variants, word_norm: str) -> str:
+    """ARBITRAGEM DETERMINÍSTICA — SEM IA, imune a auto-correção (calibração v1.27.93: a visão, mesmo
+    soletrando letra a letra, 'conserta' o typo pintado e aprova arte quebrada; LLM não pode ser o
+    árbitro que APROVA). Pega os tokens do OCR mais parecidos com a palavra suspeita, RECORTA a região
+    na arte, amplia 4x e RELÊ:
+      releu a palavra EXATA → 'ok' (era ruído de leitura do passe cheio);
+      releu e continua diferente → 'broken' (está pintada errada MESMO);
+      nenhum token parecido (OCR cego ali, ex.: pílula estilizada) → 'unknown' (visão decide)."""
+    from difflib import SequenceMatcher
+    import pytesseract
+    from PIL import ImageOps
+    cands = []
+    for t, conf, box, vi in entries:
+        r = SequenceMatcher(None, _norm_word(t), word_norm).ratio()
+        if r >= 0.7:                                 # só candidato FORTE (versão mutilada da palavra) pode
+            cands.append((r, box, vi))               # condenar; parecido-fraco = outra palavra/região errada
+    if not cands:
+        return "unknown"                             # OCR não viu a palavra nem mutilada → visão decide
+    cands.sort(key=lambda x: -x[0])
+    for _r, (l, top, w, h), vi in cands[:3]:
+        img = variants[vi]
+        pad = max(8, int(h * 1.2))
+        crop = img.crop((max(0, l - pad), max(0, top - int(h * 0.6)),
+                         min(img.width, l + w + pad), min(img.height, top + h + int(h * 0.6))))
+        if crop.width < 4 or crop.height < 4:
+            continue
+        crop = crop.resize((crop.width * 4, crop.height * 4))
+        for c in (crop, ImageOps.invert(crop)):
+            txt = ""
+            for lang in ("por", None):
+                try:
+                    kw = {"lang": lang} if lang else {}
+                    with _ocr_gate():               # mesmo portão global do _ocr_scan
+                        txt = pytesseract.image_to_string(c, config="--psm 7", **kw)
+                    break
+                except Exception:
+                    continue
+            stream = "".join(_norm_word(x) for x in (txt or "").split())
+            if word_norm in stream:
+                return "ok"
+    return "broken"
+
+
+def text_fix_feedback(miss: List[str], expected: List[str]) -> str:
+    """Instrução de CORREÇÃO pro RETRY da arte: mapeia a palavra quebrada (normalizada) de volta pra
+    grafia ORIGINAL (com acento) e soletra letra a letra — a regeração converge no erro em vez de
+    repetir a mesma moeda-ao-ar. Vazio se nada quebrou."""
+    if not miss:
+        return ""
+    orig = _expected_word_map(expected)
+    parts = []
+    for m in miss[:4]:
+        w = orig.get(m, m)
+        parts.append("«" + w + "» (soletrando: " + "-".join(list(w.upper())) + ")")
+    return ("\nCORREÇÃO OBRIGATÓRIA: na tentativa anterior estas palavras saíram ERRADAS/quebradas na arte: "
+            + "; ".join(parts) + ". Refaça a arte escrevendo cada uma EXATAMENTE com essa grafia, letra por "
+            "letra, sem trocar, omitir nem inventar letras.")
 
 
 def vision_product_facts(img_bytes: bytes) -> Tuple[str, float]:
@@ -1664,16 +2620,18 @@ def vision_product_facts(img_bytes: bytes) -> Tuple[str, float]:
         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}},
     ]}]
     chain = []
-    if _cometapi_key():
-        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
-    if _openrouter_key():
+    if _omniroute_key():    # ASSINATURA (custo ~$0) PRIMEIRO — visão validada: Claude Haiku responde em ~1s
+        chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))
+    if _openrouter_key():   # pago, só fallback
         chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    if _cometapi_key():     # último recurso (sem saldo hoje)
+        chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
     for base, key, model in chain:
         try:
             with httpx.Client(timeout=httpx.Timeout(45.0, connect=10.0)) as c:
                 r = c.post(base + "/chat/completions",
                            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-                           json={"model": model, "max_tokens": 180, "temperature": 0.1, "messages": msgs})
+                           json={"model": model, "stream": False, "max_tokens": 180, "temperature": 0.1, "messages": msgs})
             if r.status_code >= 400:
                 continue
             txt = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
@@ -1689,7 +2647,8 @@ def image_models_registry() -> List[Dict[str, Any]]:
     """Universo de modelos de imagem disponíveis (id, provider, tier, price) — fonte p/ achar equivalentes."""
     out: List[Dict[str, Any]] = []
     for lst, p in ((omniroute_image_models(), "omniroute"), (cometapi_image_models(), "cometapi"),
-                   (piapi_image_models(), "piapi"), (openrouter_image_models(), "openrouter")):
+                   (piapi_image_models(), "piapi"), (openrouter_image_models(), "openrouter"),
+                   (kie_image_models(), "kie")):
         for m in (lst or []):
             m.setdefault("provider", p)
             out.append(m)
@@ -1697,14 +2656,19 @@ def image_models_registry() -> List[Dict[str, Any]]:
 
 
 def _model_provider(model_id: str) -> str:
-    """Provedor de um id de modelo. cometapi: e cometapi-gemini: contam como 'cometapi' (MESMA conta/saldo)."""
+    """Provedor de um id de modelo. cometapi: e cometapi-gemini: contam como 'cometapi' (MESMA conta/saldo).
+    PiAPI tem DUAS carteiras separadas (LLM API em $ vs créditos da Task API) → 'piapi_llm' e 'piapi'
+    são provedores distintos no transbordo: uma carteira vazia não mata a outra."""
     ml = (model_id or "").lower()
     if ml.startswith("omni:"):
         return "omniroute"
+    if ml.startswith("kie:"):
+        return "kie"
     if ml.startswith("cometapi:") or ml.startswith("cometapi-gemini:"):
         return "cometapi"
     if ml.startswith("piapi:"):
-        return "piapi"
+        _, _, kind = _PIAPI_MODELS.get(ml.split(":", 1)[1], ("", "", "gemini"))
+        return "piapi_llm" if kind == "openai" else "piapi"
     if ml.startswith("openai:"):
         return "openai_direct"
     return "openrouter"
@@ -1727,7 +2691,7 @@ def _image_fallback_chain(model_id: str, reg: List[Dict[str, Any]]) -> List[str]
     (OmniRoute grátis primeiro). Provedor morto é pulado em runtime. Garante imagem real antes do editorial."""
     by_prov: Dict[str, List[str]] = {}
     for m in reg:
-        pid = m.get("provider") or _model_provider(m.get("id", ""))
+        pid = _model_provider(m.get("id", ""))   # SEMPRE pela carteira real (piapi_llm ≠ piapi, kie ≠ openrouter)
         by_prov.setdefault(pid, []).append(m.get("id"))
     preq = _model_provider(model_id)
     chain = [model_id]
@@ -1735,7 +2699,7 @@ def _image_fallback_chain(model_id: str, reg: List[Dict[str, Any]]) -> List[str]
         if mid and mid != model_id:
             chain.append(mid)
             break
-    for p in ("omniroute", "piapi", "openrouter", "cometapi"):   # melhor de cada OUTRO provedor; grátis 1º
+    for p in ("omniroute", "kie", "piapi", "piapi_llm", "openrouter", "cometapi"):   # melhor de cada OUTRO provedor; grátis 1º
         if p == preq:
             continue
         for mid in by_prov.get(p, []):
@@ -1760,8 +2724,13 @@ def generate_image_resilient(prompt: str, size: str = "1024x1024", ref_images: O
     (bytes, cost, model_usado). Levanta só se a cadeia INTEIRA falhar (aí o chamador cai pro editorial)."""
     import time
     dead = dead_providers if dead_providers is not None else set()
-    if not model_override:                       # sem override → comportamento simples (config padrão)
-        return generate_image_with_cost(prompt, size, ref_images, None, ref_urls)
+    if not model_override:                       # sem override → o modelo da CONFIG entra na MESMA cadeia
+        try:                                     # de transbordo (default quebrado não pode parar a geração,
+            model_override = (get_image_config() or {}).get("model") or ""   # ex.: kie/imagen4 morto no servidor)
+        except Exception:
+            model_override = ""
+        if not model_override:
+            return generate_image_with_cost(prompt, size, ref_images, None, ref_urls)
     try:
         reg = registry if registry is not None else image_models_registry()
     except Exception:
@@ -1780,7 +2749,8 @@ def generate_image_resilient(prompt: str, size: str = "1024x1024", ref_images: O
                 es = str(e)
                 if _err_provider_dead(es):
                     dead.add(prov)
-                    errors.append(f"{cand}: provedor sem saldo/cota")
+                    # motivo REAL junto (ex.: '剩余额度: $-0.007') — sem isso o usuário acha que o app quebrou
+                    errors.append(f"{cand}: provedor sem saldo/cota — {es[:90]}")
                     break                        # pula o provedor inteiro (não adianta outro modelo dele)
                 errors.append(f"{cand}: {es[:70]}")
                 if attempt == 0:
@@ -1814,6 +2784,8 @@ def generate_image_with_cost(prompt: str, size: str = "1024x1024", ref_images: O
             provider = "cometapi_gemini"
         elif ml.startswith("cometapi:"):
             provider = "cometapi"
+        elif ml.startswith("kie:"):
+            provider = "kie"
         elif ml.startswith("reve"):
             provider = "reve"
         elif "/" in model_override:
@@ -1828,10 +2800,15 @@ def generate_image_with_cost(prompt: str, size: str = "1024x1024", ref_images: O
         provider = "cometapi_gemini"
     if model and str(model).lower().startswith("cometapi:"):
         provider = "cometapi"
+    if model and str(model).lower().startswith("kie:"):
+        provider = "kie"
     # Default to OpenRouter (OpenAI is being retired).
     if not model:
         model = "google/gemini-2.5-flash-image"
         provider = "openrouter"
+    if provider == "kie":
+        b, cost = generate_image_kie(model, prompt, size)
+        return _ret(b, cost, model)
     if provider == "omniroute":
         real = model.split(":", 1)[1] if str(model).lower().startswith("omni:") else model
         try:
@@ -1979,11 +2956,12 @@ def build_image_prompt(company: Dict[str, Any], theme: str, visual_prompt: str =
     return _render_prompt_template(cfg.get("scene_template") or IMAGE_GEN["scene_template"], vals)
 
 
-def get_video_config() -> Optional[Dict[str, Any]]:
+def get_video_config(model_override: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Config de geração de vídeo CIENTE DO PROVEDOR (openai/openrouter/cometapi): chave + base_url + modelo.
-    Provedor vem de video.provider (setado no seletor) ou é derivado do id do modelo."""
-    model = (get_setting("video.model") or "").strip()
-    provider = (get_setting("video.provider") or "").strip()
+    Provedor vem de video.provider (setado no seletor) ou é derivado do id do modelo.
+    ``model_override`` torna preflight/geração independentes do default global."""
+    model = (model_override or get_setting("video.model") or "").strip()
+    provider = "" if model_override else (get_setting("video.provider") or "").strip()
     if not provider:
         provider = ("kie" if model.startswith("kie:")
                     else "omniroute" if model.startswith("omni:")
@@ -2039,31 +3017,40 @@ def video_model_max_seconds(model_id: str = "") -> int:
     return 8
 
 
-def video_scene_count(target_seconds: int, max_seconds: int, cap: int = 8) -> int:
-    """Quantas cenas cobrem a duração-alvo com clipes de até max_seconds (teto de cenas = controle de custo)."""
+def video_scene_count(target_seconds: int, max_seconds: int, cap: int = 8,
+                       target_per: int = 0, ai_count: int = 0) -> int:
+    """Quantas cenas cobrem a duração-alvo. Respeita o nº que a IA gerou (ai_count) quando houver;
+    senão usa target_per (segundos/cena sugeridos pelo usuário) em vez do máx do modelo — assim 15s
+    pede ~3 cenas (5s cada) e não 2 (8s cada). Teto = cap (controle de custo)."""
     import math
     t = max(1, int(target_seconds or 8))
-    m = max(1, int(max_seconds or 8))
-    return max(1, min(cap, math.ceil(t / m)))
+    if ai_count > 0:
+        return max(1, min(cap, ai_count))
+    step = max(1, int(target_per or max(4, t // 3)))           # sem hint → ~3 cenas por vídeo
+    return max(1, min(cap, math.ceil(t / step)))
 
 
 def video_segment_plan(target_seconds: int, max_seconds: int, ai_count: int,
-                       cap: int = 8, min_clip: int = 4) -> Tuple[int, int]:
+                       cap: int = 8, min_clip: int = 4) -> Tuple[int, List[int]]:
     """Plano de cenas RESPEITANDO quantas cenas a IA realmente gerou (ai_count), dentro dos limites:
-    cobre a duração travada (mín = ceil(t/máx)), não estoura o custo (cap) nem faz clipe curto demais (min_clip).
-    Devolve (nº_de_cenas, segundos_por_clipe). Os segundos são distribuídos pra somar ≈ duração travada — é o que
-    impede o bug de '15s viram 24s e a 3ª cena some'. target<=0 (livre) → nº = o que a IA fez (cap), per = máx do modelo."""
+    cobre a duração travada (mín = ai_count quando > 0, senão ceil(t/máx)), não estoura o custo (cap) nem faz
+    clipe curto demais (min_clip). Devolve (nº_de_cenas, lista_de_segundos_por_clipe) somando ≈ duração travada —
+    a lista (não um 'per' único) é o que impede o bug '15s viram 24s e a 3ª cena some'. target<=0 (livre) →
+    nº = o que a IA fez, segs = [mx]*n."""
     import math
     mx = max(1, int(max_seconds or 8))
     ai = max(0, int(ai_count or 0))
     t = int(target_seconds or 0)
     if t <= 0:                                              # livre → segue a IA (1..cap)
-        return (max(1, min(cap, ai or 1)), mx)
-    n_min = max(1, math.ceil(t / mx))                       # mínimo de clipes p/ cobrir a duração
-    n_max = max(n_min, min(cap, max(1, t // max(1, min_clip))))   # máx p/ não estourar custo nem fazer clipe curto demais
-    k = max(n_min, min(ai if ai > 0 else n_min, n_max))     # usa a contagem da IA, limitada à faixa [n_min, n_max]
-    per = max(1, min(mx, round(t / k)))                     # segundos/clipe pra somar ≈ duração travada
-    return (k, per)
+        return (max(1, min(cap, ai or 1)), [mx] * max(1, min(cap, ai or 1)))
+    n_min = max(1, ai) if ai > 0 else max(1, math.ceil(t / mx))   # respeita o roteiro quando a IA já gerou cenas
+    n_max = max(n_min, min(cap, max(1, t // max(1, min_clip))))
+    k = max(n_min, min(ai if ai > 0 else n_min, n_max))
+    # distribuição não-uniforme: base = t//k, sobra repartida nos primeiros clipes; cada clipe dentro de [1, mx]
+    base, rest = divmod(max(1, t), k)
+    segs = [base + (1 if i < rest else 0) for i in range(k)]
+    segs = [max(1, min(mx, s)) for s in segs]               # clamp por-clipe ao máx do modelo (controle de custo)
+    return (k, segs)
 
 
 def _video_catalog_entry(model_id: str):
@@ -2226,7 +3213,7 @@ def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
 
 # === System Prompt PADRÃO de VÍDEO (Briefing de Reels) — editável por cliente em creative_config.video.system_prompt.
 # As {variáveis} são preenchidas pelo CÓDIGO com os dados REAIS da empresa/produto, em LINGUAGEM HUMANA (não como token cru).
-_VIDEO_SYS_DEFAULT = """Você é DIRETOR CRIATIVO, estrategista de conteúdo B2B e roteirista de reels para provedores de internet (ISPs) e SVAs. Sua função é transformar a ideia preenchida pelo usuário, somada aos dados de marca e produto, em UM storyboard de vídeo forte, específico e publicável, no formato JSON multi-shot definido abaixo — pronto para ser enviado a um modelo de geração de vídeo.
+_VIDEO_SYS_DEFAULT = """Você é DIRETOR CRIATIVO, estrategista de conteúdo e roteirista de reels da marca {company} ({segment}). Sua função é transformar a ideia preenchida pelo usuário, somada aos dados de marca e produto, em UM storyboard de vídeo forte, específico e publicável, no formato JSON multi-shot definido abaixo — pronto para ser enviado a um modelo de geração de vídeo.
 
 A régua é a mesma do melhor carrossel: conteúdo que EDUCA, PROVOCA ou REPOSICIONA a visão do público. A venda acontece pela percepção de valor construída e pelo CTA desenhado DEPOIS, na pós-produção. Você não vende no grito.
 
@@ -2244,7 +3231,7 @@ Cada segmento é UMA SEQUÊNCIA CINEMATOGRÁFICA DE MÚLTIPLAS TOMADAS dentro de
 Se QUALQUER cena tiver uma pessoa, é a MESMA pessoa em TODAS. Preencha `character.map` UMA vez, hiper-específico e fixo (em inglês): idade, etnia, cabelo (cor+textura+corte), traços, tom de pele, vestuário e UM acessório-âncora único (ex.: "thin small gold hoop earring"). O código repete esse mapa em cada segmento. Se for só produto/ambiente, `character.present=false` e `map=""`. Mantenha entre segmentos: mesma paleta, energia, lógica e luz.
 
 — ANATOMIA DE UM BOM REELS B2B —
-Antes de escrever, raciocine internamente (não escreva): dor real do tema, crença errada do público, mudança de visão a provocar, ação final. Depois ENGRANDEÇA a ideia do usuário num conceito forte e específico (eleve, não copie). ARCO obrigatório: GANCHO (0–2s, visual e imediato), DESENVOLVIMENTO (valor específico/exemplo/quebra de objeção), VIRADA/CLÍMAX (prepara o CTA da pós). Gramática de cada shot: sujeito + contexto + 1 ação + 1 movimento de câmera + luz/clima + emoção. MOSTRE a sensação/benefício; proibido b-roll genérico. Para ISP/SVAs, conecte ao dia a dia comercial do provedor (diferenciação, fim da guerra de preço, fidelização, rentabilização da base).
+Antes de escrever, raciocine internamente (não escreva): dor real do tema, crença errada do público, mudança de visão a provocar, ação final. Depois ENGRANDEÇA a ideia do usuário num conceito forte e específico (eleve, não copie). ARCO obrigatório: GANCHO (0–2s, visual e imediato), DESENVOLVIMENTO (valor específico/exemplo/quebra de objeção), VIRADA/CLÍMAX (prepara o CTA da pós). Gramática de cada shot: sujeito + contexto + 1 ação + 1 movimento de câmera + luz/clima + emoção. MOSTRE a sensação/benefício; proibido b-roll genérico. Conecte ao dia a dia REAL do público-alvo da marca ({audience}) e ao momento comercial dela (diferenciação, valor percebido, fidelização).
 PELE NATURAL (crítico): luz quente no AMBIENTE, mas pele NATURAL e precisa — inclua em cada `style.lighting` algo como "warm practical lighting with natural, accurate skin tones — no orange color cast on skin".
 ÁUDIO (obrigatório): descreva em `audio` o som diegético (ambiente, SFX e fala). Diálogo/narração SEMPRE em pt-BR ("dialogue in Brazilian Portuguese: '...'"). Trilha do modelo mínima/ausente — a música de marca e legendas entram na pós.
 
@@ -2287,7 +3274,14 @@ PELE NATURAL (crítico): luz quente no AMBIENTE, mas pele NATURAL e precisa — 
   }
 }
 
-NÃO inclua, em NENHUM campo de cena (subject/action/environment/style/audio): texto, letra, legenda, número, logo, marca, nome de marca, preço, tela de app com conteúdo legível, claim não confirmado ou promessa. Esses elementos vivem SOMENTE em `post_production`."""
+NÃO inclua, em NENHUM campo de cena (subject/action/environment/style/audio): texto, letra, legenda, número, logo, marca, nome de marca, preço, tela de app com conteúdo legível, claim não confirmado ou promessa. Esses elementos vivem SOMENTE em `post_production`.
+
+— LEI DO REALISMO DE PRODUTO (nova) —
+Você RECEBE nesta instrução os dados REAIS do produto/app em foco (Product context / Base de conhecimento / Funções). É a sua ÚNICA fonte verdadeira. Regras:
+• DESENHE a SENSAÇÃO humana do benefício REAL: a pessoa USANDO aquele recurso de verdade (tocando, identificando música, ouvindo offline, montando playlist, etc.) — sem nada renderizado na tela, sem nome do app escrito, sem logo. O benefício é mostrado pela EMOCÃO e AÇÃO, não por grafismo.
+• PROIBIDO inventar: nome de app/jogo/filme/música/artista/recurso que NÃO esteja no brief. Se faltar dado, demonstre o benefício de forma genérica (gente ouvindo música, descobrindo som) SEM citar produto inexistente.
+• PROIBIDO substituir a app real por outra "parecida" (ex.: Deezer → Spotify, ou nome feito-up "Creezer"). Se o brief é sobre app X, é X; mostre o benefício de X sem nunca escrever o nome X na tela.
+• Pode, e DEVE, usar a referência visual recebida (imagens do carrossel aprovado do mesmo app) como guia de paleta/vibe/composição — não para copiar frame a frame, mas para herdar a IDENTIDADE VISUAL já aprovada pelo cliente."""
 
 
 def _fill_vars(template: str, vals: Dict[str, Any]) -> str:
@@ -2308,7 +3302,8 @@ def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: in
         except Exception:
             bk = {}
     cols = bk.get("colors") or {}
-    col_parts = [f"{label} {cols[k]}" for k, label in (("primary", "primária"), ("accent", "destaque"), ("secondary", "secundária")) if cols.get(k)]
+    # TODAS as cores cadastradas (dict flexível — o usuário define quantas) entram no prompt.
+    col_parts = [f"{k} {v}" for k, v in cols.items() if v]
     voice = (bk.get("voice") or bk.get("persona") or "").strip()
     bi = []
     if col_parts:
@@ -2344,9 +3339,11 @@ def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: in
         seg = ([nm] if nm else []) + ([f"objetivo: {obj}"] if obj else []) + ([f"funções: {fns_t}"] if fns_t else [])
         if seg:
             pid.append(" — ".join(seg))
-        kb = (p.get("knowledge") or "").strip()
-        if kb:
-            pkb.append(f"[{nm}] " + kb[:1500])
+        kb = (p.get("knowledge") or "").strip()                  # base local (cadastro)
+        web = (p.get("web_brief") or "").strip()                 # busca web (cache) — ANTES era ignorada no vídeo
+        facts = "  ".join(x for x in (kb[:1500], web[:1500]) if x)
+        if facts:
+            pkb.append(f"[{nm}] " + facts)
     try:
         from ..db_companies import asset_list_logos as _all
         if _all(company.get("id")):
@@ -2359,7 +3356,7 @@ def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: in
     return {
         "theme": theme or "",
         "company": company.get("name", "") or "",
-        "segment": company.get("segment", "") or "",
+        "segment": company.get("segment", "") or "empresa brasileira",
         "audience": (bk.get("audience") or "").strip(),
         "brand_identity": brand_identity,
         "product_identity": " | ".join(pid) if pid else "Nenhum app/produto específico — fale do benefício geral.",
@@ -2369,9 +3366,20 @@ def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: in
     }
 
 
-def _assemble_segment_prompt(seg: Dict[str, Any], character_map: str = "", brand_palette: str = "") -> str:
-    """Monta o prompt EM TEXTO de UM segmento multi-shot pro modelo de vídeo, repetindo o mapa do personagem."""
+_BRLANG_LOCK = ("All spoken dialogue and voice-over MUST be in Brazilian Portuguese (pt-BR) — "
+                 "never European Portuguese, never Spanish, never English. Accent and wording are Brazilian.")
+
+def _assemble_segment_prompt(seg: Dict[str, Any], character_map: str = "", brand_palette: str = "",
+                             product_context: str = "") -> str:
+    """Monta o prompt EM TEXTO de UM segmento multi-shot pro modelo de vídeo, repetindo o mapa do personagem.
+    product_context = dados REAIS do app/produto em foco (nome, objetivo, funções, fatos da base de conhecimento)
+    — injetados como SENSAÇÃO conceitual, nunca como renderização de logo/interface (o modelo é péssimo nisso).
+    pt-BR é travado incondicionalmente (nível do clipe), independente da IA devolver dialogue_ptBR preenchido."""
     parts = []
+    if product_context:
+        parts.append("Product context (use it to depict the genuine human FEELING of these REAL features in the "
+                     "scene — NEVER render logos, app names, text on screens, UI mockups or buttons): "
+                     + product_context.rstrip("."))
     if character_map:
         parts.append("Recurring character (identical in every shot): " + character_map.rstrip("."))
     if (seg.get("subject") or "").strip():
@@ -2397,7 +3405,209 @@ def _assemble_segment_prompt(seg: Dict[str, Any], character_map: str = "", brand
         aud.append('dialogue in Brazilian Portuguese: "' + audio["dialogue_ptBR"].strip() + '"')
     if aud:
         parts.append("Audio: " + "; ".join(aud))
+    parts.append(_BRLANG_LOCK)                               # trava pt-BR no nível do prompt que chega ao modelo
     return ". ".join(p for p in parts if p).strip()
+
+
+def _video_enrich_apps_if_needed(company: Dict[str, Any], theme: str) -> None:
+    """Frentes 2+3 do conhecimento: se algum app em foco não tem web_brief nem knowledge, dispara enriquecimento.
+    SYNC quando tudo está vazio (1ª geração daquele app — bloqueia 5s p/ o storyboard já sair rico);
+    background quando só está stale (cache > 7 dias). Best-effort: falhou → segue com a base local."""
+    try:
+        from ..db_companies import product_list as _pl
+        prods = _pl(company.get("id")) or []
+    except Exception:
+        return
+    if not prods:
+        return
+    import unicodedata as _ud
+
+    def _norm(s):
+        s = _ud.normalize("NFKD", (s or "").lower())
+        return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
+    tn = _norm(theme)
+    focus = [p for p in prods if _norm(p.get("name")) and _norm(p.get("name")) in tn] or prods[:2]
+    if not focus:
+        return
+    # SYNC só se web_brief E knowledge E functions TODOS vazios (app novo, primeira geração)
+    need_sync = [p for p in focus if not (p.get("web_brief") or "").strip()
+                                     and not (p.get("knowledge") or "").strip()
+                                     and not (p.get("functions") or "")]
+    if need_sync:
+        try:                                                   # 1ª vez: enriquece síncrono, grava, relê
+            for p in need_sync:
+                try:
+                    data = enrich_product_from_web((p.get("name") or "").strip(),
+                                                    (p.get("website") or "").strip(),
+                                                    (p.get("instagram") or "").strip())
+                    if data:
+                        from ..db_companies import product_update as _pu
+                        upd = {}
+                        if data.get("objective") and not (p.get("objective") or "").strip():
+                            upd["objective"] = str(data["objective"])[:600]
+                        if data.get("functions") and not (p.get("functions") or []):
+                            upd["functions"] = data["functions"]
+                        if data.get("knowledge") and not (p.get("knowledge") or "").strip():
+                            upd["knowledge"] = str(data["knowledge"])[:6000]
+                        if upd:
+                            _pu(p.get("id"), upd)
+                except Exception:
+                    continue
+            refresh_web_briefs(company.get("id"), need_sync, theme)  # bloqueia p/ cache web (timeout ~5s via httpx interno)
+        except Exception:
+            pass
+        return
+    # Caso contrário: dispara refresh em background se cache está stale (não bloqueia o storyboard)
+    try:
+        stale = [p for p in focus if _web_brief_stale(p)]
+        if stale:
+            import threading as _th
+            _th.Thread(target=refresh_web_briefs, args=(company.get("id"), stale, theme), daemon=True).start()
+    except Exception:
+        pass
+
+
+def _video_find_approved_carousel_images(company: Dict[str, Any], theme: str, limit: int = 8):
+    """Frente 4 (referência visual): busca o ÚLTIMO carrossel aprovado cujo produto casa com o tema (app em foco).
+    Devolve lista de bytes das TELAS do carrossel (cover+content — não só a capa), ou [] se não houver.
+    Matching robusto: 1) meta.product (str/dict) → 2) nome de PRODUTO da empresa aparecendo no TITLE/COPY →
+    3) substring de nome de produto no TEMA. Best-effort, nunca bloqueia por erro.
+
+    Carrosséis aprovados gravam `meta.carousel_urls` (lista completa de telas) — é a ESTRUTURA toda que o
+    briefing pediu (não só a capa). Fallback: `media_url` (capa) quando o post não tem slides marcados."""
+    try:
+        from ..db_companies import product_list as _pl
+        prods = _pl(company.get("id")) or []
+    except Exception:
+        prods = []
+    import unicodedata as _ud
+
+    def _norm(s):
+        s = _ud.normalize("NFKD", (s or "").lower())
+        return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
+
+    product_names = [_norm(p.get("name")) for p in prods if (p.get("name") or "").strip()]
+    tn = _norm(theme)
+    posts = []
+    try:                                                       # fallback direto: varre posts APPROVED da empresa
+        from ..db_companies import post_get
+        from ..db import get_conn
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id FROM posts WHERE company_id = ? AND status = 'APPROVED' ORDER BY created_at DESC LIMIT 30",
+                (company.get("id"),)).fetchall()
+        posts = [post_get(r["id"]) for r in rows if r["id"]]
+    except Exception:
+        posts = []
+    if not posts:
+        return []
+
+    def _match_app(p):
+        meta = p.get("meta") or {}
+        # 1) meta.product — pode ser str (nome direto) ou dict {name: ...}
+        mp = meta.get("product") or meta.get("app")
+        if isinstance(mp, dict):
+            mp = mp.get("name") or ""
+        pn = _norm(mp or "")
+        if pn and pn in tn:
+            return True
+        # 2) nome de produto da empresa aparece no title/copy deste post (não depende do tema)
+        text = _norm((p.get("title") or "") + " " + (p.get("copy") or ""))
+        for prod in product_names:
+            if prod and prod in text:
+                return True
+        # 3) nome de produto da empresa aparece no TEMA (app em foco) — backward case
+        for prod in product_names:
+            if prod and prod in tn:
+                return True
+        return False
+
+    matched = [p for p in posts if p and _match_app(p)]
+    if not matched:
+        return []
+    p = matched[0]                                             # só o ÚLTIMO carrossel aprovado do app em foco
+    meta = p.get("meta") or {}
+    # Preferência: meta.carousel_urls (lista completa de slides — a ESTRUTURA toda). Fallback: media_url (capa).
+    urls = []
+    cu = meta.get("carousel_urls")
+    if isinstance(cu, list) and cu:
+        urls = [u for u in cu if isinstance(u, str)]
+    if not urls:
+        m = p.get("media_url")
+        if isinstance(m, list):
+            urls = [u for u in m if isinstance(u, str)]
+        elif isinstance(m, str) and m:
+            urls = [m]
+    if not urls:
+        return []
+    imgs = []
+    for url in urls[:limit]:
+        if not url.startswith(("http://", "https://")):
+            continue
+        try:
+            with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as c:
+                r = c.get(url)
+                if r.status_code == 200 and r.content:
+                    imgs.append(r.content)
+        except Exception:
+            continue
+        if len(imgs) >= limit:
+            break
+    return imgs
+
+
+def _complete_ai_with_images(config, system: str, user: str, images: List[bytes],
+                             max_tokens: int = 2400) -> str:
+    """Chamada multimodal (visão) para a IA de texto — p/ passar referência visual dos carrosséis aprovados.
+    Cai para complete_ai (texto) se o provedor não suporta imagem ou falhar. Custo-seguro."""
+    if not images:
+        return complete_ai(config, system, user, max_tokens)
+    import base64, io
+    try:
+        from PIL import Image
+    except Exception:
+        return complete_ai(config, system, user, max_tokens)
+
+    def _thumb(b):
+        try:
+            im = Image.open(io.BytesIO(b)).convert("RGB"); im.thumbnail((512, 512))
+            o = io.BytesIO(); im.save(o, "JPEG", quality=80)
+            return "data:image/jpeg;base64," + base64.b64encode(o.getvalue()).decode()
+        except Exception:
+            return None
+
+    parts = [{"type": "text", "text": user}]
+    for b in images[:8]:
+        thumb = _thumb(b)
+        if thumb:
+            parts.append({"type": "image_url", "image_url": {"url": thumb}})
+    provider = config.get("provider", "")
+    model = config.get("model", "")
+    api_key = config.get("apiKey", "")
+    # Mesma chain de visão usada por verify_same_person — gpt-4o é o melhor p/ texto+imagem.
+    vision_chain = []
+    if provider == "cometapi" and api_key:
+        vision_chain.append(("https://api.cometapi.com/v1", api_key, model or "gpt-4o"))
+    if _cometapi_key():
+        vision_chain.append(("https://api.cometapi.com/v1", _cometapi_key(), "gpt-4o"))
+    if _openrouter_key():
+        vision_chain.append(("https://openrouter.ai/api/v1", _openrouter_key(), "openai/gpt-4o"))
+    for base, key, mdl in vision_chain:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as c:
+                r = c.post(base + "/chat/completions",
+                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                           json={"model": mdl, "max_tokens": max_tokens, "temperature": 0.7,
+                                 "messages": [{"role": "system", "content": system},
+                                              {"role": "user", "content": parts}]})
+                if r.status_code >= 400:
+                    continue
+                t = ((r.json().get("choices") or [{}])[0].get("message", {}).get("content") or "")
+                if t:
+                    return t
+        except Exception:
+            continue
+    return complete_ai(config, system, user, max_tokens)  # fallback texto puro
 
 
 def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: str = "",
@@ -2405,28 +3615,73 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
                            style: str = "") -> List[Dict[str, str]]:
     """Roteiro de VÍDEO. O System Prompt do cliente (creative_config.video.system_prompt, default = documento do Mikael)
     é a ESTRUTURA que o briefing lê; o CÓDIGO preenche as {variáveis} com os dados REAIS da empresa/produto em
-    linguagem humana e a IA devolve o schema multi-shot, que viramos em 1 prompt por segmento pro modelo."""
+    linguagem humana e a IA devolve o schema multi-shot, que viramos em 1 prompt por segmento pro modelo.
+
+    Frentes de conhecimento ATIVAS neste storyboard (eram o bug central — não chegavam ao modelo de vídeo):
+      1. Base local cadastrada (products.knowledge/objective/functions) via _video_brief_context → injetada em cada segmento.
+      2. Web search (products.web_brief) — dispara enrich síncrono na 1ª geração do app, background depois.
+      3. Site/Instagram do produto — só quando 1 e 2 falham (enrich_product_from_web fallback).
+      4. Referência visual do carrossel aprovado DO MESMO APP — enviada como imagens à IA de texto multimodal."""
     fallback = [{"prompt": (video_prompt or theme or "").strip(), "seconds": str(per_seconds or 8), "desc": (video_prompt or theme or "").strip(), "character_map": ""}]
     config = cheap_text_config(get_ai_config())
     if not config:
         return fallback
+    _video_enrich_apps_if_needed(company, theme)                     # Frentes 2+3 (web+site) — best-effort, sync só na 1ª vez
     sysp = (creative_cfg(company).get("video") or {}).get("system_prompt") or VIDEO_GEN.get("system_prompt") or ""
-    vals = _video_template_vars(company, theme, target_seconds)     # busca dados REAIS → linguagem humana
+    vals = _video_template_vars(company, theme, target_seconds)     # busca dados REAIS → linguagem humana (Frente 1)
     system = _fill_vars(sysp, vals).strip()                         # variáveis preenchidas (formatação preservada)
-    user = "Gere agora o storyboard em JSON, exatamente no schema definido."
+    product_ctx = _video_brief_context(company, theme)               # contexto real do app em foco — injetado em cada cena
+    # Frente 4: referência visual do carrossel aprovado do mesmo app (knob on/off via setting)
+    ref_images = []
+    try:
+        if (get_setting("video.use_carousel_ref") or "1") != "0":  # default ON (knob rápido p/ desligar se empírico falhar)
+            ref_images = _video_find_approved_carousel_images(company, theme, limit=8)
+    except Exception:
+        ref_images = []
+    # Força o nº de cenas e o idioma no user (era o bug de "IA decide sozinha e devolve 1 cena" + pt-PT)
+    scene_rule = ""
+    if int(n_scenes or 0) > 0:
+        scene_rule = (f"Responda EXATAMENTE com {int(n_scenes)} segmentos no array 'segments', cada um com campo "
+                      f"'seconds' distribuído para somar ≈{int(target_seconds or 0)}s no total. ")
+    lang_rule = ("Idioma: 'meta.language_spoken'='pt-BR' OBRIGATÓRIO; toda fala/dialogue_ptBR em português do Brasil "
+                 "(nunca pt-PT, nunca sotaque europeu). ")
+    truth_rule = ("Use SOMENTE os fatos do brief real (Product context / Base de conhecimento / Funções) — NÃO invente "
+                  "nome de app, jogo, filme, música, recurso, número ou preço que não estejam no brief. Se faltar dado, "
+                  "demonstre o benefício de forma geral sem citar produto inexistente. ")
+    user = scene_rule + lang_rule + truth_rule + "Gere agora o storyboard em JSON, exatamente no schema definido."
     allowed = [4, 8, 12]
     try:
-        raw = complete_ai(config, system, user, 2400)
+        if ref_images:
+            raw = _complete_ai_with_images(config, system, user, ref_images, 2400)
+        else:
+            raw = complete_ai(config, system, user, 2400)
         parsed = extract_json(raw) or {}
         out = []
         if isinstance(parsed, dict):
             character = parsed.get("character") or {}
             cmap = (character.get("map") or "").strip() if character.get("present") else ""
             bpal = (parsed.get("brand_palette") or "").strip()
-            for seg in (parsed.get("segments") or [])[:8]:         # schema multi-shot (documento) → 1 prompt por segmento
+            # valida/corrige o nº de cenas quando o usuário pediu um nº específico (P-2: 3 cenas no roteiro = 3 segmentos)
+            segs_in = parsed.get("segments") or []
+            if int(n_scenes or 0) > 0 and len(segs_in) > 0 and len(segs_in) != int(n_scenes):
+                # Segunda chamada de correção (texto barato): IA devolveu nº errado de cenas
+                try:
+                    fix_user = (f"Seu storyboard anterior devolveu {len(segs_in)} segmentos, mas preciso EXATAMENTE "
+                                f"{int(n_scenes)}. Reescreva mantendo a mesma identidade/personagem/paleta, apenas "
+                                f"redistribuindo o conteúdo em {int(n_scenes)} segmentos somando ≈{int(target_seconds or 0)}s. "
+                                f"JSON no mesmo schema: " + (json.dumps(segs_in[:3], ensure_ascii=False)[:1200]))
+                    raw2 = complete_ai(config, system, fix_user, 2000) if ref_images else \
+                           (complete_ai(config, system, fix_user, 2000))
+                    parsed2 = extract_json(raw2) or {}
+                    if isinstance(parsed2, dict) and (parsed2.get("segments") or []):
+                        segs_in = parsed2.get("segments") or []
+                        parsed = parsed2
+                except Exception:
+                    pass
+            for seg in (segs_in or [])[:8]:                         # schema multi-shot (documento) → 1 prompt por segmento
                 if not isinstance(seg, dict):
                     continue
-                p = _assemble_segment_prompt(seg, cmap, bpal)
+                p = _assemble_segment_prompt(seg, cmap, bpal, product_ctx)
                 if not p:
                     continue
                 try:
@@ -2435,7 +3690,7 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
                     sec = 8
                 sec = min(allowed, key=lambda a: abs(a - sec))
                 out.append({"prompt": p, "seconds": str(sec), "desc": p, "character_map": cmap})
-            if not out:                                            # compat: schema antigo {scenes:[{desc,seconds}]}
+            if not out:                                              # compat: schema antigo {scenes:[{desc,seconds}]}
                 for s in (parsed.get("scenes") or [])[:8]:
                     if not isinstance(s, dict):
                         continue
@@ -2447,10 +3702,12 @@ def build_video_storyboard(company: Dict[str, Any], theme: str, video_prompt: st
                     except Exception:
                         sec = 8
                     sec = min(allowed, key=lambda a: abs(a - sec))
-                    out.append({"prompt": desc, "seconds": str(sec), "desc": desc, "character_map": ""})
-        if not out and (raw or "").strip():                        # IA não devolveu JSON → resposta crua = 1 cena
+                    out.append({"prompt": (product_ctx + " " + desc).strip() if product_ctx else desc,
+                                "seconds": str(sec), "desc": desc, "character_map": ""})
+        if not out and (raw or "").strip():                          # IA não devolveu JSON → resposta crua = 1 cena
             txt = (raw or "").strip()
-            out = [{"prompt": txt, "seconds": str(per_seconds or 8), "desc": txt, "character_map": ""}]
+            out = [{"prompt": (product_ctx + " " + txt).strip() if product_ctx else txt,
+                    "seconds": str(per_seconds or 8), "desc": txt, "character_map": ""}]
         if out:
             return out
     except Exception:
@@ -2668,18 +3925,22 @@ def _omni_extract_video_bytes(data: Any, key: str = "") -> bytes:
     def _score(u):
         ul = u.lower()
         return (3 if any(e in ul for e in (".mp4", ".webm", ".mov")) else 0) + (1 if "video" in ul else 0)
+    import time as _t
     for u in sorted(set(urls), key=_score, reverse=True):
-        try:
-            host = u.split("/", 3)[2]
-            needs = ("20128" in host) or ("172.17.0.1" in host) or ("213.199" in host) or host.endswith("openai.com") or host.endswith("googleapis.com")
-            with httpx.Client(timeout=httpx.Timeout(600.0, connect=20.0)) as c:
-                rr = c.get(u, headers=({"Authorization": "Bearer " + key} if needs else {}))
-            if rr.status_code < 400 and rr.content:
-                ct = (rr.headers.get("content-type") or "").lower()
-                if "video" in ct or u.lower().endswith((".mp4", ".webm", ".mov")) or len(rr.content) > 50000:
-                    return rr.content
-        except Exception:
-            continue
+        # alguns provedores (veo-free) devolvem a URL ANTES do arquivo existir → retry com espera
+        for _att in range(6):
+            try:
+                host = u.split("/", 3)[2]
+                needs = ("20128" in host) or ("172.17.0.1" in host) or ("213.199" in host) or host.endswith("openai.com") or host.endswith("googleapis.com")
+                with httpx.Client(timeout=httpx.Timeout(600.0, connect=20.0)) as c:
+                    rr = c.get(u, headers=({"Authorization": "Bearer " + key} if needs else {}))
+                if rr.status_code < 400 and rr.content:
+                    ct = (rr.headers.get("content-type") or "").lower()
+                    if "video" in ct or (u.lower().endswith((".mp4", ".webm", ".mov")) and len(rr.content) > 20000) or len(rr.content) > 50000:
+                        return rr.content
+            except Exception:
+                pass
+            _t.sleep(10)
     raise ValueError("OmniRoute vídeo: resposta sem URL/b64 reconhecível: " + (json.dumps(data)[:300] if not isinstance(data, str) else data[:300]))
 
 
@@ -2709,11 +3970,17 @@ def _omniroute_create_video(model: str, prompt: str, seconds: str, aspect_ratio:
 
 def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
                      first_frame_url: Optional[str] = None, model: Optional[str] = None,
-                     aspect_ratio: str = "9:16") -> Dict[str, Any]:
+                     aspect_ratio: str = "9:16", target_seconds: Optional[int] = None,
+                     config_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Cria um job de vídeo (async) no PROVEDOR configurado. Retorna o job (id/status).
     first_frame_url → CONTINUIDADE: a imagem entra como PRIMEIRO FRAME (= último frame da cena anterior).
-    aspect_ratio → 9:16 (reels/story) por padrão; verificado que sem isso o veo sai 16:9."""
-    config = get_video_config()
+    aspect_ratio → 9:16 (reels/story) por padrão; verificado que sem isso o veo sai 16:9.
+    target_seconds → duração TOTAL do vídeo (não por-clipe). Quando o provedor suporta um campo de duração
+    total/distint de "por-clipe" (ex: CometAPI's 'total_duration'), é repassado para promover o alcance do alvo.
+    Já 'seconds' permanece sendo o por-clipe (clampado ao máx do modelo)."""
+    # O job congela provedor/modelo no clique de gerar. Sem isso, uma troca no
+    # seletor durante o render fazia polling/download no modelo seguinte.
+    config = config_override or get_video_config()
     if not config:
         raise ValueError("Geração de vídeo não configurada — escolha o modelo de vídeo no painel.")
     prov = config["provider"]
@@ -2770,6 +4037,8 @@ def create_video_job(prompt: str, seconds: str = "8", size: str = "720x1280",
             ("aspect_ratio", (None, aspect_ratio or "9:16")),
             ("resolution", (None, "720p")),
         ]
+        if target_seconds and int(target_seconds) > 0:  # best-effort: gateway pode ignorar — 'seconds' já traba por-clipe
+            fields.append(("total_seconds", (None, str(int(target_seconds)))))
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
             res = client.post(config["base"] + "/videos",
                               headers={"Authorization": f"Bearer {config['apiKey']}"},
@@ -3163,10 +4432,10 @@ BRIEFING_GEN: Dict[str, Any] = {
                     "cenário, símbolo visual da FUNÇÃO/recurso) ou (c) PESSOAS + ELEMENTOS juntos. Para funções/recursos técnicos, "
                     "prefira MOSTRAR a função (device/elemento), com ou sem pessoa. NÃO ponha pessoa em TODA tela — varie conforme "
                     "o conteúdo rico. Cinematográfico, premium, realista — SEM texto na imagem, SEM logo, SEM clichê de banco de imagem. "),
-    "app_rule": "Em \"app\": se a tela falar de um app específico, escreva o nome EXATO; senão deixe vazio. ",
+    "app_rule": "Em \"app\": se a tela falar de um produto/serviço/procedimento específico da empresa, escreva o nome EXATO; senão deixe vazio. ",
     "name_rule": "NOMES EXATOS E OBRIGATÓRIOS (nunca abrevie/erre): E-Saúde, Looke (NUNCA \"Look\"), Deezer, ExitLag, CARIAP. ",
     "content_rules": ("REGRAS: sem preços; nada de 'compre/contrate/assine' nos slides de conteúdo (só no CTA); "
-                      "conteúdo que EDUCA o provedor sobre o tema; frases específicas, não clichê."),
+                      "conteúdo que EDUCA o público sobre o tema; frases específicas, não clichê."),
     # ARTE ÚNICA (post fixo / story): cada formato tem sua particularidade. NÃO é carrossel — é UMA peça com tudo junto.
     "single_addendum": (
         " >>> FORMATO ARTE ÚNICA (post fixo / story), NÃO é carrossel: gere UMA ÚNICA peça que entrega TUDO numa tacada — "
@@ -3452,11 +4721,11 @@ def generate_carousel_caption(company: Dict[str, Any], telas: list, theme: str =
                           for t in telas[:10] if t.get('title'))
         rules = ((company.get("brand_kit") or {}).get("client_rules") or "").strip()
         sys = "Você escreve a LEGENDA de um post de carrossel do Instagram em pt-BR, no tom da marca. Acentuação correta."
-        usr = (f"Marca: {company.get('name','')} (vende apps/SVAs para provedores de internet). "
+        usr = (f"Marca: {company.get('name','')} ({(company.get('segment') or 'empresa brasileira').strip()}). "
                f"Tema: {theme}. Telas do carrossel:\n{plano}\n\n"
                + (f"Regras do cliente: {rules}. " if rules else "")
                + "Escreva uma LEGENDA envolvente: 1 GANCHO forte na 1a linha, 2-4 linhas de valor (fale COM o "
-                 "provedor), e um CTA de contato no fim. Depois 8-12 HASHTAGS relevantes (provedores/ISP/SVA/o tema). "
+                 "público-alvo da marca), e um CTA de contato no fim. Depois 8-12 HASHTAGS relevantes (do segmento da marca + o tema). "
                  'Responda SÓ JSON: {"copy":"<legenda com \\n entre linhas>","hashtags":"#a #b #c"}')
         data = extract_json(complete_ai(config, sys, usr, 900)) or {}
         return {"copy": (data.get("copy") or "").strip(), "hashtags": (data.get("hashtags") or "").strip()}
@@ -3475,12 +4744,13 @@ def generate_briefing(company: Dict[str, Any], theme: str, objetivo: str = "educ
         raise ValueError("IA não configurada — configure o provedor de texto.")
     G = creative_cfg(company)["briefing"]
     bk = company.get("brand_kit") or {}
-    audience = (bk.get("audience") or "provedores de internet (ISPs)").strip()
+    audience = (bk.get("audience") or "o público-alvo da marca").strip()
     rules = (bk.get("client_rules") or "").strip()
     obj = (G.get("objetivos") or _OBJ_BRIEF).get((objetivo or "").lower(), objetivo or "educar")
     fmt = (formato or "carrossel").lower()
     system = G["brief_system"]
-    base = (f'Empresa: {company.get("name","")} — vende SVAs/apps para provedores de internet. '
+    _seg = (company.get("segment") or "").strip() or "empresa brasileira"   # do CADASTRO — nunca hardcode de outra marca
+    base = (f'Empresa: {company.get("name","")} — {_seg}. '
             f'Público (fale COM ele): {audience}. Assunto: "{theme}". Objetivo do conteúdo: {obj}. '
             + (f'Regras do cliente (obedeça à risca): {rules}. ' if rules else ''))
     # CARROSSEL → plano ESTRUTURADO (mesmas telas que o renderizador usa) + texto legível.
@@ -3626,7 +4896,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         raise ValueError("IA não configurada — configure o provedor de texto.")
     G = creative_cfg(company)["briefing"]
     bk = company.get("brand_kit") or {}
-    audience = (bk.get("audience") or "provedores de internet (ISPs)").strip()
+    audience = (bk.get("audience") or "o público-alvo da marca").strip()
     rules = (bk.get("client_rules") or "").strip()
     intent = (intent or "produtos").lower()
     single = (formato or "carrossel").lower() in ("post", "story", "stories", "storie")   # ARTE ÚNICA (post/story)
@@ -3677,7 +4947,7 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         return (p.get("name"), " | ".join(seg)) if seg else None
     _focus = list(_prods) if _focus_names else [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tnorm]
     _kb_blocks = [b for b in (_app_brief(p) for p in _focus) if b]
-    kb_line = (("CONHECIMENTO REAL DOS APPS EM FOCO (baseie o conteúdo NESTES fatos/funções — específico e profundo, "
+    kb_line = (("CONHECIMENTO REAL DAS OFERTAS EM FOCO — produtos/serviços/procedimentos (baseie o conteúdo NESTES fatos — específico e profundo, "
                 "sem inventar recursos): " + (" || ".join(f"[{n}] {t}" for n, t in _kb_blocks))[:7000] + ". ") if _kb_blocks else "")
     excl_line = (("FOCO EXCLUSIVO: este conteúdo é SOMENTE sobre " + ", ".join(_apps) + " — NÃO mencione, NÃO cite e NÃO "
                   "crie telas de NENHUM outro app/produto da empresa. ") if (_focus_names and _apps) else "")
@@ -3714,31 +4984,44 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         n_rule = G["n_exact"].format(n=floor)
     else:
         n_rule = G["n_default"] + (f" Garanta NO MÍNIMO {floor} telas no total. " if floor else "")
-    apps_line = ("APPS DISPONÍVEIS desta empresa (use SOMENTE estes no campo 'app', nome EXATO): "
-                 + ", ".join(_apps) + ". Em CADA slide de CONTEÚDO que trate de um app, preencha 'app' com o app "
-                 "MAIS relevante daquele slide e DISTRIBUA os apps citados no tema entre as telas (não deixe 'app' "
-                 "vazio quando a tela é sobre um app). Telas de conceito geral podem ficar com 'app' vazio. ") if _apps else ""
-    cover_line = (f"COBERTURA OBRIGATÓRIA: o tema cita estes apps → {', '.join(themed)}. CADA um precisa de PELO "
-                  f"MENOS 1 slide de conteúdo dedicado, E aparecer no CTA. NÃO pule NENHUM — nem o que parecer menos "
-                  f"óbvio pro tema (ex.: E-Saúde/saúde): ache o ângulo (telemedicina no frio evita sair de casa, "
-                  f"consulta sem fila, etc.). ") if themed else ""
+    apps_line = ("OFERTAS desta empresa — produtos/serviços/procedimentos (use SOMENTE estes no campo 'app', nome EXATO): "
+                 + ", ".join(_apps) + ". Em CADA slide de CONTEÚDO que trate de uma oferta, preencha 'app' com a oferta "
+                 "MAIS relevante daquele slide e DISTRIBUA as ofertas citadas no tema entre as telas (não deixe 'app' "
+                 "vazio quando a tela é sobre uma oferta). Telas de conceito geral podem ficar com 'app' vazio. ") if _apps else ""
+    cover_line = (f"COBERTURA OBRIGATÓRIA: o tema cita estas ofertas → {', '.join(themed)}. CADA uma precisa de PELO "
+                  f"MENOS 1 slide de conteúdo dedicado, E aparecer no CTA. NÃO pule NENHUMA — nem a que parecer menos "
+                  f"óbvia pro tema: ache o ângulo certo dela dentro do tema. ") if themed else ""
+    # LEAD por MODO: em 'criativo' a CENA/IDEIA do usuário é a ESTRELA (newsjacking) e a marca é só
+    # contexto leve — NÃO reescrever o assunto como pauta institucional de ISP. Em produtos/evento,
+    # mantém o enquadramento aprovado (empresa vende SVAs p/ provedores).
+    _name = company.get('name', '')
+    if intent == "criativo":
+        lead = (f"MODO CRIATIVO / NEWSJACKING — a CENA/IDEIA do usuário é a ESTRELA e deve ser retratada "
+                f"FIELMENTE, SEM virar pauta institucional de provedor/ISP nem 'grande ideia' corporativa. "
+                f"Marca só como contexto leve para assinatura + CTA (NÃO é o assunto): {_name}. Público: {audience}. ")
+        theme_kw = "CENA/IDEIA (retrate FIELMENTE, não reescreva)"
+    else:
+        _seg = (company.get("segment") or "").strip() or "empresa brasileira"   # do CADASTRO — sem cara de CARIAP
+        lead = (f"Empresa: {_name} — {_seg}. "
+                f"Público (fale COM ele): {audience}. ")
+        theme_kw = "Tema"
+    # NOMES EXATOS: dos PRODUTOS desta empresa (dinâmico) — o default G["name_rule"] citava apps da CARIAP e
+    # vazaria identidade pra outros clientes. Sem produtos → sem regra (nunca nomes de outra marca).
+    _nrule = ("NOMES EXATOS E OBRIGATÓRIOS (nunca abrevie/erre): " + ", ".join(_apps) + ". ") if _apps else ""
     if single:
         # ARTE ÚNICA: UMA peça completa (mensagem + CTA), estrutura própria, sem regras de carrossel.
         user = (
-            f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
-            f"Público (fale COM ele): {audience}. Tema: {theme}. "
+            lead + f"{theme_kw}: {theme}. "
             + event_line + apps_line + kb_line + web_line + excl_line
             + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
-            + G["single_json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"] + G["content_rules"]
+            + G["single_json_format"] + G["visual_rule"] + G["app_rule"] + _nrule + G["content_rules"]
         )
     else:
         user = (
-            f"Empresa: {company.get('name','')} — vende SVAs/apps para provedores de internet. "
-            f"Público (fale COM ele): {audience}. "
-            f"Tema do carrossel: {theme}. {n_rule} "
+            lead + f"{theme_kw} do carrossel: {theme}. {n_rule} "
             + event_line + apps_line + cover_line + kb_line + web_line + excl_line
             + (f"Regras do cliente (obedeça): {rules}. " if rules else "")
-            + G["json_format"] + G["visual_rule"] + G["app_rule"] + G["name_rule"]
+            + G["json_format"] + G["visual_rule"] + G["app_rule"] + _nrule
             + G.get("layout_rule", "") + G["content_rules"]
         )
     # ROBUSTEZ: token alto (JSON de 6+ telas é longo → 4096 truncava e dava 502) + até 3 tentativas.
@@ -3759,6 +5042,10 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
             s0["cta"] = "Visite nosso estande" if intent == "evento" else "Fale com a gente"
         if not (s0.get("app") or "").strip() and themed:
             s0["app"] = themed[0]
+        # MOTOR CRIATIVO (biblioteca de padrões) ainda EM CONSTRUÇÃO → DESLIGADO por padrão. Só liga quando
+        # `creative.free_engine` estiver on (setting). Assim carrossel/Produtos/clientes futuros ficam 100% intactos.
+        if intent == "criativo" and (get_setting("creative.free_engine") or "").strip().lower() in ("1", "true", "on", "yes"):
+            s0["free_text"] = True   # ARTE LIVRE: motor de padrões (quando ligado)
         return {"theme": data.get("theme") or theme, "slides": [s0]}
     # COBERTURA DETERMINÍSTICA: todo app citado TEM que aparecer. Refaz 1x; se AINDA faltar, o CÓDIGO gera
     # a tela do app que sobrou e insere À FORÇA (não depende da boa-vontade da IA).

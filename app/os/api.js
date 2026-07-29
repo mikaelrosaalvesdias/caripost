@@ -160,7 +160,7 @@
         const me = await fetch('/auth/me', { headers: { 'X-Session-Token': token } });
         if (me.ok) {
           const data = await me.json();
-          if (data.user) { setToken(token, data.user); _isOpen = false; return; }
+          if (data.user) { window.__mpUser = data.user; try { window.dispatchEvent(new CustomEvent('mp-user')); } catch (e) {} setToken(token, data.user); _isOpen = false; return; }
         }
         clearToken();
       }
@@ -1063,6 +1063,13 @@
     async enrichProduct(companyId, productId, payload) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/enrich', { method: 'POST', body: JSON.stringify(payload || {}) });
     },
+    async productCopySources(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products/copy-sources').catch(() => ({ sources: [] }));
+      return r.sources || [];
+    },
+    async copyProducts(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/products/copy', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
     async uploadProductKb(companyId, productId, file) {
       const fd = new FormData();
       fd.append('file', file);
@@ -1278,14 +1285,39 @@
     async setAiModel(payload) {
       return mpFetch('/api/posts/ai-models', { method: 'POST', body: JSON.stringify(payload) });
     },
+    async setImageProviders(hidden, choiceEnabled) {
+      const b = { hidden: hidden || [] };
+      if (choiceEnabled !== undefined) b.choice_enabled = !!choiceEnabled;
+      return mpFetch('/api/posts/image-providers', { method: 'POST', body: JSON.stringify(b) });
+    },
     async generatePostVideo(payload) {
       return mpFetch('/api/posts/generate-video', { method: 'POST', body: JSON.stringify(payload) });
+    },
+    async editArt(companyId, url, instruction) {
+      return mpFetch('/api/posts/edit-art', { method: 'POST', body: JSON.stringify({ company_id: companyId, url, instruction }) });
+    },
+    async animateArt(companyId, url, motion) {
+      return mpFetch('/api/posts/animate-art', { method: 'POST', body: JSON.stringify({ company_id: companyId, url, motion: motion || '' }) });
+    },
+    async importInstagram(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/import-instagram', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
+    async setCompanyFeatures(companyId, features) {
+      return mpFetch('/api/billing/features', { method: 'POST', body: JSON.stringify({ company_id: companyId, features }) });
+    },
+    async billingSummary(companyId) {
+      return mpFetch('/api/billing/summary' + (companyId ? ('?company_id=' + _enc(companyId)) : ''));
+    },
+    async listAuthUsers() { return mpFetch('/auth/users'); },
+    async createAuthUser(payload) { return mpFetch('/auth/users', { method: 'POST', body: JSON.stringify(payload) }); },
+    async resetAuthPassword(userId, password) {
+      return mpFetch('/auth/users/' + _enc(userId) + '/reset-password', { method: 'POST', body: JSON.stringify({ password }) });
     },
     async videoStatus(jobsCsv, companyId) {
       return mpFetch('/api/posts/video-status?jobs=' + _enc(jobsCsv) + '&company_id=' + _enc(companyId || ''));
     },
-    async videoPreflight(companyId, theme, seconds, style) {
-      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, theme: theme || '', seconds: seconds || 0, style: style || '' }) }).catch(() => ({ configured: false }));
+    async videoPreflight(companyId, theme, seconds, style, storyboard, sceneDescs, model) {
+      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, theme: theme || '', seconds: seconds || 0, style: style || '', storyboard: storyboard || [], scene_descs: sceneDescs || [], model: model || '' }) }).catch(() => ({ configured: false }));
     },
     async videoStyles(companyId) {
       const r = await mpFetch('/api/posts/video-styles', { method: 'POST', body: JSON.stringify({ company_id: companyId || '' }) }).catch(() => ({ styles: [] }));
@@ -1300,6 +1332,15 @@
     async brandedVideoStatus(companyId, job) {
       return mpFetch('/api/posts/branded-video-status', { method: 'POST', body: JSON.stringify({ company_id: companyId, job: job }) }).catch(() => ({ status: 'unknown' }));
     },
+    async templateVideoTemplates() {
+      return mpFetch('/api/template-video/templates').catch(() => ({ templates: [] }));
+    },
+    async suggestTemplateVideo(payload) {
+      return mpFetch('/api/template-video/suggest', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
+    async renderTemplateVideo(payload) {
+      return mpFetch('/api/template-video/render', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
     async postStats() {
       return mpFetch('/api/posts/stats');
     },
@@ -1309,6 +1350,13 @@
     async getAISettings() {
       return mpFetch('/api/ai-settings');
     },
+    // ── Usuários do sistema (admin) — CRUD via /auth/users (backend já existia) ──
+    async whoami() { return mpFetch('/auth/me'); },
+    async listUsers() { return mpFetch('/auth/users'); },
+    async createUser(payload) { return mpFetch('/auth/users', { method: 'POST', body: JSON.stringify(payload) }); },
+    async updateUser(userId, payload) { return mpFetch('/auth/users/' + _enc(userId), { method: 'PUT', body: JSON.stringify(payload) }); },
+    async deleteUser(userId) { return mpFetch('/auth/users/' + _enc(userId), { method: 'DELETE' }); },
+    async resetUserPassword(userId, password) { return mpFetch('/auth/users/' + _enc(userId) + '/reset-password', { method: 'POST', body: JSON.stringify({ password }) }); },
     async saveAISettings(payload) {
       const r = await mpFetch('/api/ai-settings', { method: 'POST', body: JSON.stringify(payload) });
       return r;

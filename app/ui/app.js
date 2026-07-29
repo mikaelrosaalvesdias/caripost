@@ -534,6 +534,60 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.103', date: '2026-07-29',
+    items: [
+      { type: 'fix', text: 'Kie: a plataforma reconhece resultados aninhados/serializados e entrega a arte assim que a tarefa conclui.' },
+      { type: 'fix', text: 'Vídeo usa exatamente o modelo confirmado no seletor durante preflight, criação, polling e download.' },
+      { type: 'fix', text: 'Status de vídeo não roda para sempre após restart: recupera MP4 pronto ou informa interrupção do job.' },
+    ],
+  },
+  {
+    version: 'v1.27.47', date: '2026-07-01',
+    items: [
+      { type: 'fix', text: 'Video Template: hierarquia visual refeita com base nas artes aprovadas — CTA em pílula, logo no rodapé, progresso no topo e texto com escala dinâmica.' },
+    ],
+  },
+  {
+    version: 'v1.27.46', date: '2026-07-01',
+    items: [
+      { type: 'feat', text: 'Video Studio Template: tela no fluxo de conteúdo para gerar MP4 com identidade da marca, sugestão criativa por IA de texto, 5 templates e envio direto para aprovação.' },
+      { type: 'fix', text: 'Vídeo por template agora gera MP4 com duração real alinhada ao FPS; render continua com token_cost=0.' },
+    ],
+  },
+  {
+    version: 'v1.27.45', date: '2026-07-01',
+    items: [
+      { type: 'feat', text: 'Experimental: novo motor de vídeo por template em paralelo ao fluxo de IA. Render determinístico com marca, logo, CTA e timing controlado; custo de token zero no render. Entrega GIF/frames e MP4 quando ffmpeg existir no servidor.' },
+    ],
+  },
+  {
+    version: 'v1.27.40', date: '2026-07-01',
+    items: [
+      { type: 'feat', text: 'Marco 1A: influencer cadastrado volta a ser usado — selecionar influencer força o caminho de foto; composição via kie image-edit (nano-banana-edit) preserva o rosto real (CometAPI estava sem saldo).' },
+    ],
+  },
+  {
+    version: 'v1.27.39x', date: '2026-07-01',
+    items: [
+      { type: 'fix', text: 'Imagem: Seedream/OpenRouter voltou a gerar (payload escalonado por min-pixel); default no ar = kie Seedream 4.0 fotorrealista (Imagen 4 do kie está fora — "Internal Error"). Fallback grátis OmniRoute em banco limpo.' },
+      { type: 'fix', text: 'Briefing: modo Criativo agora é fiel ao assunto (meme/data) — não vira mais pauta institucional de ISP.' },
+      { type: 'feat', text: 'IA de texto: só gateways (OmniRoute/OpenRouter/CometAPI); Anthropic/OpenAI diretos removidos; listas curadas por gateway. Default = OmniRoute cc/claude-opus-4-8 (grátis, com acento).' },
+      { type: 'feat', text: 'kie imagem: catálogo 5 → 8 modelos bem descritos, IDs validados; builder manda aspect_ratio p/ Imagen4/Grok/Qwen2.' },
+      { type: 'chore', text: 'Roteamento por prefixo (kie:/omni:/cometapi:/cometapi-gemini:/piapi:) no get_image_config e no save de modelo.' },
+    ],
+  },
+  {
+    version: 'v1.27.24', date: '2026-06-30',
+    items: [
+      { type: 'fix', text: 'Vídeo: 4 frentes de conhecimento do app/produto agora chegam ao storyboard (base local + web + site/Instagram + referência visual do carrossel aprovado). Era o bug do "Deezer virar Creezer" e da IA inventar jogos/filmes/músicas.' },
+      { type: 'fix', text: 'Vídeo: duração respeita o roteiro — 15s com 3 cenas viram 3 clipes de 5s, não 1 clipe de 10s. Nenhuma cena é mais duplicada (prompts[0]) quando sobra tempo; o tempo é redistribuído dentro das cenas reais.' },
+      { type: 'fix', text: 'Vídeo: cenas = exatamente as que a IA gerou. Caixinhas do roteiro não aparecem mais vazias, força-se o nº de cenas no prompt e há 2ª chamada de correção quando a IA devolve nº errado.' },
+      { type: 'fix', text: 'Vídeo: pt-BR travado incondicionalmente em cada prompt por cena (não depende mais de dialogue_ptBR estar preenchido). Adeus português de Portugal.' },
+      { type: 'fix', text: 'Vídeo: system prompt proíbe inventar app/jogo/filme/música/recurso que não esteja no brief real, mas exige desenhar a sensação dos recursos REAIS do produto em foco (sem renderizar logo/UI).' },
+      { type: 'feat', text: 'Vídeo: capa do carrossel aprovado do mesmo app vira first_frame da cena 1 (herda identidade visual). Knob on/off: setting video.use_carousel_ref (default ON).' },
+    ],
+  },
+  {
     version: 'v1.27.13', date: '2026-06-29',
     items: [
       { type: 'fix', text: 'Vídeo: geração final agora recebe a duração total escolhida e não confunde segundos por cena com duração do reel.' },

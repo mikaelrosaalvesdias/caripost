@@ -55,6 +55,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvulkan1 \
     wget \
     ca-certificates \
+    tesseract-ocr \
+    tesseract-ocr-por \
   && rm -rf /var/lib/apt/lists/*
 
 # Fonte moderna p/ posts/carrossel (Poppins — geométrica, estilo editorial g4/v4).

@@ -5,6 +5,7 @@ httpx[http2]==0.28.1
 beautifulsoup4==4.14.3
 lxml==6.0.0
 xvideos_api==1.8.3
+eaf_base_api==3.3.2   # dep transitiva do xvideos_api — 3.3.4 removeu setup_logger e derruba o boot
 sse-starlette==3.2.0
 boto3==1.40.32
 python-multipart==0.0.9
@@ -33,3 +34,7 @@ jinja2>=3.1,<4
 
 # Pillow (dependency of imagehash)
 Pillow>=10,<12
+pypdf
+
+# JUIZ DE TEXTO local (Estúdio IA): OCR determinístico — requer tesseract-ocr + tesseract-ocr-por (Dockerfile)
+pytesseract>=0.3.10,<0.4

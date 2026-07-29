@@ -86,6 +86,10 @@ def social_config(request: Request):
 
 @router.get("/workspace")
 def workspace(request: Request, brandId: str):
+    from ..main_utils import company_access_denied as _cad
+    _d = _cad(request, brandId)
+    if _d:
+        return _d
     err = _auth(request)
     if err:
         return err
@@ -216,6 +220,15 @@ async def analyze_brand(brand_id: str, request: Request):
                     normalized_colors["accent"] = colors[2]
             elif isinstance(colors, dict):
                 normalized_colors = colors
+            # A LOGO é a verdade da marca: se houver logo, a cor real dela vence o palpite da IA
+            # (era daqui que saíam cores totalmente erradas — azul/laranja inventados p/ a Gironetfibra).
+            try:
+                from .companies import _company_logo_colors
+                _lc = _company_logo_colors(brand_id)
+                if _lc:
+                    normalized_colors = _lc
+            except Exception:
+                pass
             brand_kit_upsert(brand_id, {
                 "voice": identity.get("voice") or "",
                 "persona": identity.get("persona") or identity.get("positioning") or "",

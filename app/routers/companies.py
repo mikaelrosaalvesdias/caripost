@@ -17,7 +17,7 @@ from ..db_companies import (
     competitor_list, competitor_create, competitor_delete,
     asset_list, asset_create, asset_delete, asset_get, asset_update_meta,
     asset_list_logos, asset_list_photos, asset_clear_primary,
-    product_list, product_get, product_create, product_update, product_delete,
+    product_list, product_get, product_create, product_copy, product_update, product_delete,
     solution_list, solution_get, solution_create, solution_update, solution_delete,
 )
 from ..db import settings_get
@@ -44,6 +44,10 @@ def list_companies(request: Request, active: Optional[bool] = None, limit: int =
     if err:
         return err
     companies = company_list(active_only=active if active is not None else False, limit=limit)
+    from ..main_utils import scoped_company_ids
+    scids = scoped_company_ids(request)
+    if scids is not None:
+        companies = [c for c in companies if str(c.get("id")) in scids]   # tenancy: só as empresas do usuário
     return {"companies": companies}
 
 
@@ -89,7 +93,18 @@ async def create_company(request: Request):
         "notes": body.get("notes"),
         "competitors": competitors,
     }
+    from ..main_utils import _session_of
+    sess = _session_of(request) or {}
+    if sess.get("role") == "owner":
+        return JSONResponse({"detail": "Seu acesso é de empresa única. Fale com seu consultor para virar agência.",
+                             "error": "feature_blocked"}, status_code=403)
     company = company_create(data)
+    if sess.get("role") == "agency":
+        try:
+            company_update(company["id"], {"owner_user_id": sess.get("user_id")})   # empresa da AGÊNCIA
+            company = company_get(company["id"])
+        except Exception:
+            pass
     return {"company": company}
 
 
@@ -153,16 +168,21 @@ async def save_brand_kit(company_id: str, request: Request):
     if not existing:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     colors = {}
-    for key in ("primaryColor", "secondaryColor", "accentColor"):
+    for key in ("primaryColor", "secondaryColor", "accentColor"):   # legado (3 fixas)
         if key in body:
             mapped = key.replace("Color", "")
             colors[mapped] = body[key]
-    if existing.get("brand_kit") and existing["brand_kit"].get("colors"):
-        merged = existing["brand_kit"]["colors"].copy()
-        merged.update(colors)
-        colors = merged
     data: Dict[str, Any] = {}
-    if colors:
+    if isinstance(body.get("colors"), dict):
+        # PALETA LIVRE: o usuário define QUANTAS cores quiser (nome → hex). SUBSTITUI a paleta inteira
+        # (permite remover cor). Todas entram nos prompts via _palette_str.
+        data["colors"] = {str(k).strip(): str(v).strip() for k, v in body["colors"].items()
+                          if str(k).strip() and str(v).strip()}
+    elif colors:
+        if existing.get("brand_kit") and existing["brand_kit"].get("colors"):
+            merged = existing["brand_kit"]["colors"].copy()
+            merged.update(colors)
+            colors = merged
         data["colors"] = colors
     for key in ("logo_url", "voice", "persona", "visual_prompt_base", "audience", "assuntos", "client_rules"):
         if key in body:
@@ -208,6 +228,328 @@ UPLOAD_DIR = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirnam
 UPLOAD_URL_PREFIX = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
 
 
+def _render_site(url: str) -> Dict[str, Any]:
+    """Renderiza site JS via Playwright (já usado pelo publisher): devolve texto real da página, html e o
+    PNG da logo (screenshot do elemento <img ...logo...> — resolve logo SVG que o PIL não lê)."""
+    import re
+    out = {"text": "", "html": "", "logo_png": None}
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            b = p.chromium.launch(headless=True)
+            pg = b.new_page(viewport={"width": 1366, "height": 900})
+            pg.goto(url, timeout=35000, wait_until="networkidle")
+            html = pg.content() or ""
+            txt = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S | re.I)
+            txt = re.sub(r"<[^>]+>", " ", txt)
+            out["text"] = re.sub(r"\s+", " ", txt).strip()
+            out["html"] = html
+            try:
+                el = pg.locator("img[src*='logo' i], img[alt*='logo' i], img[class*='logo' i]").first
+                if el and el.count() > 0:
+                    out["logo_png"] = el.screenshot(type="png", omit_background=True)
+            except Exception:
+                pass
+            b.close()
+    except Exception:
+        pass
+    return out
+
+
+def _auto_extract_products(company_id: str, website: str) -> int:
+    """Extrai PLANOS/SERVIÇOS/PRODUTOS do SITE do cliente (home + páginas de planos/serviços) via IA e
+    cadastra os que faltam — o usuário não precisa cadastrar oferta por oferta. Retorna quantos criou."""
+    import re
+    import httpx as _hx
+    from ..db_companies import product_list, product_create
+    if not website:
+        return 0
+    base = website if website.startswith("http") else "https://" + website
+    ua = {"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"}
+    texts = []
+    try:
+        r = _hx.get(base, timeout=20.0, follow_redirects=True, headers=ua)
+        html = r.text or ""
+        texts.append(html)
+        # até 3 páginas internas de planos/serviços/produtos
+        links = re.findall(r'href=["\']([^"\']+)["\']', html, re.I)
+        from urllib.parse import urljoin
+        seen = set()
+        for u in links:
+            if re.search(r"plano|servi|produto|combo|pacote|internet", u, re.I):
+                full = urljoin(str(r.url), u)
+                if full.startswith("http") and full not in seen and len(seen) < 3:
+                    seen.add(full)
+                    try:
+                        texts.append(_hx.get(full, timeout=15.0, follow_redirects=True, headers=ua).text or "")
+                    except Exception:
+                        pass
+    except Exception:
+        return 0
+    blob = " ".join(re.sub(r"<script.*?</script>|<style.*?</style>", " ", t, flags=re.S | re.I) for t in texts)
+    blob = re.sub(r"<[^>]+>", " ", blob)
+    blob = re.sub(r"\s+", " ", blob)[:14000]
+    if len(blob) < 300:
+        # site 100% JavaScript (HTML estático vazio) → renderiza com Playwright e usa o texto REAL
+        rend = _render_site(base)
+        blob = (rend.get("text") or "")[:14000]
+        # + páginas internas de planos/serviços renderizadas (até 2)
+        try:
+            from urllib.parse import urljoin
+            _lks = re.findall(r'href=["\']([^"\']+)["\']', rend.get("html") or "", re.I)
+            _seen = set()
+            for _u in _lks:
+                if re.search(r"plano|servi|produto|combo", _u, re.I):
+                    _full = urljoin(base, _u)
+                    if _full.startswith("http") and _full not in _seen and len(_seen) < 2:
+                        _seen.add(_full)
+                        blob += " " + (_render_site(_full).get("text") or "")[:6000]
+        except Exception:
+            pass
+        blob = blob[:14000]
+    if len(blob) < 300:
+        return 0
+    try:
+        from ..services.ai import cheap_text_config, get_ai_config, complete_ai, extract_json
+        cfg = cheap_text_config(get_ai_config())
+        if not cfg:
+            return 0
+        sysm = "Você extrai o catálogo de ofertas de um site. Responda SÓ JSON válido, pt-BR."
+        usr = ('Do texto do site abaixo, liste as OFERTAS REAIS da empresa (planos, serviços, produtos, combos). '
+               'Formato: {"products":[{"name":"nome curto EXATO","description":"1 frase","objective":"como vender (1 frase)",'
+               '"functions":["velocidade/itens inclusos/beneficios reais",...],"price":"preço REAL publicado (ex.: R$ 99,90/mês) ou vazio"}]} (até 12). TEXTO: ' + blob)
+        data = extract_json(complete_ai(cfg, sysm, usr, 2000)) or {}
+        items = data.get("products") or []
+    except Exception:
+        return 0
+    existing = {(p.get("name") or "").strip().lower() for p in (product_list(company_id) or [])}
+    added = 0
+    for it in items[:12]:
+        nm = (it.get("name") or "").strip()
+        if not nm or nm.lower() in existing:
+            continue
+        _fns = [str(f).strip() for f in (it.get("functions") or []) if str(f).strip()][:8]
+        if (it.get("price") or "").strip():
+            _fns.append("Preço: " + it["price"].strip())
+        product_create(company_id, {"name": nm, "description": (it.get("description") or "").strip(),
+                                    "objective": (it.get("objective") or "").strip(), "functions": _fns})
+        existing.add(nm.lower())
+        added += 1
+    return added
+
+
+def _ig_fetch_brand(company_id: str, instagram: str) -> Dict[str, int]:
+    """Puxa do INSTAGRAM público: foto do perfil (vira LOGO se não houver) + thumbnails de posts (viram ARTES
+    DE REFERÊNCIA p/ o Estúdio IA). IG pode bloquear IP de datacenter — melhor esforço, retorna contagens."""
+    import re
+    import io as _io
+    import uuid as _uuid
+    import httpx as _hx
+    from PIL import Image as _Img
+    out = {"logo": 0, "refs": 0}
+    handle = (instagram or "").strip().rstrip("/").split("/")[-1].lstrip("@")
+    if not handle:
+        return out
+    try:
+        r = _hx.get(f"https://www.instagram.com/{handle}/", timeout=20.0, follow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                                           "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"})
+        html = r.text or ""
+    except Exception:
+        return out
+    def _save(url, sub, kind, role, meta):
+        try:
+            ir = _hx.get(url.replace("&amp;", "&"), timeout=20.0, follow_redirects=True)
+            if ir.status_code >= 400 or not ir.content:
+                return False
+            im = _Img.open(_io.BytesIO(ir.content))
+            subdir = os.path.join(UPLOAD_DIR, company_id, sub)
+            os.makedirs(subdir, exist_ok=True)
+            fn = f"{_uuid.uuid4().hex}.png"
+            im.convert("RGBA").save(os.path.join(subdir, fn), "PNG")
+            u = f"{UPLOAD_URL_PREFIX}/{company_id}/{sub}/{fn}"
+            asset_create(company_id, {"kind": kind, "source": "INSTAGRAM", "url": u, "meta": dict(meta, role=role)})
+            if role == "logo":
+                brand_kit_upsert(company_id, {"logo_url": u})
+            return True
+        except Exception:
+            return False
+    # foto de perfil (og:image) → logo, se a empresa não tiver nenhuma
+    if not (asset_list_logos(company_id) or []):
+        m = re.search(r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+        if m and _save(m.group(1), "logo", "IMAGE", "logo", {"is_primary": True, "from": "instagram_profile"}):
+            out["logo"] = 1
+    # thumbnails de posts → artes de referência (display_url no JSON embutido)
+    urls = re.findall(r'"display_url":"([^"]+)"', html)[:4]
+    for u in urls:
+        if _save(u.encode().decode("unicode_escape"), "references", "IMAGE", "brand_reference", {"from": "instagram_post"}):
+            out["refs"] += 1
+    return out
+
+
+def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
+    """Baixa o LOGO do site do cliente (og:image / apple-touch-icon / <img ...logo...>) e cadastra como asset
+    primário — pra montagem de perfil vir com logo + cores + identidade já preenchidos. Retorna a URL ou None."""
+    import re
+    import uuid as _uuid
+    import io as _io
+    import httpx as _hx
+    from PIL import Image as _Img
+    if not website:
+        return None
+    base = website if website.startswith("http") else "https://" + website
+    try:
+        r = _hx.get(base, timeout=_hx.Timeout(20.0, connect=10.0), follow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"})
+        html = r.text or ""
+    except Exception:
+        return None
+    cands = []
+    # <img> com 'logo' no src/class/alt (melhor sinal), depois apple-touch-icon, depois og:image
+    cands += re.findall(r'<img[^>]+src=["\']([^"\']+)["\'][^>]*(?:class|alt|id)=["\'][^"\']*logo[^"\']*["\']', html, re.I)
+    cands += re.findall(r'<img[^>]+(?:class|alt|id)=["\'][^"\']*logo[^"\']*["\'][^>]*src=["\']([^"\']+)["\']', html, re.I)
+    cands += [m for m in re.findall(r'<img[^>]+src=["\']([^"\']*logo[^"\']*)["\']', html, re.I)]
+    cands += re.findall(r'<link[^>]+rel=["\']apple-touch-icon[^"\']*["\'][^>]+href=["\']([^"\']+)["\']', html, re.I)
+    cands += re.findall(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+    from urllib.parse import urljoin
+    seen = set()
+    for u in cands:
+        u = urljoin(str(r.url), u.strip())
+        if u in seen or u.lower().endswith(".svg"):
+            continue
+        seen.add(u)
+        try:
+            ir = _hx.get(u, timeout=_hx.Timeout(20.0, connect=10.0), follow_redirects=True)
+            if ir.status_code >= 400 or not ir.content:
+                continue
+            im = _Img.open(_io.BytesIO(ir.content))
+            if im.width < 64 and im.height < 64:   # só rejeita se AMBAS as dimensões forem minúsculas
+                continue                            # (logo horizontal real pode ter só ~40px de altura)
+            ext = ".png"
+            subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
+            os.makedirs(subdir, exist_ok=True)
+            filename = f"{_uuid.uuid4().hex}{ext}"
+            im.convert("RGBA").save(os.path.join(subdir, filename), "PNG")
+            url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
+            brand_kit_upsert(company_id, {"logo_url": url})
+            asset_create(company_id, {"kind": "IMAGE", "source": "WEB", "url": url,
+                                      "meta": {"role": "logo", "is_primary": True, "from": u[:200]}})
+            return url
+        except Exception:
+            continue
+    # FALLBACK (site JS / logo SVG): renderiza com Playwright e fotografa o elemento da logo (vira PNG).
+    try:
+        png = _render_site(base).get("logo_png")
+        if png:
+            im = _Img.open(_io.BytesIO(png))
+            if im.width >= 64 or im.height >= 64:
+                subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
+                os.makedirs(subdir, exist_ok=True)
+                fn = f"{_uuid.uuid4().hex}.png"
+                im.convert("RGBA").save(os.path.join(subdir, fn), "PNG")
+                url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{fn}"
+                brand_kit_upsert(company_id, {"logo_url": url})
+                asset_create(company_id, {"kind": "IMAGE", "source": "WEB", "url": url,
+                                          "meta": {"role": "logo", "is_primary": True, "from": "playwright_render"}})
+                return url
+    except Exception:
+        pass
+    return None
+
+
+
+def _ig_headers():
+    """Sessão do Instagram (1 conta da casa): setting ig.session_cookie (cole o cookie 'sessionid' UMA vez)."""
+    from ..services.ai import get_setting
+    ck = (get_setting("ig.session_cookie") or os.environ.get("IG_SESSION_COOKIE") or "").strip()
+    H = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+         "x-ig-app-id": "936619743392459"}
+    if ck:
+        H["Cookie"] = ck if "=" in ck.split(";")[0] else f"sessionid={ck}"
+    return H, bool(ck)
+
+
+def _ig_import(company_id: str, handle: str, kind: str = "reference", count: int = 4) -> Dict[str, Any]:
+    """Importa do Instagram: 'own' = identidade do cliente (foto de perfil vira LOGO se faltar + posts viram
+    referências); 'reference' = perfil que o cliente admira/concorrente (posts viram ARTES DE REFERÊNCIA do
+    Estúdio). Precisa de sessão (ig.session_cookie) — IG bloqueia acesso anônimo de servidor."""
+    import io as _io
+    import uuid as _uuid
+    import httpx as _hx
+    from PIL import Image as _Img
+    handle = (handle or "").strip().rstrip("/").split("/")[-1].lstrip("@")
+    if not handle:
+        return {"error": "informe o @ do perfil"}
+    H, has_sess = _ig_headers()
+    try:
+        r = _hx.get(f"https://i.instagram.com/api/v1/users/web_profile_info/?username={handle}",
+                    headers=H, timeout=25.0, follow_redirects=True)
+    except Exception as e:
+        return {"error": f"falha de rede no Instagram: {str(e)[:80]}"}
+    if r.status_code == 429 or r.status_code == 403 or (r.status_code >= 400 and not has_sess):
+        return {"error": "O Instagram exige sessão para importar. Configure o cookie em ig.session_cookie "
+                         "(Instagram logado no navegador → DevTools → Cookies → copie o valor de 'sessionid')."}
+    try:
+        u = ((r.json() or {}).get("data") or {}).get("user") or {}
+    except Exception:
+        u = {}
+    if not u:
+        return {"error": f"perfil @{handle} não encontrado (ou sessão expirada)."}
+
+    def _save_img(url, sub, role, meta):
+        try:
+            ir = _hx.get(url, timeout=25.0, follow_redirects=True, headers={"User-Agent": H["User-Agent"]})
+            if ir.status_code >= 400 or not ir.content:
+                return None
+            im = _Img.open(_io.BytesIO(ir.content))
+            subdir = os.path.join(UPLOAD_DIR, company_id, sub)
+            os.makedirs(subdir, exist_ok=True)
+            fn = f"{_uuid.uuid4().hex}.png"
+            im.convert("RGBA" if role == "logo" else "RGB").save(os.path.join(subdir, fn), "PNG")
+            url2 = f"{UPLOAD_URL_PREFIX}/{company_id}/{sub}/{fn}"
+            asset_create(company_id, {"kind": "IMAGE", "source": "INSTAGRAM", "url": url2, "meta": dict(meta, role=role)})
+            if role == "logo":
+                brand_kit_upsert(company_id, {"logo_url": url2})
+            return url2
+        except Exception:
+            return None
+
+    out = {"logo": 0, "refs": 0, "handle": handle}
+    if kind == "own" and not (asset_list_logos(company_id) or []):
+        pic = u.get("profile_pic_url_hd") or u.get("profile_pic_url")
+        if pic and _save_img(pic, "logo", "logo", {"is_primary": True, "from": f"instagram:@{handle}"}):
+            out["logo"] = 1
+    edges = ((u.get("edge_owner_to_timeline_media") or {}).get("edges")) or []
+    for e in edges[:max(1, min(8, int(count or 4)))]:
+        node = (e or {}).get("node") or {}
+        du = node.get("display_url")
+        if du and _save_img(du, "references", "brand_reference", {"from": f"instagram:@{handle}", "kind": kind}):
+            out["refs"] += 1
+    return out
+
+
+@router.post("/{company_id}/import-instagram")
+async def import_instagram(company_id: str, request: Request):
+    """Importa identidade/referências do Instagram: {handle, kind: 'own'|'reference', count}.
+    'own' = o Instagram DO cliente (identidade); 'reference' = perfil que ele admira (família de estilo)."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    handle = (body.get("handle") or (company_get(company_id).get("socials") or {}).get("instagram") or "").strip()
+    kind = (body.get("kind") or "reference").strip()
+    import asyncio as _aio
+    res = await _aio.to_thread(_ig_import, company_id, handle, kind, int(body.get("count") or 4))
+    if res.get("error"):
+        return JSONResponse({"detail": res["error"]}, status_code=422)
+    return res
+
+
 @router.post("/{company_id}/enrich")
 async def enrich_company(company_id: str, request: Request):
     """Read the company's site + Instagram and fill Dados Gerais + Voz e Persona
@@ -227,8 +569,11 @@ async def enrich_company(company_id: str, request: Request):
     if not website and not instagram:
         return JSONResponse({"detail": "Cadastre o site e/ou o Instagram em Dados Gerais primeiro."}, status_code=422)
     try:
+        import asyncio
         from ..services.ai import enrich_company_from_web
-        data = enrich_company_from_web(co.get("name") or "", website, instagram, co.get("segment") or "")
+        # to_thread: a montagem do perfil (site+Instagram+IA) leva 30-120s — rodar síncrono aqui TRAVAVA o
+        # event loop inteiro e derrubava a plataforma toda com 502 enquanto durava.
+        data = await asyncio.to_thread(enrich_company_from_web, co.get("name") or "", website, instagram, co.get("segment") or "")
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)
     # Dados Gerais
@@ -238,20 +583,25 @@ async def enrich_company(company_id: str, request: Request):
     if data.get("description") and not (co.get("notes") or "").strip():
         cup["notes"] = data["description"]
     company_update(company_id, cup)
-    # Colors from the company logo (more reliable than site text).
-    colors = dict(data.get("colors") or {})
+    # LOGO automático do site (se a empresa ainda não tem) → alimenta as cores abaixo e o motor de arte.
+    ig_stats = {"logo": 0, "refs": 0}
+    prods_added = 0
     try:
-        for lg in (asset_list_logos(company_id) or []):
-            u = lg.get("url") or ""
-            if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
-                continue
-            cols = _dominant_colors(os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/")))
-            if cols:
-                keys = ["primary", "secondary", "accent"]
-                colors.update({keys[i]: c for i, c in enumerate(cols)})
-                break
+        import asyncio as _aio
+        if not (asset_list_logos(company_id) or []):
+            await _aio.to_thread(_auto_fetch_logo, company_id, website)
+        # INSTAGRAM → logo (perfil) + artes de referência (posts) — identidade visual real do cliente
+        if instagram:
+            ig_stats = await _aio.to_thread(_ig_fetch_brand, company_id, instagram)
+        # SITE → catálogo de ofertas (planos/serviços/produtos) cadastrado automaticamente
+        prods_added = await _aio.to_thread(_auto_extract_products, company_id, website)
     except Exception:
         pass
+    # Cores: a LOGO é a verdade da marca (mais confiável que texto do site ou palpite da IA).
+    colors = dict(data.get("colors") or {})
+    logo_cols = _company_logo_colors(company_id)
+    if logo_cols:
+        colors.update(logo_cols)                    # sobrescreve o palpite da IA com a cor real da logo
     # Voz e Persona (brand kit)
     bk: Dict[str, Any] = {}
     for k in ("voice", "persona", "visual_prompt_base", "audience"):
@@ -261,7 +611,8 @@ async def enrich_company(company_id: str, request: Request):
         bk["colors"] = colors
     if bk:
         brand_kit_upsert(company_id, bk)
-    return {"company": company_get(company_id), "extracted": data}
+    return {"company": company_get(company_id), "extracted": data,
+            "products_added": prods_added, "instagram": ig_stats}
 
 
 @router.post("/{company_id}/logo")
@@ -759,6 +1110,64 @@ async def create_product(company_id: str, request: Request):
     return {"product": product_create(company_id, data)}
 
 
+@router.get("/{company_id}/products/copy-sources")
+def product_copy_sources(company_id: str, request: Request):
+    """Lista OUTRAS empresas (as que este usuário enxerga) com seus produtos, pra popular o seletor de
+    'copiar produtos de outro cliente'. Respeita o escopo de tenancy (agência só vê as suas)."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    from ..main_utils import scoped_company_ids
+    scoped = scoped_company_ids(request)                       # None = super-admin (vê todas)
+    out = []
+    for co in (company_list() or []):
+        cid = co.get("id")
+        if cid == company_id:
+            continue
+        if scoped is not None and cid not in scoped:
+            continue
+        prods = product_list(cid) or []
+        if not prods:
+            continue
+        out.append({"company_id": cid, "company_name": co.get("name") or "",
+                    "products": [{"id": p.get("id"), "name": p.get("name") or "",
+                                  "category": p.get("category") or ""} for p in prods]})
+    return {"sources": out}
+
+
+@router.post("/{company_id}/products/copy")
+async def copy_products(company_id: str, request: Request):
+    """Copia (duplica) produtos de OUTRO cliente pra este. Body: {source_company_id, product_ids?}.
+    Sem product_ids → copia TODOS os produtos da origem. Cada cópia é independente (editar não afeta a origem)."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    src_cid = (data.get("source_company_id") or "").strip()
+    if not src_cid or src_cid == company_id:
+        return JSONResponse({"detail": "Informe um cliente de origem diferente."}, status_code=422)
+    # escopo: o usuário só copia de empresas que ele enxerga
+    from ..main_utils import scoped_company_ids
+    scoped = scoped_company_ids(request)
+    if scoped is not None and (src_cid not in scoped or company_id not in scoped):
+        return JSONResponse({"detail": "Acesso negado a esse cliente."}, status_code=403)
+    wanted = set(data.get("product_ids") or [])
+    src_prods = product_list(src_cid) or []
+    if wanted:
+        src_prods = [p for p in src_prods if p.get("id") in wanted]
+    copied = []
+    for p in src_prods:
+        np = product_copy(p.get("id"), company_id)
+        if np:
+            copied.append({"id": np.get("id"), "name": np.get("name")})
+    return {"copied": copied, "count": len(copied)}
+
+
 @router.put("/{company_id}/products/{product_id}")
 async def update_product(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
@@ -775,14 +1184,81 @@ async def update_product(company_id: str, product_id: str, request: Request):
 
 
 def _extract_doc_text(name: str, raw: bytes) -> str:
-    """Extrai texto de PDF/TXT/MD/CSV. PDF via pypdf; resto decodifica UTF-8."""
+    """Extrai texto de PDF/DOCX/TXT/MD/CSV. PDF via pypdf; DOCX via zip+xml (sem dependência nova);
+    resto decodifica UTF-8."""
+    import io as _io
     ext = os.path.splitext(name or "")[1].lower()
     if ext == ".pdf":
-        import io as _io
         from pypdf import PdfReader
         rd = PdfReader(_io.BytesIO(raw))
         return "\n".join((pg.extract_text() or "") for pg in rd.pages)
+    # DOCX (ou .doc que na real é docx): zip contendo word/document.xml
+    if ext in (".docx", ".doc") or raw[:2] == b"PK":
+        try:
+            import zipfile
+            import re as _re
+            with zipfile.ZipFile(_io.BytesIO(raw)) as z:
+                xml = z.read("word/document.xml").decode("utf-8", "ignore")
+            xml = _re.sub(r"</w:p>", "\n", xml)               # fim de parágrafo → quebra de linha
+            txt = _re.sub(r"<[^>]+>", "", xml)                 # remove as tags
+            return _re.sub(r"\n{3,}", "\n\n", txt)
+        except Exception:
+            if ext in (".docx", ".doc"):
+                raise ValueError("DOCX inválido/corrompido — salve como PDF ou TXT e tente de novo.")
     return raw.decode("utf-8", "ignore")
+
+
+def _vision_ocr_doc(name: str, raw: bytes) -> str:
+    """OCR por VISÃO IA (OpenRouter gpt-4o): lê imagem (jpg/png/webp) ou PDF ESCANEADO (extrai as imagens
+    das páginas via pypdf, sem poppler). Retorna o texto transcrito ou ''. Usado como fallback da KB."""
+    import base64
+    import io as _io
+    import httpx as _hx
+    from ..services.ai import _openrouter_key
+    key = _openrouter_key()
+    if not key:
+        return ""
+    ext = os.path.splitext(name or "")[1].lower()
+    imgs: List[bytes] = []
+    if ext in (".jpg", ".jpeg", ".png", ".webp"):
+        imgs = [raw]
+    elif ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            rd = PdfReader(_io.BytesIO(raw))
+            for pg in rd.pages[:6]:                                   # teto de páginas (custo/latência)
+                for im in (pg.images or []):
+                    if im.data:
+                        imgs.append(im.data)
+                        break                                          # 1 imagem (a página) por página
+        except Exception:
+            return ""
+    if not imgs:
+        return ""
+    parts = [{"type": "text", "text": "Transcreva TODO o texto legível destas imagens de documento, em ordem, "
+                                      "mantendo títulos e listas. Responda SÓ com o texto transcrito."}]
+    for b in imgs[:6]:
+        parts.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(b).decode()}})
+    from ..services.ai import _omniroute_base, _omniroute_key
+    _chain = []
+    if _omniroute_key():
+        _chain.append((_omniroute_base(), _omniroute_key(), "cc/claude-haiku-4-5-20251001"))   # assinatura ($0)
+    _chain.append(("https://openrouter.ai/api/v1", key, "openai/gpt-4o"))                       # pago, fallback
+    for _b, _k, _m in _chain:
+        try:
+            r = _hx.post(_b + "/chat/completions",
+                         headers={"Authorization": "Bearer " + _k, "Content-Type": "application/json"},
+                         json={"model": _m, "stream": False, "max_tokens": 4000,
+                               "messages": [{"role": "user", "content": parts}]},
+                         timeout=_hx.Timeout(120.0, connect=15.0))
+            if r.status_code >= 400:
+                continue
+            txt = (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            if txt:
+                return txt
+        except Exception:
+            continue
+    return ""
 
 
 @router.post("/{company_id}/products/{product_id}/kb")
@@ -797,16 +1273,61 @@ async def upload_product_kb(company_id: str, product_id: str, request: Request, 
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     raw = await file.read()
     name = file.filename or "doc.txt"
+    import asyncio as _aio
     try:
-        text = (_extract_doc_text(name, raw) or "").strip()
+        text = ((await _aio.to_thread(_extract_doc_text, name, raw)) or "").strip()
     except Exception as e:
         return JSONResponse({"detail": f"Falha ao ler '{name}': {e}"}, status_code=400)
+    if not text or len(text) < 20:
+        # PDF escaneado (imagem) ou arquivo de imagem → OCR por VISÃO IA (fallback)
+        try:
+            text = ((await _aio.to_thread(_vision_ocr_doc, name, raw)) or "").strip()
+        except Exception:
+            text = ""
     if not text:
-        return JSONResponse({"detail": "Não consegui extrair texto desse arquivo (PDF pode ser imagem escaneada)."}, status_code=400)
+        return JSONResponse({"detail": f"Não consegui extrair texto de '{name}'. Formatos: PDF, DOCX, TXT, MD, CSV, "
+                                       f"e imagem/PDF escaneado (via OCR). Se falhou, tente salvar como PDF ou TXT."}, status_code=400)
     prev = (prod.get("knowledge") or "").strip()
     merged = (prev + f"\n\n===== {name} =====\n" + text).strip()[:60000]   # teto p/ não estourar o prompt
     product_update(product_id, {"knowledge": merged})
-    return {"ok": True, "file": name, "chars": len(text), "total_chars": len(merged)}
+    # AUTO-PREENCHER descrição/objetivo/funções a partir do documento (só campos VAZIOS — não sobrescreve).
+    filled = {}
+    try:
+        need_desc = not (prod.get("description") or "").strip()
+        _fns = prod.get("functions") or []
+        if isinstance(_fns, str):
+            try:
+                import json as _j
+                _fns = _j.loads(_fns)
+            except Exception:
+                _fns = [_fns] if _fns.strip() else []
+        need_obj = not (prod.get("objective") or "").strip()
+        need_fns = not _fns
+        if need_desc or need_obj or need_fns:
+            from ..services.ai import cheap_text_config, get_ai_config, complete_ai, extract_json
+            cfg = cheap_text_config(get_ai_config())
+            if cfg:
+                sysm = "Você extrai dados de produto/serviço de um documento. Responda SÓ JSON válido, pt-BR, sem preços."
+                usr = (f"Oferta: {prod.get('name','')}. Do texto do documento abaixo, extraia: "
+                       '{"description":"descrição clara em 1-2 frases","objective":"como VENDER/posicionar esta oferta '
+                       '(1-2 frases)","functions":["benefício/função 1","benefício 2","..."]} (3 a 8 functions). '
+                       "DOCUMENTO:\n" + text[:12000])
+                import asyncio as _aio2
+                data = extract_json(await _aio2.to_thread(complete_ai, cfg, sysm, usr, 900)) or {}
+                upd = {}
+                if need_desc and (data.get("description") or "").strip():
+                    upd["description"] = data["description"].strip()
+                if need_obj and (data.get("objective") or "").strip():
+                    upd["objective"] = data["objective"].strip()
+                if need_fns and isinstance(data.get("functions"), list) and data["functions"]:
+                    upd["functions"] = [str(f).strip() for f in data["functions"] if str(f).strip()][:10]
+                if upd:
+                    product_update(product_id, upd)
+                    filled = upd
+    except Exception:
+        pass
+    return {"ok": True, "file": name, "chars": len(text), "total_chars": len(merged),
+            "filled": filled, "product": product_get(product_id)}
 
 
 @router.get("/{company_id}/products/{product_id}/kb")
@@ -834,32 +1355,70 @@ def clear_product_kb(company_id: str, product_id: str, request: Request):
 
 
 def _dominant_colors(path: str, n: int = 3) -> List[str]:
-    """Top vivid colors from a logo image, as #RRGGBB. Skips near-white/black/gray."""
+    """Cores REAIS da marca a partir da logo, como #RRGGBB. Ranqueia por SATURAÇÃO×presença (a cor viva
+    da marca ganha do anti-aliasing lavado — o bug antigo era ordenar só por contagem de pixel, então
+    cinzas de borda venciam o azul/verde da marca). Fallback p/ logo monocromática (preto/cinza)."""
     try:
         from PIL import Image
         img = Image.open(path).convert("RGBA")
         bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        img = Image.alpha_composite(bg, img).convert("RGB").resize((96, 96))
-        q = img.quantize(colors=16)
+        img = Image.alpha_composite(bg, img).convert("RGB").resize((128, 128))
+        q = img.quantize(colors=32)
         pal = q.getpalette() or []
-        out: List[str] = []
-        for _count, idx in sorted(q.getcolors() or [], reverse=True):
+        cols = []                                   # (count, sat, r, g, b) — sem near-white/near-black
+        for cnt, idx in (q.getcolors() or []):
             r, g, b = pal[idx * 3], pal[idx * 3 + 1], pal[idx * 3 + 2]
             mx, mn = max(r, g, b), min(r, g, b)
-            if mx > 240 and mn > 240:        # near-white
+            if mx > 238 and mn > 238:               # near-white (fundo)
                 continue
-            if mx < 28:                       # near-black
+            if mx < 26:                              # near-black
                 continue
-            if mx - mn < 24 and mx > 60:      # gray
-                continue
-            hexv = "#%02X%02X%02X" % (r, g, b)
-            if hexv not in out:
-                out.append(hexv)
-            if len(out) >= n:
-                break
+            cols.append((cnt, mx - mn, r, g, b))
+
+        def _pick(min_sat: int, weight: float) -> List[str]:
+            scored = [(cnt * ((sat / 255.0) ** weight if weight else 1.0), r, g, b)
+                      for (cnt, sat, r, g, b) in cols if sat >= min_sat]
+            scored.sort(reverse=True)
+            picked: List[str] = []
+            for _s, r, g, b in scored:
+                hexv = "#%02X%02X%02X" % (r, g, b)
+                # dedup por proximidade (evita dois tons quase iguais ocupando 2 das 3 vagas)
+                if any(abs(int(h[1:3], 16) - r) + abs(int(h[3:5], 16) - g) + abs(int(h[5:7], 16) - b) < 60
+                       for h in picked):
+                    continue
+                picked.append(hexv)
+                if len(picked) >= n:
+                    break
+            return picked
+
+        out = _pick(45, 1.5)                         # cores VIVAS da marca (peso na saturação)
+        if len(out) < n:                             # logo monocromática → completa com o que houver
+            for h in _pick(0, 0.0):
+                if h not in out:
+                    out.append(h)
+                if len(out) >= n:
+                    break
         return out
     except Exception:
         return []
+
+
+def _company_logo_colors(company_id: str) -> Dict[str, str]:
+    """{primary, secondary, accent} extraídos da PRIMEIRA logo (não-SVG) da empresa — FONTE ÚNICA de cor
+    (logo = verdade da marca). Vazio se não houver logo utilizável. Usado pelo enrich e pelo social analyze
+    (assim o palpite da IA nunca sobrescreve a cor real da logo)."""
+    try:
+        for lg in (asset_list_logos(company_id) or []):
+            u = lg.get("url") or ""
+            if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
+                continue
+            cols = _dominant_colors(os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/")))
+            if cols:
+                keys = ["primary", "secondary", "accent"]
+                return {keys[i]: c for i, c in enumerate(cols)}
+    except Exception:
+        pass
+    return {}
 
 
 @router.post("/{company_id}/products/{product_id}/enrich")

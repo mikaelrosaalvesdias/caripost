@@ -415,13 +415,14 @@ def init_agency_db() -> None:
 def appuser_create(data: Dict[str, Any]) -> None:
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO app_users (user_id, username, password_hash, role, permissions, active, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO app_users (user_id, username, password_hash, role, permissions, active, created_at, updated_at, company_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (data["user_id"], data["username"], data["password_hash"],
              data.get("role", "viewer"),
              json.dumps(data.get("permissions", []), ensure_ascii=False),
              1 if data.get("active", True) else 0,
-             data["created_at"], data["updated_at"]),
+             data["created_at"], data["updated_at"],
+             (data.get("company_id") or None)),
         )
 
 
@@ -449,7 +450,7 @@ def appuser_get_by_username(username: str) -> Optional[Dict]:
 @_sqlite_retry
 def appuser_update(user_id: str, data: Dict[str, Any]) -> None:
     fields, vals = [], []
-    for key in ("username", "password_hash", "role", "active", "updated_at"):
+    for key in ("username", "password_hash", "role", "active", "updated_at", "company_id"):
         if key in data:
             fields.append(f"{key}=?")
             vals.append(data[key])

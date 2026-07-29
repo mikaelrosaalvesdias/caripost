@@ -120,7 +120,7 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
   if (loading) return <div className="panel"><div className="hint">Carregando…</div></div>;
   if (!company) return null;
 
-  const tabs = [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']];
+  const tabs = [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo'], ['acesso', 'Acesso & Funções']];
 
   return <div className="panel stack">
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -130,6 +130,7 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
       <button className="btn sm ghost" onClick={delCompany} title="Excluir empresa"><Icon name="trash" />Excluir empresa</button>
     </div>
     {tab === 'fluxo' && <CompanyFluxo company={company} onSaved={load} />}
+    {tab === 'acesso' && <CompanyAcesso company={company} onSaved={load} />}
     {tab === 'geral' && <CompanyGeral company={company} onSaved={load} />}
     {tab === 'visual' && <CompanyVisual company={company} onSaved={load} />}
     {tab === 'produtos' && <CompanyProdutos company={company} />}
@@ -149,6 +150,7 @@ function CompanyProdutos({ company }) {
   const [loading, setLoading] = React.useState(true);
   const [newName, setNewName] = React.useState('');
   const [msg, setMsg] = React.useState('');
+  const [copyOpen, setCopyOpen] = React.useState(false);
 
   const load = React.useCallback(() => {
     if (!window.mpApi) return;
@@ -167,15 +169,79 @@ function CompanyProdutos({ company }) {
   }
 
   return <div className="stack">
-    <div className="hint">Produtos e soluções são <b>fonte de conteúdo</b> para o briefing. Não são selecionados na geração — a IA busca aqui as infos do que você cadastrar.</div>
+    <div className="hint">Produtos, serviços e procedimentos são <b>fonte de conteúdo</b> para o briefing. Não são selecionados na geração — a IA busca aqui as infos do que você cadastrar.</div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
-    <div className="row" style={{ gap: 8 }}>
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
       <input className="inp" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nome do produto (ex.: Look Diesel)" onKeyDown={e => e.key === 'Enter' && addProduct()} />
       <button className="btn pri" onClick={addProduct}><Icon name="plus" />Adicionar produto</button>
+      <button className="btn" onClick={() => setCopyOpen(true)}><Icon name="copy" />Copiar de outro cliente</button>
     </div>
+    {copyOpen && <CopyProductsModal company={company} onClose={() => setCopyOpen(false)} onDone={(n) => { setCopyOpen(false); setMsg(n ? `${n} produto(s) copiado(s).` : 'Nada copiado.'); load(); }} />}
     {loading && <div className="hint">Carregando produtos…</div>}
     {!loading && !products.length && <div className="hint">Nenhum produto ainda. Adicione os produtos que a empresa trabalha.</div>}
     {products.map(p => <ProductCard key={p.id} company={company} product={p} onChanged={load} />)}
+  </div>;
+}
+
+function CopyProductsModal({ company, onClose, onDone }) {
+  const [sources, setSources] = React.useState(null);
+  const [srcId, setSrcId] = React.useState('');
+  const [picked, setPicked] = React.useState({});   // product_id -> bool
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+
+  React.useEffect(() => {
+    window.mpApi.productCopySources(company.id)
+      .then(s => { setSources(s || []); if ((s || []).length) setSrcId(s[0].company_id); })
+      .catch(e => setMsg('Erro: ' + e.message));
+  }, [company.id]);
+
+  const src = (sources || []).find(s => s.company_id === srcId);
+  const prods = (src && src.products) || [];
+  const chosen = prods.filter(p => picked[p.id]).map(p => p.id);
+  function toggle(id) { setPicked(m => ({ ...m, [id]: !m[id] })); }
+  function allNone() { const all = prods.every(p => picked[p.id]); const nx = {}; if (!all) prods.forEach(p => { nx[p.id] = true; }); setPicked(nx); }
+
+  async function copy() {
+    setBusy(true); setMsg('');
+    try {
+      const r = await window.mpApi.copyProducts(company.id, { source_company_id: srcId, product_ids: chosen });
+      onDone((r && r.count) || 0);
+    } catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
+  }
+
+  return <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+    <div className="panel stack" style={{ maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto', background: 'var(--bg2)' }} onClick={e => e.stopPropagation()}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <b>Copiar produtos de outro cliente</b>
+        <button className="btn sm ghost" onClick={onClose}><Icon name="x" /></button>
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>As cópias ficam independentes — editar aqui não muda o cliente de origem. Não traz logos/fotos (só o texto e a base de conhecimento que alimentam o briefing).</div>
+      {msg && <div className="err">{msg}</div>}
+      {sources === null && <div className="hint">Carregando clientes…</div>}
+      {sources !== null && !sources.length && <div className="hint">Nenhum outro cliente com produtos cadastrados.</div>}
+      {sources !== null && !!sources.length && <div className="stack" style={{ marginTop: 10 }}>
+        <Field label="Cliente de origem">
+          <select className="inp" value={srcId} onChange={e => { setSrcId(e.target.value); setPicked({}); }}>
+            {sources.map(s => <option key={s.company_id} value={s.company_id}>{s.company_name} ({s.products.length})</option>)}
+          </select>
+        </Field>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="sec mut">Produtos</span>
+          <button className="btn sm ghost" onClick={allNone}>{prods.every(p => picked[p.id]) && prods.length ? 'Desmarcar todos' : 'Marcar todos'}</button>
+        </div>
+        <div className="stack" style={{ maxHeight: 260, overflowY: 'auto', gap: 4 }}>
+          {prods.map(p => <label key={p.id} className="litem" style={{ padding: 8, cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={!!picked[p.id]} onChange={() => toggle(p.id)} />
+            <div className="li-main"><b>{p.name}</b>{p.category && <small>{p.category}</small>}</div>
+          </label>)}
+        </div>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button className="btn pri" onClick={copy} disabled={busy || !chosen.length}>{busy ? 'Copiando…' : `Copiar ${chosen.length || ''} produto(s)`}</button>
+        </div>
+      </div>}
+    </div>
   </div>;
 }
 
@@ -471,7 +537,16 @@ function ProductCard({ company, product, onChanged }) {
     try {
       const r = await window.mpApi.uploadProductKb(company.id, product.id, file);
       if (r && r.detail) { setKbMsg('Erro: ' + r.detail); }
-      else { setKbChars((r && r.total_chars) || 0); setKbMsg('✓ ' + ((r && r.file) || file.name) + ' adicionado (' + ((r && r.chars) || 0) + ' caracteres). O briefing fica mais profundo.'); onChanged(); }
+      else {
+        setKbChars((r && r.total_chars) || 0);
+        const f = (r && r.filled) || {};
+        if (f.description) setDescription(f.description);
+        if (f.objective) setObjective(f.objective);
+        if (Array.isArray(f.functions) && f.functions.length) setFunctions(f.functions.join('\n'));
+        const auto = Object.keys(f).length ? ' Preenchi automaticamente: ' + Object.keys(f).map(k => ({ description: 'descrição', objective: 'objetivo', functions: 'funções' }[k] || k)).join(', ') + ' (confira e salve).' : '';
+        setKbMsg('✓ ' + ((r && r.file) || file.name) + ' adicionado (' + ((r && r.chars) || 0) + ' caracteres).' + auto);
+        onChanged();
+      }
     } catch (e) { setKbMsg('Erro: ' + e.message); }
     finally { setKbBusy(false); }
   }
@@ -574,11 +649,11 @@ function ProductCard({ company, product, onChanged }) {
       <small className="hint" style={{ alignSelf: 'center' }}>Preenche descrição, objetivo, funções, cores e à la carte — sem preços.</small>
     </div>
     <Field label="Descrição (fonte do briefing)"><textarea className="inp" rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="O que é, diferenciais, público, claims…" style={{ resize: 'vertical' }} /></Field>
-    <Field label="Objetivo / posicionamento (como a IA deve vender este app)"><textarea className="inp" rows={2} value={objective} onChange={e => setObjective(e.target.value)} placeholder="Ex.: vender para provedores revenderem como SVA aos assinantes; foco em telemedicina pro usuário final, não em clínicas." style={{ resize: 'vertical' }} /></Field>
-    <Field label="Funções / recursos (uma por linha — alimenta a IA, sem preços)"><textarea className="inp" rows={3} value={functions} onChange={e => setFunctions(e.target.value)} placeholder="Catálogo de músicas offline&#10;Sem anúncios&#10;Letras sincronizadas" style={{ resize: 'vertical' }} /></Field>
+    <Field label="Objetivo / posicionamento (como a IA deve vender esta oferta)"><textarea className="inp" rows={2} value={objective} onChange={e => setObjective(e.target.value)} placeholder="Ex.: procedimento premium com resultado natural; público que busca autoestima e confiança." style={{ resize: 'vertical' }} /></Field>
+    <Field label="Funções / benefícios / o que inclui (uma por linha — alimenta a IA, sem preços)"><textarea className="inp" rows={3} value={functions} onChange={e => setFunctions(e.target.value)} placeholder="Catálogo de músicas offline&#10;Sem anúncios&#10;Letras sincronizadas" style={{ resize: 'vertical' }} /></Field>
     <Field label="Base de conhecimento (PDF/TXT: manual, FAQ, lista de funções — deixa o briefing PROFUNDO)">
       <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input type="file" accept=".pdf,.txt,.md,.csv" disabled={kbBusy} onChange={e => { const f = e.target.files[0]; e.target.value = ''; uploadKb(f); }} />
+        <input type="file" accept=".pdf,.docx,.doc,.txt,.md,.csv,.jpg,.jpeg,.png,.webp" disabled={kbBusy} onChange={e => { const f = e.target.files[0]; e.target.value = ''; uploadKb(f); }} />
         {kbChars > 0 && <Pill kind="good" dot>{kbChars.toLocaleString('pt-BR')} caracteres indexados</Pill>}
         {kbChars > 0 && <button className="btn sm ghost" disabled={kbBusy} onClick={clearKb}>Limpar base</button>}
       </div>
@@ -994,16 +1069,33 @@ function CompanyLogos({ company, onSaved }) {
 function CompanyVisual({ company, onSaved }) {
   const bk = company.brand_kit || {};
   const colors = bk.colors || {};
-  const [primary, setPrimary] = React.useState(colors.primary || '#123d8f');
-  const [secondary, setSecondary] = React.useState(colors.secondary || '#fe6601');
-  const [accent, setAccent] = React.useState(colors.accent || '#14b7f0');
+  // PALETA LIVRE: quantas cores o usuário quiser (nome + hex). Todas entram nos prompts da IA.
+  const initPal = Object.keys(colors).length
+    ? Object.entries(colors).map(([k, v]) => ({ name: k, hex: v }))
+    : [{ name: 'primary', hex: '#123d8f' }, { name: 'secondary', hex: '#fe6601' }, { name: 'accent', hex: '#14b7f0' }];
+  const [pal, setPal] = React.useState(initPal);
   const [msg, setMsg] = React.useState('');
+  const [igHandle, setIgHandle] = React.useState(((company.socials || {}).instagram || ''));
+  const [igKind, setIgKind] = React.useState('reference');
+  const [igBusy, setIgBusy] = React.useState(false);
+  async function importIg() {
+    setIgBusy(true); setMsg('');
+    try {
+      const r = await window.mpApi.importInstagram(company.id, { handle: igHandle, kind: igKind, count: 4 });
+      if (r && r.detail) setMsg('Erro: ' + r.detail);
+      else { setMsg(`✓ Importado de @${r.handle}: ${r.refs} referência(s)${r.logo ? ' + logo' : ''}.`); onSaved(); }
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setIgBusy(false); }
+  }
   const refs = company.references || [];
+  const setPalAt = (i, patch) => setPal(p => p.map((c, j) => j === i ? { ...c, ...patch } : c));
 
   async function saveColors() {
     setMsg('');
     try {
-      await window.mpApi.saveBrandKit(company.id, { primaryColor: primary, secondaryColor: secondary, accentColor: accent });
+      const dict = {};
+      pal.forEach(c => { if ((c.name || '').trim() && (c.hex || '').trim()) dict[c.name.trim()] = c.hex.trim(); });
+      await window.mpApi.saveBrandKit(company.id, { colors: dict });
       setMsg('Cores salvas!'); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
   }
@@ -1023,14 +1115,28 @@ function CompanyVisual({ company, onSaved }) {
   return <div className="stack">
     <CompanyLogos company={company} onSaved={onSaved} />
     <div className="sec">Paleta de cores</div>
-    <div className="split">
-      <Field label="Primária"><div className="row" style={{ gap: 8, alignItems: 'center' }}><input type="color" value={primary} onChange={e => setPrimary(e.target.value)} style={{ width: 50, height: 40, border: 'none', background: 'none', cursor: 'pointer' }} /><span className="mono" style={{ fontSize: 12 }}>{primary}</span></div></Field>
-      <Field label="Secundária"><div className="row" style={{ gap: 8, alignItems: 'center' }}><input type="color" value={secondary} onChange={e => setSecondary(e.target.value)} style={{ width: 50, height: 40, border: 'none', background: 'none', cursor: 'pointer' }} /><span className="mono" style={{ fontSize: 12 }}>{secondary}</span></div></Field>
+    <div className="hint">Adicione QUANTAS cores a marca tiver — todas entram nos prompts da IA. Dica: 'accent' é a cor de destaque usada em rodapé/CTA.</div>
+    <div className="stack" style={{ gap: 8 }}>
+      {pal.map((c, i) => <div key={i} className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(c.hex) ? c.hex : '#000000'} onChange={e => setPalAt(i, { hex: e.target.value })} style={{ width: 46, height: 38, border: 'none', background: 'none', cursor: 'pointer' }} />
+        <input className="inp" value={c.name} onChange={e => setPalAt(i, { name: e.target.value })} placeholder="nome (ex.: primary, rosa, dourado)" style={{ maxWidth: 220 }} />
+        <span className="mono" style={{ fontSize: 12, minWidth: 70 }}>{c.hex}</span>
+        <button className="btn sm ghost" onClick={() => setPal(p => p.filter((_, j) => j !== i))}>✕</button>
+      </div>)}
+      <button className="btn sm ghost" onClick={() => setPal(p => [...p, { name: 'cor' + (p.length + 1), hex: '#888888' }])}>+ Adicionar cor</button>
     </div>
-    <Field label="Destaque"><div className="row" style={{ gap: 8, alignItems: 'center' }}><input type="color" value={accent} onChange={e => setAccent(e.target.value)} style={{ width: 50, height: 40, border: 'none', background: 'none', cursor: 'pointer' }} /><span className="mono" style={{ fontSize: 12 }}>{accent}</span></div></Field>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <button className="btn sm pri" onClick={saveColors}>Salvar cores</button>
-    <div className="sec">Mood board</div>
+    <div className="sec">Artes de referência (o Estúdio IA segue este estilo)</div>
+    <div className="hint">Suba artes que representem o estilo desejado (suas, do manual, ou de um perfil que o cliente admira). O motor usa as mais recentes como <b>família visual</b> em toda geração.</div>
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <input className="inp" style={{ maxWidth: 200 }} placeholder="@instagram" value={igHandle} onChange={e => setIgHandle(e.target.value)} />
+      <select className="inp" style={{ maxWidth: 260 }} value={igKind} onChange={e => setIgKind(e.target.value)}>
+        <option value="own">Instagram DO cliente (puxa identidade)</option>
+        <option value="reference">Perfil que ele admira / concorrente (estilo)</option>
+      </select>
+      <button className="btn sm pri" disabled={igBusy} onClick={importIg}>{igBusy ? 'Importando…' : 'Importar do Instagram'}</button>
+    </div>
     <input type="file" accept="image/*" onChange={e => e.target.files[0] && doUploadRef(e.target.files[0])} />
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 12 }}>
       {refs.map(r => <div key={r.id} style={{ position: 'relative' }}>
@@ -1421,3 +1527,109 @@ function ConcorrentesApp() {
 }
 
 Object.assign(window, { ClientesApp, AprovacaoApp, ConcorrentesApp });
+
+/* ── ACESSO & FUNÇÕES (SaaS): admin libera/bloqueia funções por cliente + cria os acessos ── */
+function CompanyAcesso({ company, onSaved }) {
+  // ESPELHA os grupos/apps do OS — o admin liga/desliga QUALQUER app por cliente.
+  const APP_GROUPS = [
+    ['Inteligência e Mídia', [['analyze', 'Analyze'], ['compare', 'Compare'], ['runs', 'Runs'], ['media', 'Arquivos'], ['referencia', 'Referência'], ['enhancer', 'Video Enhancer']]],
+    ['Edição & Conteúdo', [['legenda', 'Legenda'], ['logo', 'Logo'], ['teaser', 'Teaser'], ['cortes', 'Cortes'], ['thumbnail', 'Thumbnail']]],
+    ['Operação e Distribuição', [['conteudo', 'Conteúdo'], ['criacao', 'Criação'], ['publisher', 'Publicar'], ['calendar', 'Agenda']]],
+    ['Gestão de Agência', [['painel', 'Painel'], ['clientes', 'Clientes'], ['acervo', 'Acervo'], ['trends', 'Tendências'], ['aprovacao', 'Aprovação'], ['concorrentes', 'Concorrentes'], ['financial', 'Financeiro'], ['notificacoes', 'Notificações'], ['settings', 'Settings']]],
+    ['Fluxo rápido', [['auto', 'Modo rápido'], ['autoeditor', 'AutoEditor'], ['wizard', 'Assistente']]],
+  ];
+  const IA_CAPS = [['video', 'Criar vídeo'], ['animar', 'Animar imagem'], ['editar_arte', 'Editar com IA'], ['estudio', 'Estúdio IA (referências)']];
+  const CLIENT_DEFAULT = ['conteudo', 'criacao', 'publisher', 'calendar', 'clientes', 'acervo', 'aprovacao', 'notificacoes', 'wizard', 'video', 'animar', 'editar_arte', 'estudio'];
+  const isOn = (f, k) => f[k] === true || (f[k] === undefined && CLIENT_DEFAULT.includes(k));
+  const initF = (() => { try { return typeof company.features === 'string' ? JSON.parse(company.features || '{}') : (company.features || {}); } catch (e) { return {}; } })();
+  const [feats, setFeats] = React.useState(initF);
+  const [maxVer, setMaxVer] = React.useState(initF.versoes_max || 2);
+  const [msg, setMsg] = React.useState('');
+  const [users, setUsers] = React.useState([]);
+  const [nu, setNu] = React.useState({ username: '', password: '', tipo: 'owner' });
+  const loadUsers = React.useCallback(() => {
+    window.mpApi.listAuthUsers().then(r => {
+      const all = (r && r.users) || [];
+      setUsers(all.filter(u => u.company_id === company.id || (u.role === 'agency' && company.owner_user_id === u.user_id)));
+    }).catch(() => {});
+  }, [company.id]);
+  React.useEffect(() => { loadUsers(); }, [loadUsers]);
+  async function saveFeats() {
+    setMsg('');
+    try {
+      const full = { ...feats };
+      APP_GROUPS.forEach(([, apps]) => apps.forEach(([k]) => { full[k] = isOn(feats, k); }));
+      IA_CAPS.forEach(([k]) => { full[k] = isOn(feats, k); });
+      full.versoes_max = Number(maxVer) || 2;
+      await window.mpApi.setCompanyFeatures(company.id, full);
+      setMsg('✓ Funções salvas. O cliente vê as bloqueadas apagadinhas com aviso de plano.');
+      onSaved && onSaved();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+  }
+  async function criarAcesso() {
+    setMsg('');
+    if (!nu.username || !nu.password) { setMsg('Informe e-mail/usuário e senha.'); return; }
+    try {
+      const payload = { username: nu.username.trim(), password: nu.password, role: nu.tipo };
+      if (nu.tipo === 'owner') payload.company_id = company.id;
+      const r = await window.mpApi.createAuthUser(payload);
+      if (r && r.error) { setMsg('Erro: ' + r.error); return; }
+      if (nu.tipo === 'agency' && r && r.user) {
+        try { await window.mpApi.updateCompany(company.id, { owner_user_id: r.user.user_id }); } catch (e) {}
+      }
+      setNu({ username: '', password: '', tipo: 'owner' }); setMsg('✓ Acesso criado.'); loadUsers();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+  }
+  return <div className="stack">
+    <div className="sec"><Icon name="shield" />Funções liberadas para este cliente</div>
+    <div className="hint">Desmarcadas ficam <b>apagadinhas</b> pro cliente, com o aviso: "Função não liberada no seu plano. Chame o seu consultor de vendas."</div>
+    {APP_GROUPS.map(([gname, apps]) => <div key={gname} className="panel stack" style={{ gap: 6 }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <b style={{ fontSize: 13 }}>{gname}</b>
+        <span className="row" style={{ gap: 6 }}>
+          <button className="btn sm ghost" onClick={() => setFeats(f => { const n = { ...f }; apps.forEach(([k]) => n[k] = true); return n; })}>liberar tudo</button>
+          <button className="btn sm ghost" onClick={() => setFeats(f => { const n = { ...f }; apps.forEach(([k]) => n[k] = false); return n; })}>bloquear tudo</button>
+        </span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 6 }}>
+        {apps.map(([k, l]) => <label key={k} className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={isOn(feats, k)} onChange={e => setFeats(f => ({ ...f, [k]: e.target.checked }))} />
+          <span>{l}</span>
+        </label>)}
+      </div>
+    </div>)}
+    <div className="panel stack" style={{ gap: 6 }}>
+      <b style={{ fontSize: 13 }}>Capacidades de IA</b>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 6 }}>
+        {IA_CAPS.map(([k, l]) => <label key={k} className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={isOn(feats, k)} onChange={e => setFeats(f => ({ ...f, [k]: e.target.checked }))} />
+          <span>{l}</span>
+        </label>)}
+      </div>
+    </div>
+    <Field label="Máximo de versões por geração (menos é mais pro cliente)">
+      <select className="inp" style={{ maxWidth: 120 }} value={maxVer} onChange={e => setMaxVer(e.target.value)}>
+        {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+      </select>
+    </Field>
+    <button className="btn sm pri" onClick={saveFeats}>Salvar funções</button>
+    <div className="sec" style={{ marginTop: 14 }}><Icon name="users" />Acessos deste cliente</div>
+    <div className="hint"><b>Cliente final</b> = usa a plataforma só para esta empresa. <b>Agência</b> = compra o software e cadastra os próprios clientes (esta empresa vira o 1º cliente dela).</div>
+    <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <select className="inp" style={{ maxWidth: 230 }} value={nu.tipo} onChange={e => setNu(v => ({ ...v, tipo: e.target.value }))}>
+        <option value="owner">Cliente final (só esta empresa)</option>
+        <option value="agency">Agência (cadastra clientes próprios)</option>
+      </select>
+      <input className="inp" style={{ maxWidth: 240 }} placeholder="e-mail / usuário" value={nu.username} onChange={e => setNu(v => ({ ...v, username: e.target.value }))} />
+      <input className="inp" style={{ maxWidth: 180 }} type="password" placeholder="senha" value={nu.password} onChange={e => setNu(v => ({ ...v, password: e.target.value }))} />
+      <button className="btn sm pri" onClick={criarAcesso}>Criar acesso</button>
+    </div>
+    {users.length > 0 && <div className="stack" style={{ gap: 6 }}>
+      {users.map(u => <div key={u.user_id} className="litem" style={{ padding: 10 }}>
+        <div className="li-main"><b>{u.username}</b><small>{u.role === 'agency' ? 'Agência' : 'Cliente final'} · {u.active ? 'ativo' : 'inativo'}</small></div>
+        <button className="btn sm ghost" onClick={async () => { const p = prompt('Nova senha para ' + u.username + ':'); if (p) { await window.mpApi.resetAuthPassword(u.user_id, p); setMsg('✓ Senha redefinida.'); } }}>Redefinir senha</button>
+      </div>)}
+    </div>}
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+  </div>;
+}

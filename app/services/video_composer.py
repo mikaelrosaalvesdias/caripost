@@ -61,6 +61,21 @@ def concat_raw_clips(paths: List[str], out_path: str) -> bool:
             pass
 
 
+def cta_endcard_clip(image_path: str, out_path: str, seconds: float = 3.0,
+                     width: int = 1080, height: int = 1920, bg: str = "0x0d1117") -> bool:
+    """CTA FIXO (imagem aprovada, NÃO gerada por IA) → clipe de end-card 9:16 com áudio mudo, pronto pra
+    concatenar no FIM de todo vídeo. A imagem (qualquer proporção, ex. card 4:5) entra centralizada com PAD
+    na cor de fundo (sem distorcer). Mesma receita do compositor, isolada. True/False; nunca levanta."""
+    if not image_path or not os.path.exists(image_path):
+        return False
+    vf = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+          f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1,fade=t=in:st=0:d=0.45")
+    return _ff(["-loop", "1", "-i", image_path, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                "-t", str(max(1.0, float(seconds))), "-vf", vf, "-r", "30",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+                "-movflags", "+faststart", out_path], timeout=180)
+
+
 def last_frame_png(clip_path: str, out_path: str) -> bool:
     """Extrai o ÚLTIMO frame do clipe → PNG. Vira o first_frame da próxima cena (CONTINUIDADE). True/False.
     O PNG precisa ficar numa URL pública (sem cookie/redirect) p/ a OpenRouter baixar."""

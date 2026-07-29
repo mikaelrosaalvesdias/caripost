@@ -50,6 +50,10 @@ ROLE_DEFAULTS: Dict[str, List[str]] = {
         "calendar", "financial", "dmca",
     ],
     "viewer": ["analyze", "runs", "media", "referencia"],
+    # CLIENTE FINAL (dono de 1 empresa no SaaS): só as abas de conteúdo da própria empresa
+    "owner": ["conteudo", "acervo", "aprovacao", "calendar", "clientes", "publisher", "notificacoes", "consumo"],
+    # AGÊNCIA (comprou o software; cadastra e opera os clientes DELA)
+    "agency": ["conteudo", "acervo", "aprovacao", "calendar", "clientes", "publisher", "notificacoes", "consumo", "wizard"],
 }
 
 ALL_TABS = ROLE_DEFAULTS["admin"]
@@ -202,18 +206,27 @@ async def login(request: Request):
         "username": user["username"],
         "role": user["role"],
         "permissions": effective_perms,
+        "company_id": user.get("company_id") or None,   # tenancy: user de cliente enxerga SÓ a empresa dele
     })
     ip = request.client.host if request.client else None
     try:
         activity_log_insert(user["user_id"], user["username"], "login", ip=ip)
     except Exception:
         pass
+    _feat = {}
+    if user.get("company_id"):
+        try:
+            from ..services.billing import get_features
+            _feat = get_features(user["company_id"])
+        except Exception:
+            _feat = {}
     return {
         "ok": True,
         "token": token,
         "user": {
             **user,
             "permissions": effective_perms,
+            "features": _feat,
         },
     }
 
@@ -233,6 +246,13 @@ async def me(request: Request):
     elif user_id == "__env_admin__":
         sess = dict(sess)
         sess["permissions"] = ROLE_DEFAULTS["admin"]
+    if sess.get("company_id"):
+        try:
+            from ..services.billing import get_features
+            sess = dict(sess)
+            sess["features"] = get_features(sess["company_id"])
+        except Exception:
+            pass
     return {"ok": True, "user": sess}
 
 
@@ -264,8 +284,11 @@ async def create_user(request: Request):
 
     if not username or not password:
         return JSONResponse({"error": "username and password required"}, status_code=400)
-    if role not in ("admin", "editor", "viewer"):
+    if role not in ("admin", "editor", "viewer", "owner", "agency"):
         return JSONResponse({"error": "invalid role"}, status_code=400)
+    company_id = (body.get("company_id") or "").strip() or None
+    if role == "owner" and not company_id:
+        return JSONResponse({"error": "owner requer company_id"}, status_code=400)
     if appuser_get_by_username(username):
         return JSONResponse({"error": "username_taken"}, status_code=409)
 
@@ -282,6 +305,7 @@ async def create_user(request: Request):
         "active": True,
         "created_at": now,
         "updated_at": now,
+        "company_id": company_id,
     })
     sess = _get_session(request)
     actor = sess.get("username", "setup") if sess else "setup"

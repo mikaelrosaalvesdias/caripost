@@ -66,12 +66,39 @@ from .routers.posts import router as posts_router
 from .routers.ai_settings import router as ai_settings_router
 from .routers.social import router as social_router
 from .routers.notify import router as notify_router
+from .routers.billing import router as billing_router
+from .routers.template_video import router as template_video_router
 
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.27.23")
+app = FastAPI(title="Adult Meta (internal)", version="1.27.103")
+
+
+@app.middleware("http")
+async def _tenant_scope_guard(request, call_next):
+    """TENANCY (Marco A): usuário amarrado a uma empresa só acessa a própria empresa e nunca
+    os recursos administrativos da agência. Super-admin/staff (sem company_id no token) = sem restrição."""
+    try:
+        from .main_utils import scoped_company_ids
+        _scids = scoped_company_ids(request)
+    except Exception:
+        _scids = None
+    if _scids is not None:
+        import re as _re
+        p = request.url.path
+        m = _re.match(r"^/api/companies/([^/]+)", p)
+        if m and m.group(1) not in _scids:
+            from fastapi.responses import JSONResponse as _JR
+            return _JR({"detail": "Acesso negado a esta empresa.", "error": "company_scope"}, status_code=403)
+        _BLOCKED = ("/auth/users", "/auth/logs", "/api/creators", "/api/dmca", "/api/trends",
+                    "/api/financial", "/settings/tokens", "/api/ai-settings", "/api/billing/credits",
+                    "/api/billing/features", "/runs", "/analyze", "/api/autoeditor", "/api/enhancer")
+        if any(p == b or p.startswith(b + "/") or p.startswith(b + "?") for b in _BLOCKED):
+            from fastapi.responses import JSONResponse as _JR
+            return _JR({"detail": "Recurso restrito ao administrador.", "error": "admin_only"}, status_code=403)
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -126,8 +153,14 @@ app.include_router(posts_router)
 app.include_router(ai_settings_router)
 app.include_router(social_router)
 app.include_router(notify_router)
+app.include_router(billing_router)
+app.include_router(template_video_router)
 
 API_KEY = os.environ.get("ADULT_META_API_KEY")
+# Fail-closed: if the API key is ever absent (e.g. a stack redeploy that omits
+# the env), do NOT silently reopen the API. Open access requires an explicit
+# opt-in for local dev. Valid browser sessions always pass regardless of this.
+ALLOW_OPEN_ACCESS = os.environ.get("ALLOW_OPEN_ACCESS", "").strip().lower() in ("1", "true", "yes", "on")
 
 # MinIO / S3-compatible storage (for direct browser uploads)
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "https://s3.n8nmikael.com.br")
@@ -5317,6 +5350,29 @@ def _format_srt_premium(segments: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_OPEN_ACCESS_SEEN: set = set()
+
+
+def _audit_open_access(req: Request) -> None:
+    """MAPEAMENTO p/ ativar auth depois (sem quebrar integrações): registra 1x por rota+cliente quem usa o
+    acesso ABERTO atual, SEM bloquear. Grava em /data/open_access_audit.log. Browser = UA Mozilla; integrações
+    (n8n, python-requests, axios…) = UA próprio → mostra exatamente o que precisa de chave antes de fechar."""
+    try:
+        ua = (req.headers.get("user-agent") or "")[:160]
+        parts = [p for p in req.url.path.split("/") if p][:2]
+        route = "/" + "/".join(parts)
+        sig = route + "|" + ua[:48]
+        if sig in _OPEN_ACCESS_SEEN:
+            return
+        _OPEN_ACCESS_SEEN.add(sig)
+        ip = req.headers.get("x-forwarded-for") or (req.client.host if req.client else "?")
+        with open("/data/open_access_audit.log", "a") as _f:
+            _f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "method": req.method,
+                                 "path": req.url.path, "route": route, "ua": ua, "ip": ip}) + "\n")
+    except Exception:
+        pass
+
+
 def _require_api_key(req: Request) -> Optional[dict]:
     """Return error dict if not authorized, else None.
 
@@ -5330,8 +5386,13 @@ def _require_api_key(req: Request) -> Optional[dict]:
         return None
 
     if not API_KEY:
-        # No API key configured and no session → open access (dev mode)
-        return None
+        # No API key configured and no valid session. Fail CLOSED unless a dev
+        # explicitly opted into open access. This is what keeps "dev-mode closed"
+        # true even if the key env is ever dropped by a redeploy.
+        if ALLOW_OPEN_ACCESS:
+            _audit_open_access(req)   # dev opt-in: MAPEIA (não bloqueia) quem usa o acesso aberto
+            return None
+        return {"error": "unauthorized", "detail": "api_not_configured"}
 
     provided = req.headers.get("x-api-key") or req.query_params.get("api_key")
     if provided != API_KEY:
@@ -5423,9 +5484,15 @@ def _setup_s3_cors():
 
 @app.on_event("startup")
 def _startup():
-    init_db()
-    init_agency_db()
-    init_companies_db()
+    # Marco 0: serialize schema init across swarm replicas so the guarded
+    # ADD COLUMN statements in init_*_db() can't race, then apply versioned
+    # migrations under the same cross-process lock.
+    from .migrations import schema_lock, run_migrations
+    with schema_lock():
+        init_db()
+        init_agency_db()
+        init_companies_db()
+        run_migrations(_locked=True)
     os.makedirs(LOCAL_MEDIA_ROOT, exist_ok=True)
     _configure_process_tmpdir()
     tmp_root = _preferred_tmpdir_root()

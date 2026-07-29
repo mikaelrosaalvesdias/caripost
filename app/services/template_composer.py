@@ -921,11 +921,22 @@ def compose_story_repost(cover_bytes: bytes, colors: Optional[Dict] = None) -> b
 
 
 def compose_logos_only(img_bytes: bytes, company_logo_path: Optional[str] = None,
-                       app_logo_path: Optional[str] = None, colors: Optional[Dict] = None) -> bytes:
+                       app_logo_path: Optional[str] = None, colors: Optional[Dict] = None,
+                       top_guard: bool = False) -> bytes:
     """Modo IA-LIVRE: a IA gerou a arte INTEIRA (texto + design). O código NÃO desenha nada —
     só recorta pro 4:5 e carimba as logos OFICIAIS (app no topo-direita, empresa no rodapé-esquerda),
-    cada uma em chip de contraste pra ficar legível sobre qualquer fundo."""
+    cada uma em chip de contraste pra ficar legível sobre qualquer fundo.
+    top_guard=True (arte criativa): aplica um degradê escuro no topo ANTES da logo — REDE DE SEGURANÇA que
+    APAGA qualquer logo/marca/watermark/junk que a IA teimou em desenhar lá (não confia na instrução)."""
     canvas = _cover(Image.open(io.BytesIO(img_bytes)).convert("RGB"), W, H).convert("RGBA")
+    if top_guard:
+        gh = int(H * 0.155)
+        col = Image.new("L", (1, gh), 0)
+        for _y in range(gh):
+            col.putpixel((0, _y), int(248 * max(0.0, 1.0 - (_y / gh) ** 1.35)))   # quase opaco no topo → 0 embaixo
+        mask = col.resize((W, gh))
+        dark = Image.new("RGBA", (W, gh), (8, 7, 11, 255)); dark.putalpha(mask)
+        canvas.alpha_composite(dark, (0, 0))                                        # cobre o junk do topo
     # Logo OFICIAL no TOPO-CENTRO, PURA (transparente, SEM painel/fundo). A IA já deixou o topo limpo.
     primary = app_logo_path or company_logo_path
     if primary:
@@ -940,6 +951,51 @@ def compose_logos_only(img_bytes: bytes, company_logo_path: Optional[str] = None
     out = io.BytesIO()
     canvas.convert("RGB").save(out, "PNG")
     return out.getvalue()
+
+
+def compose_pattern1(img_bytes: bytes, title: str, subtitle: str = "", company_logo_path: Optional[str] = None,
+                     site: str = "", phone: str = "", colors: Optional[Dict] = None) -> bytes:
+    """PADRÃO #1 (biblioteca de padrões): cena/foto da IA (sujeito na parte de BAIXO) + zona de TEXTO no ALTO
+    desenhada por CÓDIGO (Poppins, cor da marca, confiável) + logo no topo + rodapé de contato. Estrutura fixa;
+    marca/contato do cadastro. A IA só faz a cena (topo mais escuro/simples reservado ao texto)."""
+    colors = colors or {}
+    ACC = _hex(colors.get("accent") or colors.get("primary"), ORANGE)
+    canvas = _cover(Image.open(io.BytesIO(img_bytes)).convert("RGB"), W, H).convert("RGBA")
+    # 1) scrim no ALTO (~52%) — legibilidade do texto + apaga qualquer junk da IA
+    gh = int(H * 0.52)
+    col = Image.new("L", (1, gh), 0)
+    for _y in range(gh):
+        col.putpixel((0, _y), int(240 * max(0.0, 1.0 - (_y / gh) ** 1.5)))
+    dark = Image.new("RGBA", (W, gh), (10, 9, 12, 255)); dark.putalpha(col.resize((W, gh)))
+    canvas.alpha_composite(dark, (0, 0))
+    d = ImageDraw.Draw(canvas, "RGBA")
+    # 2) LOGO oficial topo-centro
+    lg = _load_logo(company_logo_path, 300, 96)
+    if lg:
+        canvas.alpha_composite(lg.convert("RGBA"), (int(W / 2 - lg.width / 2), 48))
+    # 3) TÍTULO (código) no alto, abaixo da logo — Poppins, última palavra na cor da marca
+    M = 72
+    tf = _font(94, weight="extrabold")
+    tl = _wrap(d, title, tf, W - 2 * M)
+    while len(tl) > 4 and tf.size > 50:
+        tf = _font(tf.size - 6, weight="extrabold"); tl = _wrap(d, title, tf, W - 2 * M)
+    ty = 196
+    for k, ln in enumerate(tl):
+        if k == len(tl) - 1 and " " in ln:
+            pre, last = ln.rsplit(" ", 1)
+            d.text((M, ty), pre + " ", font=tf, fill=(255, 255, 255))
+            d.text((M + d.textlength(pre + " ", font=tf), ty), last, font=tf, fill=ACC)
+        else:
+            d.text((M, ty), ln, font=tf, fill=(255, 255, 255))
+        ty += int(tf.size * 1.04)
+    if subtitle:
+        ty += 12
+        sf = _font(40, weight="semibold")
+        for ln in _wrap(d, subtitle, sf, W - 2 * M):
+            d.text((M, ty), ln, font=sf, fill=(236, 236, 236)); ty += 48
+    out = io.BytesIO(); canvas.convert("RGB").save(out, "PNG")
+    # 4) rodapé de contato (mesmo padrão aprovado)
+    return compose_cta_footer(out.getvalue(), company_logo_path, site, phone, colors)
 
 
 def compose_cta_footer(img_bytes: bytes, company_logo_path: Optional[str] = None,
