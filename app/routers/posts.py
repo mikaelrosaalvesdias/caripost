@@ -1696,7 +1696,7 @@ async def kie_recover(request: Request):
     ids = [str(x).strip() for x in (body.get("task_ids") or []) if str(x).strip()]
     minutes = int(body.get("minutes") or 180)
     if not ids:
-        led = os.path.join(UPLOAD_DIR, "_tmp", "kie_tasks.jsonl")
+        led = os.path.join(os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")), "kie_tasks.jsonl")
         try:
             cut = _tm.time() - minutes * 60
             with open(led) as f:

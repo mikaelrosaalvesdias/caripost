@@ -1263,7 +1263,8 @@ def _kie_ledger(task_id: str, model: str, endpoint: str = "jobs"):
     try:
         import json as _json
         import time as _tm
-        p = os.path.join(os.environ.get("ADULT_META_MEDIA_ROOT", "/media"), "_tmp", "kie_tasks.jsonl")
+        # no VOLUME /data (junto do runs.db) — /media/_tmp tem varredor de temporários que APAGOU o ledger
+        p = os.path.join(os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")), "kie_tasks.jsonl")
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "a") as f:
             f.write(_json.dumps({"ts": _tm.time(), "task_id": task_id, "model": model, "endpoint": endpoint}) + "\n")

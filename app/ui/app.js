@@ -534,6 +534,13 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.104', date: '2026-07-29',
+    items: [
+      { type: 'fix', text: 'Kie: o ledger de tarefas pagas agora fica no volume persistente e não é apagado pela limpeza de temporários.' },
+      { type: 'fix', text: 'Resgate de arte perdida validado: resultado pronto na Kie pode ser recuperado e salvo no Acervo.' },
+    ],
+  },
+  {
     version: 'v1.27.103', date: '2026-07-29',
     items: [
       { type: 'fix', text: 'Kie: a plataforma reconhece resultados aninhados/serializados e entrega a arte assim que a tarefa conclui.' },

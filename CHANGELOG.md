@@ -2,6 +2,11 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.104 - 2026-07-29
+
+- **fix(kie): ledger movido pro volume /data.** O varredor de temporarios de `/media/_tmp` APAGOU o ledger de taskIds (flagrado em prod: arquivo sumiu minutos depois de criado). Agora grava em `/data/kie_tasks.jsonl` (junto do runs.db, ninguem varre). Resgate validado ao vivo: arte "Menos ping. Mais vitoria." recuperada por taskId e salva no Acervo.
+- Versao: main.py/UI 1.27.104, cache bust `app.js?v=127104`.
+
 ## v1.27.103 - 2026-07-29
 
 - **fix(kie): arte pronta volta imediatamente para a plataforma.** O parser aceita `resultJson` serializado, URL unica e resultados aninhados em `response`/`output`; polling tolera oscilacao curta e uma tarefa concluida sem URL termina com erro claro.
