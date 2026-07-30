@@ -362,7 +362,7 @@ def _site_logo_candidates(html: str, base_url: str, company_name: str) -> List[D
 
 def _trusted_company_logo(asset: Dict[str, Any], company_name: str) -> bool:
     meta = asset.get("meta") or {}
-    if asset.get("source") in ("UPLOADED", "INSTAGRAM"):
+    if asset.get("source") in ("UPLOADED", "INSTAGRAM", "FACEBOOK"):
         return True
     if meta.get("identity_scope") == "company" and float(meta.get("confidence") or 0) >= 0.6:
         return True
@@ -593,6 +593,64 @@ def _ig_fetch_brand(company_id: str, instagram: str) -> Dict[str, int]:
         if _save(u.encode().decode("unicode_escape"), "references", "IMAGE", "brand_reference", {"from": "instagram_post"}):
             out["refs"] += 1
     return out
+
+
+def _facebook_fetch_logo(company_id: str, facebook: str) -> int:
+    """Importa a foto pública somente quando título do perfil confirma empresa/handle."""
+    import io as _io
+    import uuid as _uuid
+    import httpx as _hx
+    from PIL import Image as _Img
+    raw = (facebook or "").strip()
+    if not raw:
+        return 0
+    page_url = raw if raw.startswith(("http://", "https://")) else "https://www.facebook.com/" + raw.lstrip("@/")
+    if any((a.get("meta") or {}).get("from") == "facebook_profile"
+           for a in (asset_list_logos(company_id) or [])):
+        return 0
+    try:
+        response = _hx.get(
+            page_url, timeout=_hx.Timeout(20.0, connect=10.0), follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                                   "AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"},
+        )
+        html = response.text or ""
+    except Exception:
+        return 0
+    title_match = re.search(
+        r'<meta[^>]+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I,
+    )
+    image_match = re.search(
+        r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I,
+    )
+    company_key = _identity_key((company_get(company_id) or {}).get("name") or "")
+    handle_key = _identity_key(urlparse(page_url).path.strip("/").split("/")[0])
+    title_key = _identity_key(title_match.group(1) if title_match else "")
+    identity_keys = [key for key in (company_key, handle_key) if len(key) >= 3]
+    if not image_match or not title_key or not any(key in title_key or title_key in key for key in identity_keys):
+        return 0
+    try:
+        image_url = image_match.group(1).replace("&amp;", "&")
+        image_response = _hx.get(image_url, timeout=20.0, follow_redirects=True)
+        image = _Img.open(_io.BytesIO(image_response.content))
+        if image.width < 64 and image.height < 64:
+            return 0
+        subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
+        os.makedirs(subdir, exist_ok=True)
+        filename = f"{_uuid.uuid4().hex}.png"
+        image.convert("RGBA").save(os.path.join(subdir, filename), "PNG")
+        url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
+        is_primary = not bool(asset_list_logos(company_id))
+        asset_create(company_id, {
+            "kind": "IMAGE", "source": "FACEBOOK", "url": url,
+            "meta": {"role": "logo", "is_primary": is_primary, "from": "facebook_profile",
+                     "source_url": page_url[:200], "identity_scope": "company", "confidence": 0.9},
+        })
+        if is_primary or not (brand_kit_get(company_id) or {}).get("logo_url"):
+            brand_kit_upsert(company_id, {"logo_url": url})
+        return 1
+    except Exception:
+        return 0
 
 
 def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
@@ -831,6 +889,7 @@ async def enrich_company(company_id: str, request: Request):
     company_update(company_id, cup)
     # LOGO automático do site (se a empresa ainda não tem) → alimenta as cores abaixo e o motor de arte.
     ig_stats = {"logo": 0, "refs": 0}
+    facebook_logo = 0
     prods_added = 0
     try:
         import asyncio as _aio
@@ -840,6 +899,8 @@ async def enrich_company(company_id: str, request: Request):
         # INSTAGRAM → logo (perfil) + artes de referência (posts) — identidade visual real do cliente
         if instagram:
             ig_stats = await _aio.to_thread(_ig_fetch_brand, company_id, instagram)
+        if facebook:
+            facebook_logo = await _aio.to_thread(_facebook_fetch_logo, company_id, facebook)
         # SITE → catálogo de ofertas (planos/serviços/produtos) cadastrado automaticamente
         prods_added = await _aio.to_thread(_auto_extract_products, company_id, website)
     except Exception:
@@ -859,7 +920,8 @@ async def enrich_company(company_id: str, request: Request):
     if bk:
         brand_kit_upsert(company_id, bk)
     return {"company": company_get(company_id), "extracted": data,
-            "products_added": prods_added, "instagram": ig_stats, "warning": ai_warning or None}
+            "products_added": prods_added, "instagram": ig_stats, "facebook_logo": facebook_logo,
+            "warning": ai_warning or None}
 
 
 @router.post("/{company_id}/logo")
