@@ -811,6 +811,9 @@
     async socialConnect(payload) {
       return mpFetch('/api/social/connect', { method: 'POST', body: JSON.stringify(payload) });
     },
+    async socialConnectInvite(payload) {
+      return mpFetch('/api/social/connect-invite', { method: 'POST', body: JSON.stringify(payload) });
+    },
     async socialDisconnect(id) {
       return mpFetch('/api/social/accounts/' + _enc(id), { method: 'DELETE' });
     },

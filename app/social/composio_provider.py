@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -203,7 +204,7 @@ class ComposioSocialProvider:
         body: Dict[str, Any] = {
             "auth_config_id": auth_config_id,
             "user_id": user_id,
-            "alias": f"{brand_id}-{platform}",
+            "alias": f"{brand_id}-{platform}-{uuid.uuid4().hex[:8]}",
             "connection_data": {"brand_id": brand_id, "platform": platform},
         }
         if callback_url:

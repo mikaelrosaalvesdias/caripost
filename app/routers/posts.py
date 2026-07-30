@@ -22,6 +22,7 @@ from ..services.ai import (
     generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, vision_read_text, text_render_issues, judge_art_text, text_fix_feedback, generate_image_with_person, compose_person_scene, verify_same_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config, generate_image_reference_full, image_ref_models, get_image_ref_model,
     openrouter_image_models, openrouter_video_models, cometapi_video_models, omniroute_video_models, kie_video_models, kie_image_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
+    accept_kie_callback, kie_callback_token,
 )
 
 import os
@@ -197,6 +198,24 @@ def _overlay_logo(image_bytes: bytes, logo_path: str, position: str = "top-right
         return image_bytes
 
 router = APIRouter(prefix="/api/posts", tags=["posts"])
+
+
+@router.post("/kie-callback")
+async def kie_callback(request: Request):
+    """Webhook público da Kie. A URL contém token derivado da chave Kie e não dá
+    acesso a nenhuma outra operação da API."""
+    import hmac
+    supplied = request.query_params.get("token") or ""
+    expected = kie_callback_token()
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return JSONResponse({"detail": "callback inválido"}, status_code=401)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not accept_kie_callback(payload if isinstance(payload, dict) else {}):
+        return JSONResponse({"detail": "taskId ausente"}, status_code=422)
+    return {"ok": True}
 
 
 def _api_key_required(request: Request):
@@ -1454,10 +1473,10 @@ async def render_carousel(request: Request):
                 if ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
                     _expect.append(ref_ctx["contact"])   # rodapé exigido no prompt também é julgado (fone/site errado = quebra)
                 _best_img, _best_miss = None, None
-                try:                                            # tentativas CONFIGURÁVEIS (default 2 = 1 regeração
-                    _max_rf = max(1, int(get_setting("judge.max_attempts") or 2))   # com correção; a 3ª raramente
-                except Exception:                               # salva e custa 3-4min de modelo)
-                    _max_rf = 2
+                try:                                            # uma tentativa paga por padrão; o usuário pode regerar
+                    _max_rf = max(1, int(get_setting("judge.max_attempts") or 1))
+                except Exception:
+                    _max_rf = 1
                 if not _expect:
                     _max_rf = 1                                 # sem texto → não precisa reprovar por texto
                 _fb = ""

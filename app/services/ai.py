@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -1254,6 +1255,88 @@ def generate_image_kie(model_id: str, prompt: str, size: str = "1024x1024") -> T
 
 
 _KIE_GPT_BASE = "https://api.kie.ai/api/v1/gpt4o-image"
+_KIE_CALLBACK_COND = threading.Condition()
+_KIE_CALLBACKS: Dict[str, Dict[str, Any]] = {}
+
+
+def kie_callback_token() -> str:
+    """Token não reversível usado apenas na URL pública de callback da Kie."""
+    import hashlib
+    import hmac
+    key = _kie_key()
+    if not key:
+        return ""
+    return hmac.new(key.encode(), b"caripost-kie-callback-v1", hashlib.sha256).hexdigest()
+
+
+def kie_callback_url() -> str:
+    base = (
+        (get_setting("render.public_base") or "").strip()
+        or (os.environ.get("APP_PUBLIC_URL") or "").strip()
+        or "https://caripost.cariap.com.br"
+    ).rstrip("/")
+    token = kie_callback_token()
+    return f"{base}/api/posts/kie-callback?token={token}" if token else ""
+
+
+def accept_kie_callback(payload: Dict[str, Any]) -> bool:
+    """Registra e acorda a thread que aguarda a task. O endpoint responde rápido;
+    download/OCR continuam na thread original do render."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    task_id = str(data.get("taskId") or data.get("task_id") or payload.get("taskId") or "").strip()
+    if not task_id:
+        return False
+    with _KIE_CALLBACK_COND:
+        _KIE_CALLBACKS[task_id] = payload
+        _KIE_CALLBACK_COND.notify_all()
+    try:
+        import time as _tm
+        root = os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db"))
+        path = os.path.join(root, "kie_callbacks.jsonl")
+        os.makedirs(root, exist_ok=True)
+        info = data.get("info") if isinstance(data.get("info"), dict) else {}
+        callback_path = os.path.join(root, f"kie_callback_{task_id}.json")
+        temp_path = callback_path + f".{os.getpid()}.tmp"
+        with open(temp_path, "w") as handle:
+            json.dump(payload, handle)
+        os.replace(temp_path, callback_path)
+        with open(path, "a") as handle:
+            handle.write(json.dumps({
+                "ts": _tm.time(),
+                "task_id": task_id,
+                "code": payload.get("code"),
+                "result_urls": _kie_result_urls(info)[:4],
+            }) + "\n")
+    except Exception:
+        pass
+    return True
+
+
+def _wait_kie_callback(task_id: str, timeout: float) -> Optional[Dict[str, Any]]:
+    import time as _tm
+    deadline = _tm.monotonic() + timeout
+    root = os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db"))
+    callback_path = os.path.join(root, f"kie_callback_{task_id}.json")
+    while _tm.monotonic() < deadline:
+        with _KIE_CALLBACK_COND:
+            payload = _KIE_CALLBACKS.pop(task_id, None)
+            if payload:
+                try:
+                    os.unlink(callback_path)
+                except Exception:
+                    pass
+                return payload
+            _KIE_CALLBACK_COND.wait(timeout=min(1.0, max(0.0, deadline - _tm.monotonic())))
+        try:
+            with open(callback_path) as handle:
+                payload = json.load(handle)
+            os.unlink(callback_path)
+            return payload if isinstance(payload, dict) else None
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+    return None
 
 
 def _kie_ledger(task_id: str, model: str, endpoint: str = "jobs"):
@@ -1306,7 +1389,6 @@ def generate_image_kie_gpt(prompt: str, size: str = "1024x1536", ref_urls: Optio
     """GPT Image via kie (endpoint dedicado /gpt4o-image, pago nos MESMOS créditos kie). size vira ratio
     ('2:3'/'3:2'/'1:1'). ref_urls (PÚBLICAS) entram como filesUrl → serve o Estúdio IA com referências.
     Validado ao vivo 2026-07-17 (t2i e com filesUrl). Retorna (png, 0.0) — custo em créditos."""
-    import time as _t
     key = _kie_key()
     if not key:
         raise ValueError("kie não configurado (token).")
@@ -1316,6 +1398,9 @@ def generate_image_kie_gpt(prompt: str, size: str = "1024x1536", ref_urls: Optio
         w, h = 1024, 1536
     ratio = "2:3" if h > w else ("3:2" if w > h else "1:1")
     body: Dict[str, Any] = {"prompt": prompt[:4000], "size": ratio}
+    callback_url = kie_callback_url()
+    if callback_url:
+        body["callBackUrl"] = callback_url
     urls = [u for u in (ref_urls or []) if u and str(u).startswith("http")]
     if urls:
         body["filesUrl"] = urls[:5]
@@ -1332,8 +1417,17 @@ def generate_image_kie_gpt(prompt: str, size: str = "1024x1536", ref_urls: Optio
     _kie_ledger(tid, "chatgpt/gpt-5.4-image-2", "gpt4o-image")
     out_url, _cc = None, None
     completed_without_url = 0
-    for _ in range(150):                                   # ~10min: com telas em PARALELO a fila da conta kie
-        _t.sleep(4)                                        # estica a task — desistir cedo = pagar e jogar fora
+    for _ in range(20):                                    # ~10min; callback imediato + polling de segurança a cada 30s
+        callback = _wait_kie_callback(tid, 30.0)
+        if callback:
+            cb_data = callback.get("data") if isinstance(callback.get("data"), dict) else {}
+            cb_info = cb_data.get("info") if isinstance(cb_data.get("info"), dict) else cb_data
+            if int(callback.get("code") or 0) == 200:
+                out_url = (_kie_result_urls(cb_info) or [None])[0]
+                if out_url:
+                    break
+            else:
+                raise ValueError("kie gpt-image falhou: " + str(callback.get("msg") or callback.get("code"))[:150])
         try:
             with httpx.Client(timeout=30) as c:
                 resp = c.get(_KIE_GPT_BASE + "/record-info", params={"taskId": tid}, headers=H)

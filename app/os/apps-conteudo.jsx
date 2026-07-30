@@ -939,23 +939,40 @@ function CarrosselCreator({ company, format }) {
 
   async function gerar() {
     setBusy(true); setResults([]); setMsg('');
-    const out = [];
+    const out = new Array(versions.length);
     const aiVers = versions.filter(v => v.model && v.model !== 'editorial').length;
-    const estMs = Math.max(6000, telas.length * versions.length * (aiVers ? 11000 : 1200));  // IA+visão ~11s/tela
+    const estMs = useStudio
+      ? Math.max(180000, telas.length * Math.ceil(versions.length / 2) * 180000)
+      : Math.max(6000, telas.length * versions.length * (aiVers ? 11000 : 1200));
     const t0 = Date.now();
-    setProc({ open: true, pct: 1, detail: 'Preparando a geração…', phase: '' });
+    setProc({ open: true, pct: 1, detail: 'Preparando a geração…', phase: '', hideEta: useStudio });
     const tick = setInterval(() => {
       const pct = Math.min(95, ((Date.now() - t0) / estMs) * 100);
       setProc(p => (p.open && p.phase !== 'done' && p.phase !== 'error') ? { ...p, pct } : p);
     }, 400);
     try {
-      for (let i = 0; i < versions.length; i++) {
-        setProc(p => ({ ...p, detail: `Versão ${i + 1}/${versions.length} — gerando a arte com IA e checando a composição (juiz de visão)…` }));
-        setMsg(`Renderizando versão ${i + 1}/${versions.length} (${versions[i].model})…`);
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined });
-        out.push({ model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] });
-        setResults([...out]); ContState.set(company.id, { carouselResults: out });
-      }
+      let nextVersion = 0;
+      const generationErrors = [];
+      const workers = Array.from({ length: Math.min(2, versions.length) }, async () => {
+        while (true) {
+          const i = nextVersion++;
+          if (i >= versions.length) return;
+          setProc(p => ({ ...p, detail: versions.length > 1
+            ? `Gerando até 2 versões em paralelo na Kie e validando o texto…`
+            : `Gerando a arte na Kie e validando o texto…` }));
+          setMsg(`Renderizando versão ${i + 1}/${versions.length}…`);
+          try {
+            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined });
+            out[i] = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
+            const ready = out.filter(Boolean);
+            setResults(ready); ContState.set(company.id, { carouselResults: ready });
+          } catch (error) {
+            generationErrors.push(error);
+          }
+        }
+      });
+      await Promise.all(workers);
+      if (generationErrors.length) throw generationErrors[0];
       const cost = out.reduce((a, b) => a + (b.cost || 0), 0);
       const warns = out.filter(o => o.warning);
       clearInterval(tick);
@@ -1044,7 +1061,7 @@ function CarrosselCreator({ company, format }) {
   }
 
   return <div className="stack">
-    {proc.open && <ProcessModal open={proc.open} title={'Gerando ' + fmtGer} detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
+    {proc.open && <ProcessModal open={proc.open} title={'Gerando ' + fmtGer} detail={proc.detail} pct={proc.pct} phase={proc.phase} hideEta={proc.hideEta} onClose={() => setProc({ open: false })} />}
     <div className="sec mut">{fmtName} · <b>{telas.length} {telas.length === 1 ? 'arte' : 'telas'}</b> {fmt === 'carrossel' ? 'do plano' : (fmt === 'story' ? '(vertical 9:16)' : '(4:5)')} (vindas do Briefing). Sem selecionar app — só escolha o modelo.</div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 6 }}>
       {telas.map((t, i) => <div key={i} className="card" style={{ padding: 8 }}>

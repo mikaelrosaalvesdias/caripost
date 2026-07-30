@@ -819,6 +819,16 @@ function CompanyFluxo({ company, onSaved }) {
     finally { setBusy(false); }
   }
 
+  async function shareConnectLink() {
+    setBusy(true); setMsg('Criando link seguro...');
+    try {
+      const r = await window.mpApi.socialConnectInvite({ brandId: company.id, platform: 'instagram' });
+      await navigator.clipboard.writeText(r.url);
+      setMsg('Link copiado. Envie ao cliente; ele vale por 7 dias e conecta somente esta empresa.');
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
   async function connect(platform) {
     setBusy(true); setMsg('Abrindo conexão ' + platform + '...');
     try {
@@ -895,6 +905,7 @@ function CompanyFluxo({ company, onSaved }) {
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <button className="btn sm pri" disabled={busy} onClick={saveInstagram}>Salvar Instagram</button>
           <button className="btn sm" disabled={busy} onClick={() => connect('instagram')}><Icon name="link" />Conectar Instagram</button>
+          <button className="btn sm ghost" disabled={busy} onClick={shareConnectLink}><Icon name="copy" />Copiar link para o cliente</button>
           <button className="btn sm ghost" disabled={busy} onClick={load}>Atualizar</button>
         </div>
         {accounts.length ? accounts.map(acc => <div key={acc.id} className="litem" style={{ padding: 10 }}>

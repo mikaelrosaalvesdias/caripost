@@ -534,6 +534,15 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.112', date: '2026-07-30',
+    items: [
+      { type: 'fix', text: 'Kie: callback entrega a arte assim que a geração termina, com polling de segurança a cada 30 segundos.' },
+      { type: 'perf', text: 'Duas versões de arte agora são geradas em paralelo e a segunda tentativa paga deixou de ser automática.' },
+      { type: 'fix', text: 'O Estúdio não mostra mais prazo restante falso durante a geração.' },
+      { type: 'feat', text: 'Clientes: link seguro de 7 dias permite ao cliente conectar o Instagram à empresa correta sem entrar no Caripost.' },
+    ],
+  },
+  {
     version: 'v1.27.111', date: '2026-07-30',
     items: [
       { type: 'fix', text: 'Clientes: marcas de produtos e parceiros no site não podem mais substituir a logo e as cores institucionais.' },

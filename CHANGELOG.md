@@ -2,6 +2,14 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.112 - 2026-07-30
+
+- **fix(kie): callback substitui a espera atrasada do polling.** O endpoint dedicado agora recebe `callBackUrl`, acorda o render assim que a Kie envia a URL e mantém polling de segurança a cada 30 segundos. O callback também atravessa múltiplos workers pelo volume compartilhado.
+- **perf(estudio): duas versões simultâneas e uma tentativa paga por padrão.** Versões são processadas com concorrência 2; texto suspeito é entregue com aviso e regeneração manual, sem disparar silenciosamente outra tarefa paga de 3-5 minutos.
+- **fix(estudio): prazo falso removido.** O modal mantém o tempo decorrido, mas não exibe mais `~25s`/`~52s` calculado por uma estimativa incompatível com a Kie.
+- **feat(instagram): convite de conexão para o cliente.** A agência copia um link assinado de 7 dias; o cliente abre uma página pública, autoriza via Connect Link oficial e a conta fica vinculada ao ID da empresa, não ao operador da agência.
+- Versao: main.py/UI/OS 1.27.112, cache bust `app.js?v=127112` e OS `v=127112`.
+
 ## v1.27.111 - 2026-07-30
 
 - **fix(clientes): identidade institucional separada de produtos/parceiros.** O importador agora ranqueia candidatos por nome da empresa, cabecalho e marcadores de marca; logos de ESPN, Premiere, HBO e outras ofertas exibidas no site sao rejeitadas. Assets WEB antigos sem evidencia institucional sao removidos no proximo enriquecimento, e suas cores nao contaminam mais a paleta oficial.

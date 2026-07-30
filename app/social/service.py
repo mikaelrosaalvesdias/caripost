@@ -141,9 +141,26 @@ async def connect_account(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
     brand_id = body.get("brandId") or body.get("brand_id")
     platform = normalize_platform(body.get("platform"))
     ensure_brand_exists(brand_id)
-    user_id = get_request_user_id(request)
+    return await connect_brand_account(
+        brand_id=brand_id,
+        platform=platform,
+        callback_url=body.get("callbackUrl") or body.get("callback_url"),
+        account_name=body.get("accountName") or body.get("account_name"),
+    )
+
+
+async def connect_brand_account(
+    *,
+    brand_id: str,
+    platform: str,
+    callback_url: Optional[str] = None,
+    account_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cria a autorização no escopo da empresa, não do operador da agência."""
+    ensure_brand_exists(brand_id)
+    platform = normalize_platform(platform)
+    user_id = f"brand:{brand_id}"
     provider = get_social_provider()
-    callback_url = body.get("callbackUrl") or body.get("callback_url")
     result = await provider.connect_account(
         platform=platform,
         user_id=user_id,
@@ -157,7 +174,7 @@ async def connect_account(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
         "provider": result.provider,
         "platform": platform,
         "external_account_id": result.connected_account_id,
-        "external_account_name": body.get("accountName") or body.get("account_name"),
+        "external_account_name": account_name,
         "composio_entity_id": result.raw.get("entity_id") or result.raw.get("user_id"),
         "composio_connection_id": result.connected_account_id,
         "status": "pending" if result.redirect_url else "connected",

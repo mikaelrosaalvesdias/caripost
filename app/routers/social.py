@@ -6,15 +6,17 @@ import hmac
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from html import escape
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ..social.base import SUPPORTED_SOCIAL_PLATFORMS, SocialProviderError
 from ..social.service import (
     connect_account,
+    connect_brand_account,
     create_post,
     disconnect_account,
     ensure_brand_exists,
@@ -29,6 +31,71 @@ from ..social.service import (
 )
 
 router = APIRouter(prefix="/api/social", tags=["social"])
+
+
+def _invite_secret() -> bytes:
+    from .auth import SESSION_SECRET
+    return SESSION_SECRET.encode()
+
+
+def _make_invite_token(brand_id: str, platform: str, expires_at: int) -> str:
+    payload = json.dumps({
+        "brand_id": brand_id,
+        "platform": platform,
+        "exp": expires_at,
+        "nonce": os.urandom(8).hex(),
+    }, separators=(",", ":"), sort_keys=True).encode()
+    body = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(_invite_secret(), body.encode(), hashlib.sha256).hexdigest()
+    return body + "." + signature
+
+
+def _read_invite_token(token: str) -> Optional[dict]:
+    try:
+        body, signature = token.rsplit(".", 1)
+        expected = hmac.new(_invite_secret(), body.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None
+        raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+        payload = json.loads(raw.decode())
+        if int(payload.get("exp") or 0) < int(time.time()):
+            return None
+        ensure_brand_exists(str(payload.get("brand_id") or ""))
+        normalize_platform(str(payload.get("platform") or ""))
+        return payload
+    except Exception:
+        return None
+
+
+def _public_base(request: Request) -> str:
+    base = (os.environ.get("APP_PUBLIC_URL") or "").strip().rstrip("/")
+    if not base:
+        try:
+            from ..db import get_setting
+            base = (get_setting("render.public_base") or "").strip().rstrip("/")
+        except Exception:
+            base = ""
+    return base or "https://caripost.cariap.com.br"
+
+
+def _invite_page(title: str, detail: str, *, token: str = "", error: bool = False) -> HTMLResponse:
+    action = (
+        f'<form method="post" action="/api/social/connect-invite/{escape(token)}/start">'
+        '<button type="submit">Conectar Instagram</button></form>'
+        if token and not error else ""
+    )
+    color = "#ef4444" if error else "#ff7a18"
+    return HTMLResponse(f"""<!doctype html><html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{escape(title)} · Caripost</title><style>
+body{{margin:0;background:#0b0910;color:#fff;font:16px system-ui;display:grid;min-height:100vh;place-items:center}}
+main{{width:min(520px,calc(100% - 40px));background:#17131f;border:1px solid #342b43;border-radius:20px;padding:32px;text-align:center}}
+b{{color:{color}}}p{{color:#cbd5e1;line-height:1.6}}button{{border:0;border-radius:12px;padding:15px 24px;
+background:#ff7a18;color:#fff;font-weight:800;font-size:16px;cursor:pointer;width:100%}}
+small{{display:block;color:#8b8199;margin-top:18px}}</style></head><body><main>
+<b>CARIPOST</b><h1>{escape(title)}</h1><p>{escape(detail)}</p>{action}
+<small>A autorização acontece no ambiente oficial do Instagram/Meta via Composio. O Caripost não recebe sua senha.</small>
+</main></body></html>""")
 
 
 def _auth(request: Request):
@@ -297,6 +364,73 @@ async def connect(request: Request):
         return await connect_account(body, request)
     except Exception as exc:
         return _error(exc)
+
+
+@router.post("/connect-invite")
+async def create_connect_invite(request: Request):
+    err = _auth(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    brand_id = str(body.get("brandId") or body.get("brand_id") or "").strip()
+    denied = None
+    try:
+        from ..main_utils import company_access_denied
+        denied = company_access_denied(request, brand_id)
+    except Exception:
+        pass
+    if denied:
+        return denied
+    try:
+        platform = normalize_platform(body.get("platform") or "instagram")
+        brand = ensure_brand_exists(brand_id)
+        expires_at = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+        token = _make_invite_token(brand_id, platform, expires_at)
+        return {
+            "url": f"{_public_base(request)}/api/social/connect-invite/{token}",
+            "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+            "company": (brand.get("brand") or {}).get("name"),
+            "platform": platform,
+        }
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.get("/connect-invite/{token}")
+def connect_invite_page(token: str):
+    payload = _read_invite_token(token)
+    if not payload:
+        return _invite_page("Link inválido ou expirado", "Peça um novo link à sua agência.", error=True)
+    from ..db_companies import company_get
+    company = company_get(payload["brand_id"]) or {}
+    return _invite_page(
+        "Conectar Instagram",
+        f"Autorize o Instagram profissional da empresa {company.get('name') or 'no Caripost'}.",
+        token=token,
+    )
+
+
+@router.post("/connect-invite/{token}/start")
+async def start_connect_invite(token: str, request: Request):
+    payload = _read_invite_token(token)
+    if not payload:
+        return _invite_page("Link inválido ou expirado", "Peça um novo link à sua agência.", error=True)
+    try:
+        result = await connect_brand_account(
+            brand_id=payload["brand_id"],
+            platform=payload["platform"],
+            callback_url=f"{_public_base(request)}/api/social/callback",
+        )
+        redirect_url = result.get("redirect_url")
+        if not redirect_url:
+            return _invite_page("Conta conectada", "A autorização foi concluída. Você já pode fechar esta página.")
+        return RedirectResponse(redirect_url, status_code=303)
+    except Exception as exc:
+        message = getattr(exc, "message", str(exc)) or "Não foi possível iniciar a autorização."
+        return _invite_page("Não foi possível conectar", message, error=True)
 
 
 @router.post("/callback")

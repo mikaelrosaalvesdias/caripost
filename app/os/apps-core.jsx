@@ -53,7 +53,7 @@ function frameSrc(f) {
 }
 
 /* ── ProcessModal — overlay fullscreen com círculo girando, tempo decorrido e ETA ── */
-function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel }) {
+function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel, hideEta }) {
   const [elapsed, setElapsed] = React.useState(0);
   const startRef = React.useRef(null);
   React.useEffect(() => {
@@ -106,7 +106,7 @@ function ProcessModal({ open, title, detail, pct, phase, onClose, onCancel }) {
       <div className="proc-track"><i style={{ width: p + '%' }} /></div>
       <div className="proc-times">
         <div className="proc-time-b"><b>{fmt(elapsed)}</b><span>decorrido</span></div>
-        <div className="proc-time-b"><b>{eta != null ? '~' + fmt(eta) : '—'}</b><span>restante</span></div>
+        {!hideEta && <div className="proc-time-b"><b>{eta != null ? '~' + fmt(eta) : '—'}</b><span>restante</span></div>}
       </div>
     </>}
     <div className="proc-actions">
