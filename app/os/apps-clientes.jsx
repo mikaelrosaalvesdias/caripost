@@ -855,6 +855,17 @@ function CompanyFluxo({ company, onSaved }) {
     finally { setBusy(false); }
   }
 
+  async function puxarSite() {
+    setBusy(true); setMsg('Lendo o SITE e preenchendo cores, voz, segmento, LOGO e planos… (~1 min)');
+    try {
+      await window.mpApi.enrichCompany(company.id, {});
+      setMsg('✓ Perfil montado a partir do site: cores, voz, logo e planos preenchidos. Confira nas abas do cliente.');
+      onSaved();
+      load();
+    } catch (e) { setMsg('Aviso: ' + (e.message || e) + ' — se demorou, o processo continua no servidor; atualize a página em ~1 min.'); }
+    finally { setBusy(false); }
+  }
+
   async function generateDrafts() {
     setBusy(true); setMsg('Criando posts para aprovação...');
     try {
@@ -906,6 +917,16 @@ function CompanyFluxo({ company, onSaved }) {
             <div className="li-main"><b>{c.name}</b><small>{h.instagram || h.website || 'sem perfil social'}</small></div>
           </div>;
         })}
+      </div>
+    </div>
+
+    <div className="panel stack">
+      <div className="row" style={{ justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+        <div>
+          <div className="sec pri" style={{ margin: 0 }}><Icon name="refs" />Puxar identidade do SITE</div>
+          <div className="hint" style={{ marginTop: 6 }}>Lê o site do cliente e preenche TUDO: cores, voz, segmento, LOGO e planos como produtos (~1 min). Roda sozinho no cadastro com site; aqui você roda de novo quando quiser.</div>
+        </div>
+        <button className="btn pri" disabled={busy} onClick={puxarSite}>{busy ? 'Puxando…' : '⬇ Puxar do site AGORA'}</button>
       </div>
     </div>
 
@@ -1105,7 +1126,12 @@ function CompanyVisual({ company, onSaved }) {
   }
 
   async function doUploadRef(file) {
-    try { await window.mpApi.uploadReference(company.id, file); onSaved(); } catch (e) { setMsg('Erro: ' + e.message); }
+    try {
+      await window.mpApi.uploadReference(company.id, file);
+      setMsg('✓ Referência enviada. Analisando composição, paleta auxiliar e posição da assinatura…');
+      onSaved();
+      setTimeout(onSaved, 12000);
+    } catch (e) { setMsg('Erro: ' + e.message); }
   }
 
   async function doDeleteRef(assetId) {
@@ -1129,6 +1155,18 @@ function CompanyVisual({ company, onSaved }) {
     <button className="btn sm pri" onClick={saveColors}>Salvar cores</button>
     <div className="sec">Artes de referência (o Estúdio IA segue este estilo)</div>
     <div className="hint">Suba artes que representem o estilo desejado (suas, do manual, ou de um perfil que o cliente admira). O motor usa as mais recentes como <b>família visual</b> em toda geração.</div>
+    {bk.extras && bk.extras.reference_profile && <div className="card" style={{ padding: 12 }}>
+      <div style={{ fontWeight: 700 }}>Perfil extraído das referências</div>
+      <div className="hint">
+        {bk.extras.reference_profile.status === 'analyzing' ? 'Analisando as artes…' :
+          `Logo institucional: ${bk.extras.reference_profile.logo_position || 'não identificada'} · ` +
+          `${bk.extras.reference_profile.layout_direction || 'direção visual registrada'}`}
+      </div>
+      {!!(bk.extras.reference_profile.palette || []).length && <div className="row" style={{ gap: 5, marginTop: 8 }}>
+        {bk.extras.reference_profile.palette.map((c, i) =>
+          <span key={i} title={c} style={{ width: 24, height: 24, borderRadius: 6, background: c, border: '1px solid var(--line)' }} />)}
+      </div>}
+    </div>}
     <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
       <input className="inp" style={{ maxWidth: 200 }} placeholder="@instagram" value={igHandle} onChange={e => setIgHandle(e.target.value)} />
       <select className="inp" style={{ maxWidth: 260 }} value={igKind} onChange={e => setIgKind(e.target.value)}>

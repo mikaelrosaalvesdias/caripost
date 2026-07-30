@@ -2,6 +2,45 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.111 - 2026-07-30
+
+- **fix(clientes): identidade institucional separada de produtos/parceiros.** O importador agora ranqueia candidatos por nome da empresa, cabecalho e marcadores de marca; logos de ESPN, Premiere, HBO e outras ofertas exibidas no site sao rejeitadas. Assets WEB antigos sem evidencia institucional sao removidos no proximo enriquecimento, e suas cores nao contaminam mais a paleta oficial.
+- **feat(clientes): referencias viraram perfil visual.** Uploads de artes extraem paleta auxiliar, composicao, tipografia e posicao recorrente da assinatura institucional. O Estudio recebe esse perfil como direcao de layout/estilo, sem permitir que ele substitua a logo ou a paleta oficial.
+- **feat(clientes): enriquecimento automatico completo.** Site, Instagram e Facebook agora disparam a montagem de identidade tanto no cadastro quanto quando qualquer uma dessas fontes e adicionada ou alterada depois.
+- **fix(clientes): todas as variantes institucionais.** A foto de perfil do Instagram pode ser salva como variante mesmo quando o site ja forneceu uma logo, sem duplicar a origem em novos enriquecimentos.
+- Versao: main.py/UI/OS 1.27.111, cache bust `app.js?v=127111` e OS `v=127111`.
+
+## v1.27.110 - 2026-07-29
+
+- **fix(clientes): logo em 2 VERSOES — transparente (primaria) + fundo do site.** A captura via Playwright saia com o fundo da pagina colado e era versao unica. Agora: CSS zera os fundos → screenshot com ALFA real (descartado se sair vazio, ex.: logo por CSS-background) + a versao no fundo original; as duas viram assets de logo (o Estudio ja escolhe entre variantes).
+- Versao: main.py 1.27.110 (backend-only).
+
+## v1.27.109 - 2026-07-29
+
+- **feat(clientes): BOTAO "⬇ Puxar do site AGORA"** em destaque na tela do cliente (acima da Analise automatica): le o site e preenche cores, voz, segmento, LOGO e planos (~1 min), com feedback de progresso e aviso quando o proxy corta antes do fim (processo segue no servidor). O automatico do cadastro continua; o botao e o plano B visivel.
+- Versao: main.py 1.27.109, OS cache bust v=127109.
+
+## v1.27.108 - 2026-07-29
+
+- **feat(clientes): enrich automatico TAMBEM no update.** Site adicionado DEPOIS do cadastro (perfil ainda vazio) → monta sozinho, igual ao create. Perfil ja preenchido nunca e sobrescrito pelo robo. Zero botao em qualquer caminho.
+- Versao: main.py 1.27.108 (backend-only).
+
+## v1.27.107 - 2026-07-29
+
+- **fix(clientes): logo sem corte** — recorte da pagina com FOLGA (30% da altura + margem) em vez do screenshot seco do elemento; o wordmark que vazava do box nao e mais clipado.
+- Versao: main.py 1.27.107 (backend-only).
+
+## v1.27.106 - 2026-07-29
+
+- **fix(clientes): logo capturada NITIDA e inteira.** Screenshot em 3x (device_scale_factor) + prioriza o CONTAINER da logo (icone+texto completos, com trava anti-wrapper gigante) — a 1ª captura da kpsfibra saiu 42px e cortada.
+- Versao: main.py 1.27.106 (backend-only).
+
+## v1.27.105 - 2026-07-29
+
+- **feat(clientes): AUTO-ENRICH no cadastro.** Empresa criada com site → o perfil (cores, voz, LOGO, planos) monta SOZINHO em background (~30-60s), sem cacar o botao "Puxar do site" em outra aba. Botao continua para re-puxar. (Caso real: kpsfibra cadastrada e nada preenchido — o botao visivel era o de Instagram/estrategia, que bate na parede de login do IG.)
+- **fix(clientes): logo SVG INLINE capturada.** Site sem `<img>` de logo (logo desenhada em `<svg>` no header — caso kpsfibra) → Playwright fotografa o ELEMENTO (`[class*=logo] svg`, `header svg`) e vira PNG transparente. Antes: 0 logos mesmo com enrich funcionando.
+- Versao: main.py 1.27.105 (backend-only).
+
 ## v1.27.104 - 2026-07-29
 
 - **fix(kie): ledger movido pro volume /data.** O varredor de temporarios de `/media/_tmp` APAGOU o ledger de taskIds (flagrado em prod: arquivo sumiu minutos depois de criado). Agora grava em `/data/kie_tasks.jsonl` (junto do runs.db, ninguem varre). Resgate validado ao vivo: arte "Menos ping. Mais vitoria." recuperada por taskId e salva no Acervo.

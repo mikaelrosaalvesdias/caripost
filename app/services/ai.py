@@ -4180,7 +4180,8 @@ def _fetch_site_text(site_url: str) -> str:
         return ""
 
 
-def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", segment: str = "") -> Dict[str, Any]:
+def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", segment: str = "",
+                            facebook: str = "") -> Dict[str, Any]:
     """Read the company's site/Instagram and define brand voice/persona/audience/visual base
     for the agency. NEVER returns prices."""
     import re as _re
@@ -4189,6 +4190,9 @@ def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", 
     if not config:
         raise ValueError("IA não configurada — adicione sua chave em Configurações.")
     text = _fetch_site_text(site_url)
+    facebook_text = _fetch_site_text(facebook) if facebook.startswith(("http://", "https://")) else ""
+    if facebook_text:
+        text = (text + "\nPERFIL FACEBOOK:\n" + facebook_text)[:16000]
     system = (
         "Você é um estrategista de marca. A partir do site/Instagram de uma EMPRESA, defina a "
         "identidade verbal e o posicionamento para uma agência criar posts. Responda SOMENTE com "
@@ -4197,6 +4201,7 @@ def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", 
     user = (
         f"Empresa: {name}\nSegmento atual: {segment or '(não informado)'}\n"
         f"Instagram: {instagram or '(não informado)'}\n"
+        f"Facebook: {facebook or '(não informado)'}\n"
         f"Conteúdo do site:\n{text or '(site indisponível — infira pelo nome e Instagram)'}\n\n"
         "Extraia exatamente este JSON:\n"
         '{"description":"o que a empresa faz (1-2 frases)",'

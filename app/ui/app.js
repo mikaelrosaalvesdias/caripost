@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.111', date: '2026-07-30',
+    items: [
+      { type: 'fix', text: 'Clientes: marcas de produtos e parceiros no site não podem mais substituir a logo e as cores institucionais.' },
+      { type: 'feat', text: 'Artes de referência agora geram um perfil visual com composição, paleta auxiliar e posição da assinatura para orientar o Estúdio.' },
+      { type: 'feat', text: 'Site, Instagram e Facebook disparam a montagem automática da identidade no cadastro e nas atualizações.' },
+    ],
+  },
+  {
     version: 'v1.27.104', date: '2026-07-29',
     items: [
       { type: 'fix', text: 'Kie: o ledger de tarefas pagas agora fica no volume persistente e não é apagado pela limpeza de temporários.' },

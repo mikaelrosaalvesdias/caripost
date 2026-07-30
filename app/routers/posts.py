@@ -1180,6 +1180,19 @@ async def render_carousel(request: Request):
                     f"IDENTIDADE DA MARCA {company.get('name','')} (siga à risca): {(bk_.get('visual_prompt_base') or '').strip()} "
                     + (f"PALETA OFICIAL: {_palette}. " if _palette else "")
                     + (f"REGRAS DA MARCA: {(bk_.get('client_rules') or '').strip()} " if (bk_.get('client_rules') or '').strip() else ""))
+                _rp = ((bk_.get("extras") or {}).get("reference_profile") or {})
+                if _rp.get("status") == "ready":
+                    _rp_parts = [
+                        ("composição " + str(_rp.get("layout_direction"))) if _rp.get("layout_direction") else "",
+                        ("tipografia " + str(_rp.get("typography"))) if _rp.get("typography") else "",
+                        ("assinatura institucional preferida em " + str(_rp.get("logo_position")))
+                        if _rp.get("logo_position") not in (None, "", "unknown") else "",
+                        ("uso de cor " + str(_rp.get("color_usage"))) if _rp.get("color_usage") else "",
+                    ]
+                    ref_ctx["brand"] += (
+                        " PERFIL EXTRAÍDO DAS ARTES DE REFERÊNCIA (serve para layout/estilo; nunca substitui "
+                        "a logo nem a paleta oficial da empresa): " + "; ".join(x for x in _rp_parts if x) + "."
+                    )
                 try:
                     from ..db_companies import product_list as _plist2
                     for _p in (_plist2(company_id) or []):
