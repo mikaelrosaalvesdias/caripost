@@ -1165,35 +1165,60 @@ function CompanyGeral({ company, onSaved }) {
   </div>;
 }
 
-function CompanyLogos({ company, onSaved }) {
+function CompanyLogos({ company, onSaved, onLogosLoaded }) {
   const [logos, setLogos] = React.useState([]);
   const [msg, setMsg] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const loadSequence = React.useRef(0);
   const refreshKey = company?.brand_kit?.updated_at || company?.brand_kit?.extras?.enrichment?.finished_at || '';
 
   const load = React.useCallback(() => {
-    if (!window.mpApi) return;
-    window.mpApi.listLogos(company.id)
-      .then(l => { setLogos(l || []); setMsg(current => current.startsWith('Erro') ? '' : current); })
-      .catch(e => setMsg('Erro: ' + e.message));
-  }, [company.id, refreshKey]);
+    if (!window.mpApi) return Promise.resolve([]);
+    const sequence = ++loadSequence.current;
+    const companyId = company.id;
+    return window.mpApi.listLogos(companyId)
+      .then(l => {
+        if (sequence !== loadSequence.current) return [];
+        const next = l || [];
+        setLogos(next); onLogosLoaded && onLogosLoaded(next);
+        setMsg(current => current.startsWith('Erro') ? '' : current);
+        return next;
+      })
+      .catch(e => {
+        if (sequence === loadSequence.current) setMsg('Erro: ' + e.message);
+        return [];
+      });
+  }, [company.id, refreshKey, onLogosLoaded]);
 
-  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => {
+    setLogos([]); onLogosLoaded && onLogosLoaded([]);
+    load();
+    return () => { loadSequence.current += 1; };
+  }, [load]);
 
   async function upload(files) {
     const selected = Array.from(files || []);
     if (!selected.length) return;
     setBusy(true); setMsg('');
-    try {
-      let uploaded = 0;
-      for (const file of selected) {
+    let uploaded = 0;
+    const failed = [];
+    for (let index = 0; index < selected.length; index += 1) {
+      const file = selected[index];
+      try {
         await window.mpApi.uploadLogoVariant(company.id, file, 'logo', logos.length === 0 && uploaded === 0);
         uploaded += 1;
-        setMsg(`Enviando logos… ${uploaded}/${selected.length}`);
+      } catch (e) {
+        failed.push(`${file.name}: ${e.message || 'falhou'}`);
       }
-      setMsg(`${uploaded} logo(s) salva(s).`); load(); onSaved && onSaved(true);
-    } catch (e) { setMsg('Erro: ' + e.message); }
-    finally { setBusy(false); }
+      setMsg(`Enviando logos… ${index + 1}/${selected.length}`);
+    }
+    await load(); onSaved && onSaved(true);
+    if (failed.length) {
+      setMsg(`Erro parcial: ${uploaded} salva(s); ${failed.length} falharam. ${failed.join(' · ')}`);
+    } else {
+      setMsg(`${uploaded} logo(s) salva(s).`);
+    }
+    setBusy(false);
   }
   async function makePrimary(id) {
     setBusy(true); setMsg('');
@@ -1210,28 +1235,30 @@ function CompanyLogos({ company, onSaved }) {
   }
 
   return <div className="stack">
-    <div className="sec">Logos da empresa <Pill kind="cy">{logos.length}</Pill></div>
-    <div className="hint">Todas as variantes encontradas ficam aqui. Escolha qual é a principal; as demais continuam disponíveis para fundos claros e escuros. Upload: PNG, JPEG ou WebP, até 10 MB.</div>
+    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div className="sec" style={{ margin: 0 }}>Logos da empresa <Pill kind="cy">{logos.length}</Pill></div>
+      <label className="btn sm pri" data-testid="logo-upload" style={{ cursor: busy ? 'wait' : 'pointer' }} onClick={e => { if (busy) e.preventDefault(); }}>
+        <Icon name="plus" />{busy ? 'Enviando…' : 'Adicionar logos'}
+        <input disabled={busy} type="file" accept="image/png,image/jpeg,image/webp" multiple style={{ display: 'none' }} onChange={e => { upload(e.target.files); e.target.value = ''; }} />
+      </label>
+    </div>
+    <div className="hint">Envie quantas logos precisar, inclusive versões para fundo claro e escuro. Escolha uma principal; as demais continuam disponíveis. PNG, JPEG ou WebP, até 10 MB cada.</div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12 }}>
       {logos.map(l => {
         const meta = l.meta || {};
-        return <div key={l.id} className="panel" style={{ position: 'relative', padding: 8, borderColor: meta.is_primary ? 'var(--green)' : undefined }}>
+        return <div key={l.id} className="panel" data-testid="logo-card" style={{ position: 'relative', padding: 8, borderColor: meta.is_primary ? 'var(--green)' : undefined }}>
         <div style={{ height: 92, padding: 10, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'linear-gradient(135deg,#1f2937 0 50%,#f8fafc 50%)' }}>
           <img loading="lazy" decoding="async" src={l.url} style={{ maxWidth: '100%', width: '100%', height: 72, objectFit: 'contain' }} />
         </div>
         <div className="row" style={{ justifyContent: 'space-between', marginTop: 7, gap: 6 }}>
           <div className="hint" style={{ fontSize: 10 }}>{meta.variant || (l.source === 'WEB' ? 'site' : 'manual')}</div>
-          {meta.is_primary ? <Pill kind="good">★ Principal</Pill> : <button className="btn sm ghost" disabled={busy} onClick={() => makePrimary(l.id)}>☆ Usar</button>}
-          <button className="btn sm ghost" disabled={busy} title="Excluir logo" onClick={() => remove(l.id)}><Icon name="trash" /></button>
+          {meta.is_primary ? <Pill kind="good">★ Principal</Pill> : <button className="btn sm ghost" data-testid="logo-primary" disabled={busy} onClick={() => makePrimary(l.id)}>☆ Usar</button>}
+          <button className="btn sm ghost" data-testid="logo-delete" disabled={busy} title="Excluir logo" onClick={() => remove(l.id)}><Icon name="trash" /></button>
         </div>
       </div>;})}
       {!logos.length && <div className="hint">Sem logos ainda.</div>}
     </div>
-    <label className="btn sm pri" style={{ alignSelf: 'flex-start', cursor: 'pointer' }}>
-      <Icon name="plus" />{busy ? 'Enviando…' : 'Adicionar uma ou várias logos'}
-      <input type="file" accept="image/png,image/jpeg,image/webp" multiple style={{ display: 'none' }} onChange={e => { upload(e.target.files); e.target.value = ''; }} />
-    </label>
   </div>;
 }
 
@@ -1239,13 +1266,22 @@ function CompanyVisual({ company, onSaved }) {
   const bk = company.brand_kit || {};
   const colors = bk.colors || {};
   const colorsKey = JSON.stringify(colors);
-  const paletteFrom = value => Object.entries(value || {}).map(([name, hex]) => ({ name, hex }));
-  const [pal, setPal] = React.useState(() => paletteFrom(colors));
+  const paletteTools = window.mpPalette;
+  const [pal, setPal] = React.useState(() => paletteTools.fromColors(colors).rows);
+  const [primaryIndex, setPrimaryIndex] = React.useState(() => paletteTools.fromColors(colors).primaryIndex);
+  const [logoAssets, setLogoAssets] = React.useState([]);
+  const [samplingIndex, setSamplingIndex] = React.useState(-1);
+  const [sampleDraft, setSampleDraft] = React.useState(null);
   const [msg, setMsg] = React.useState('');
   const [igHandle, setIgHandle] = React.useState('');
   const [igBusy, setIgBusy] = React.useState(false);
   const identityRunning = ['queued', 'running'].includes(bk.extras?.enrichment?.state);
-  React.useEffect(() => { setPal(paletteFrom(colors)); }, [company.id, colorsKey]);
+  React.useEffect(() => {
+    const next = paletteTools.fromColors(colors);
+    setPal(next.rows); setPrimaryIndex(next.primaryIndex);
+    setLogoAssets([]);
+    setSamplingIndex(-1); setSampleDraft(null);
+  }, [company.id, colorsKey]);
   async function importIg() {
     setIgBusy(true); setMsg('');
     try {
@@ -1255,23 +1291,91 @@ function CompanyVisual({ company, onSaved }) {
     finally { setIgBusy(false); }
   }
   const refs = company.references || [];
+  const sampleAssets = [...logoAssets, ...refs].filter((asset, index, all) =>
+    asset?.url && all.findIndex(item => item?.url === asset.url) === index);
   const setPalAt = (i, patch) => setPal(p => p.map((c, j) => j === i ? { ...c, ...patch } : c));
+
+  function addPaletteColor(hex) {
+    const next = paletteTools.addColor(pal, primaryIndex, hex);
+    setPal(next.rows); setPrimaryIndex(next.primaryIndex);
+  }
+
+  function removePaletteColor(index) {
+    if (pal.length === 1) { setMsg('Erro: a paleta precisa manter uma cor principal.'); return; }
+    const next = paletteTools.removeColor(pal, primaryIndex, index);
+    setPal(next.rows); setPrimaryIndex(next.primaryIndex);
+    setSamplingIndex(-1); setSampleDraft(null);
+  }
+
+  function markPrimary(index) {
+    const next = paletteTools.markPrimary(pal, primaryIndex, index);
+    setPal(next.rows); setPrimaryIndex(next.primaryIndex);
+  }
+
+  async function pickFromScreen(index) {
+    setMsg('');
+    if (!window.EyeDropper) {
+      setSamplingIndex(index); setSampleDraft(null);
+      setMsg('Seu navegador não abriu o conta-gotas da tela. Clique no ponto exato de uma logo ou arte abaixo.');
+      return;
+    }
+    try {
+      const result = await new window.EyeDropper().open();
+      const hex = paletteTools.normalizeHex(result?.sRGBHex);
+      if (!hex) throw new Error('O navegador não retornou uma cor válida.');
+      setPalAt(index, { hex });
+      setMsg(`Cor ${hex} capturada da tela/site.`);
+    } catch (e) {
+      if (e?.name !== 'AbortError') setMsg('Erro: ' + (e.message || 'não foi possível usar o conta-gotas.'));
+    }
+  }
+
+  function openImageSampler(index) {
+    setSamplingIndex(index); setSampleDraft(null); setMsg('');
+  }
+
+  function sampleImagePoint(event, asset) {
+    try {
+      const image = event.currentTarget;
+      const rect = image.getBoundingClientRect();
+      const point = paletteTools.pointToPixel(
+        event.clientX, event.clientY, rect, image.naturalWidth, image.naturalHeight, 'contain',
+      );
+      if (!point) throw new Error('Clique dentro da área visível da imagem.');
+      const canvas = document.createElement('canvas');
+      canvas.width = 1; canvas.height = 1;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.drawImage(image, point.x, point.y, 1, 1, 0, 0, 1, 1);
+      const pixel = context.getImageData(0, 0, 1, 1).data;
+      if (pixel[3] < 32) throw new Error('Esse ponto é transparente. Clique numa parte visível da logo.');
+      const hex = paletteTools.rgbToHex(pixel[0], pixel[1], pixel[2]);
+      setSampleDraft({
+        url: asset.url, hex, xPct: point.xPct, yPct: point.yPct,
+        viewXPct: (event.clientX - rect.left) / rect.width * 100,
+        viewYPct: (event.clientY - rect.top) / rect.height * 100,
+      });
+      setMsg(`Ponto capturado: ${hex}. Confirme para aplicar.`);
+    } catch (e) {
+      setSampleDraft(null);
+      setMsg('Erro: ' + (e.name === 'SecurityError'
+        ? 'esta imagem não permite leitura de pixels; use o conta-gotas da tela.'
+        : (e.message || 'não foi possível ler esse ponto.')));
+    }
+  }
+
+  function applySample() {
+    if (!sampleDraft || samplingIndex < 0 || samplingIndex >= pal.length) return;
+    setPalAt(samplingIndex, { hex: sampleDraft.hex });
+    setMsg(`Cor ${sampleDraft.hex} aplicada. Salve a paleta para confirmar.`);
+    setSamplingIndex(-1); setSampleDraft(null);
+  }
 
   async function saveColors() {
     setMsg('');
     try {
-      const dict = {};
-      for (const color of pal) {
-        const name = (color.name || '').trim();
-        const hex = (color.hex || '').trim().toUpperCase();
-        if (!name && !hex) continue;
-        if (!name) throw new Error('Dê um nome para todas as cores.');
-        if (!/^#[0-9A-F]{6}$/.test(hex)) throw new Error(`Cor inválida em "${name}".`);
-        if (Object.prototype.hasOwnProperty.call(dict, name)) throw new Error(`Nome de cor repetido: "${name}".`);
-        dict[name] = hex;
-      }
+      const dict = paletteTools.buildPayload(pal, primaryIndex);
       await window.mpApi.saveBrandKit(company.id, { colors: dict });
-      setMsg(`${Object.keys(dict).length} cor(es) salva(s).`); onSaved(true);
+      setMsg(`${Object.keys(dict).length} cor(es) salva(s); ${dict.primary} é a principal.`); onSaved(true);
     } catch (e) { setMsg('Erro: ' + e.message); }
   }
 
@@ -1289,22 +1393,63 @@ function CompanyVisual({ company, onSaved }) {
   }
 
   return <div className="stack">
-    <CompanyLogos company={company} onSaved={onSaved} />
-    <div className="sec">Paleta de cores <Pill kind="cy">{pal.length}</Pill></div>
-    <div className="hint">A importação agrupa tons parecidos e mantém apenas cores realmente distintas, sem limite fixo de três. Você pode corrigir, remover ou adicionar qualquer cor.</div>
+    <CompanyLogos key={company.id} company={company} onSaved={onSaved} onLogosLoaded={setLogoAssets} />
+    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div className="sec" style={{ margin: 0 }}>Paleta de cores <Pill kind="cy">{pal.length}</Pill></div>
+      <button className="btn sm ghost" data-testid="palette-add" onClick={() => addPaletteColor()}><Icon name="plus" />Adicionar cor</button>
+    </div>
+    <div className="hint">Adicione ou remova quantas cores precisar. A cor com estrela é a <b>principal</b> e passa a comandar a identidade nas próximas gerações. Use o conta-gotas da tela/site ou clique num ponto exato de uma logo.</div>
     {identityRunning && <div className="hint">Aguarde a importação terminar antes de salvar a revisão da paleta.</div>}
     <div className="stack" style={{ gap: 8 }}>
       {!pal.length && <div className="hint">Nenhuma cor detectada. Puxe a identidade novamente ou adicione manualmente.</div>}
-      {pal.map((c, i) => <div key={i} className="row" style={{ gap: 8, alignItems: 'center' }}>
-        <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(c.hex) ? c.hex : '#000000'} onChange={e => setPalAt(i, { hex: e.target.value })} style={{ width: 46, height: 38, border: 'none', background: 'none', cursor: 'pointer' }} />
-        <input className="inp" value={c.name} onChange={e => setPalAt(i, { name: e.target.value })} placeholder="nome (ex.: primary, rosa, dourado)" style={{ maxWidth: 220 }} />
-        <span className="mono" style={{ fontSize: 12, minWidth: 70 }}>{c.hex}</span>
-        <button className="btn sm ghost" onClick={() => setPal(p => p.filter((_, j) => j !== i))}>✕</button>
-      </div>)}
-      <button className="btn sm ghost" onClick={() => setPal(p => [...p, { name: 'cor' + (p.length + 1), hex: '#888888' }])}>+ Adicionar cor</button>
+      {pal.map((c, i) => {
+        const isPrimary = i === primaryIndex;
+        const pickerHex = paletteTools.normalizeHex(c.hex) || '#000000';
+        return <div key={i} className="panel row" data-testid="palette-row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: 9, borderColor: isPrimary ? 'var(--green)' : undefined }}>
+          <input aria-label={`Seletor da cor ${i + 1}`} type="color" value={pickerHex} onChange={e => setPalAt(i, { hex: e.target.value.toUpperCase() })} style={{ width: 46, height: 38, border: 'none', background: 'none', cursor: 'pointer' }} />
+          <input className="inp" value={isPrimary ? 'primary' : c.name} disabled={isPrimary}
+            onChange={e => setPalAt(i, { name: e.target.value })} placeholder="nome (ex.: accent, dourado)" style={{ width: 170 }} />
+          <input className="inp mono" aria-label={`Hexadecimal da cor ${i + 1}`} value={c.hex}
+            onChange={e => setPalAt(i, { hex: e.target.value })}
+            onBlur={e => { const hex = paletteTools.normalizeHex(e.target.value); if (hex) setPalAt(i, { hex }); }}
+            placeholder="#RRGGBB" style={{ width: 104 }} />
+          <button className={'btn sm ' + (isPrimary ? 'pri' : 'ghost')} data-testid="palette-primary" disabled={isPrimary} onClick={() => markPrimary(i)}>
+            {isPrimary ? '★ Principal' : '☆ Tornar principal'}
+          </button>
+          <button className="btn sm ghost" data-testid="palette-screen-picker" title="Aponte uma cor em qualquer lugar da tela ou do site" onClick={() => pickFromScreen(i)}>⌾ Tela/site</button>
+          <button className="btn sm ghost" data-testid="palette-image-picker" title="Clique num ponto exato de uma logo ou arte" onClick={() => openImageSampler(i)}>⌖ Logo/arte</button>
+          <button className="btn sm ghost" data-testid="palette-delete" disabled={pal.length === 1} title={pal.length === 1 ? 'A paleta precisa manter uma cor principal' : 'Remover cor'} onClick={() => removePaletteColor(i)}><Icon name="trash" /></button>
+        </div>;
+      })}
     </div>
+    {samplingIndex >= 0 && <div className="panel stack" data-testid="palette-sampler" style={{ borderColor: 'var(--cyan)' }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <div>
+          <b>Conta-gotas por ponto</b>
+          <div className="hint">Clique exatamente na cor desejada. O ponto marcado será aplicado em <b>{samplingIndex === primaryIndex ? 'primary' : (pal[samplingIndex]?.name || 'cor')}</b>.</div>
+        </div>
+        <button className="btn sm ghost" onClick={() => { setSamplingIndex(-1); setSampleDraft(null); }}>Fechar</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 10 }}>
+        {sampleAssets.map(asset => <div key={asset.id || asset.url} className="card" style={{ padding: 8 }}>
+          <div style={{ position: 'relative', height: 150, borderRadius: 8, overflow: 'hidden', background: 'linear-gradient(45deg,#d7dbe0 25%,transparent 25%) 0 0/18px 18px, linear-gradient(45deg,transparent 75%,#d7dbe0 75%) 0 0/18px 18px, linear-gradient(45deg,transparent 75%,#d7dbe0 75%) 9px -9px/18px 18px, linear-gradient(45deg,#d7dbe0 25%,#fff 25%) 9px -9px/18px 18px' }}>
+            <img crossOrigin="anonymous" loading="eager" decoding="async" src={asset.url} data-testid="palette-sampler-image"
+              onClick={event => sampleImagePoint(event, asset)}
+              style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'crosshair', display: 'block' }} />
+            {sampleDraft?.url === asset.url && <span title={sampleDraft.hex} style={{ position: 'absolute', left: `${sampleDraft.viewXPct}%`, top: `${sampleDraft.viewYPct}%`, width: 18, height: 18, borderRadius: '50%', border: '3px solid #fff', boxShadow: '0 0 0 2px #000', background: sampleDraft.hex, transform: 'translate(-50%,-50%)', pointerEvents: 'none' }} />}
+          </div>
+          <div className="hint" style={{ marginTop: 5 }}>{(asset.meta || {}).variant || (asset.source === 'WEB' ? 'logo do site' : 'imagem cadastrada')}</div>
+        </div>)}
+        {!sampleAssets.length && <div className="hint">Adicione uma logo ou arte de referência para usar o conta-gotas por ponto.</div>}
+      </div>
+      {sampleDraft && <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ width: 34, height: 34, borderRadius: 8, background: sampleDraft.hex, border: '1px solid var(--line)' }} />
+        <b className="mono">{sampleDraft.hex}</b>
+        <button className="btn sm pri" data-testid="palette-sampler-apply" onClick={applySample}>Usar esta cor</button>
+      </div>}
+    </div>}
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
-    <button className="btn sm pri" disabled={identityRunning} onClick={saveColors}>Salvar cores</button>
+    <button className="btn sm pri" data-testid="palette-save" disabled={identityRunning || !pal.length || primaryIndex < 0} onClick={saveColors}>Salvar paleta</button>
     <div className="sec">Artes de referência (o Estúdio IA segue este estilo)</div>
     <div className="hint">Suba artes que representem o estilo desejado (suas, do manual, ou de um perfil que o cliente admira). O motor usa as mais recentes como <b>família visual</b> em toda geração.</div>
     {bk.extras && bk.extras.reference_profile && <div className="card" style={{ padding: 12 }}>

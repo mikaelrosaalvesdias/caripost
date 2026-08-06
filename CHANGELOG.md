@@ -2,6 +2,15 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.114 - 2026-08-06
+
+- **feat(clientes): logos manuais sem limite fixo.** O upload multiplo fica visivel na Identidade Visual, preserva os arquivos que deram certo em uma importacao parcial e permite incluir, excluir e escolher a variante principal.
+- **feat(clientes): paleta manual completa.** E possivel adicionar ou remover quantas cores forem necessarias, editar nome/hexadecimal, capturar a cor exata em um ponto de qualquer logo/arte e usar o conta-gotas nativo da tela quando disponivel.
+- **fix(clientes): cor principal obrigatoria e efetiva.** A estrela define exatamente uma chave `primary`; aliases antigos sao normalizados, hexadecimais invalidos sao rejeitados e posts, artes e videos passam a priorizar a principal nas geracoes.
+- **fix(clientes): curadoria manual protegida.** A analise social usa a mesclagem automatica segura e nao substitui uma paleta ja revisada pelo usuario.
+- Testes: contrato Python/Node, mapeamento de pixel com `object-fit: contain` e fluxo real em Chromium isolado com upload de tres logos, quatro cores, conta-gotas, troca da principal, remocao, salvamento e recarga.
+- Versao: main.py/UI/OS 1.27.114, cache bust `app.js?v=127114` e OS `v=127114`.
+
 ## v1.27.113 - 2026-08-06
 
 - **fix(clientes): cadastro e importacao em um unico fluxo observavel.** Nome, site e redes oficiais entram no mesmo formulario; a identidade e puxada em background com etapas, contagens, avisos, falha real e retry, sem botoes concorrentes espalhados pelas abas.

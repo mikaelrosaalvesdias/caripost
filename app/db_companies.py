@@ -10,7 +10,9 @@ Shares the same SQLite database as db.py (runs.db) via get_conn().
 from __future__ import annotations
 
 import json
+import re
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -328,13 +330,70 @@ def _uuid() -> str:
 
 
 def _slugify(name: str) -> str:
-    import unicodedata
     nfkd = unicodedata.normalize("NFKD", name)
     ascii_str = nfkd.encode("ascii", "ignore").decode("ascii")
     slug = "".join(c if c.isalnum() or c == "-" else "-" for c in ascii_str.lower()).strip("-")
     while "--" in slug:
         slug = slug.replace("--", "-")
     return slug or "empresa"
+
+
+def _brand_color_role(name: Any) -> str:
+    compact = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    compact = re.sub(r"[^a-z0-9]+", "", compact)
+    if compact in {"primary", "primarycolor", "primarycolour", "principal", "primaria", "corprincipal", "corprimaria"}:
+        return "primary"
+    if compact in {"secondary", "secondarycolor", "secondarycolour", "secundaria", "corsecundaria"}:
+        return "secondary"
+    if compact in {"accent", "accentcolor", "accentcolour", "destaque", "cordestaque"}:
+        return "accent"
+    return ""
+
+
+def normalize_brand_colors(colors: Any) -> Dict[str, str]:
+    """Keep the flexible palette contract while guaranteeing one canonical ``primary`` color.
+
+    Empty palettes remain empty. Legacy aliases are canonicalized; when an old non-empty palette
+    has no explicit primary, its accent (the old renderers' dominant choice) or first color is
+    promoted deterministically. Only valid hex values survive and are stored as uppercase ``#RRGGBB``.
+    """
+    if not isinstance(colors, dict):
+        return {}
+    entries: List[tuple[str, str, str]] = []
+    seen_names = set()
+    for raw_name, raw_value in colors.items():
+        name = str(raw_name or "").strip()
+        value = str(raw_value or "").strip()
+        if not name or not value:
+            continue
+        if re.fullmatch(r"#?[0-9a-fA-F]{3}", value):
+            short = value.lstrip("#").upper()
+            value = "#" + "".join(char * 2 for char in short)
+        elif re.fullmatch(r"#?[0-9a-fA-F]{6}", value):
+            value = "#" + value.lstrip("#").upper()
+        else:
+            # Renderizadores só entendem hexadecimal. Ignore lixo de respostas automáticas
+            # antes de escolher a principal, para que uma cor válida restante possa ser promovida.
+            continue
+        role = _brand_color_role(name)
+        canonical_name = role or name
+        key = canonical_name.lower()
+        if key in seen_names:
+            continue
+        seen_names.add(key)
+        entries.append((canonical_name, value, role))
+    if not entries:
+        return {}
+
+    primary_index = next((index for index, (_name, _value, role) in enumerate(entries) if role == "primary"), -1)
+    if primary_index < 0:
+        primary_index = next((index for index, (_name, _value, role) in enumerate(entries) if role == "accent"), 0)
+    result: Dict[str, str] = {"primary": entries[primary_index][1]}
+    for index, (name, value, role) in enumerate(entries):
+        if index == primary_index or role == "primary":
+            continue
+        result[role or name] = value
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -374,7 +433,9 @@ def company_get(company_id: str) -> Optional[Dict[str, Any]]:
         bk = conn.execute("SELECT * FROM brand_kits WHERE company_id = ?", (company_id,)).fetchone()
         if bk:
             row["brand_kit"] = dict(bk)
-            row["brand_kit"]["colors"] = json.loads(row["brand_kit"].get("colors") or "{}")
+            row["brand_kit"]["colors"] = normalize_brand_colors(
+                json.loads(row["brand_kit"].get("colors") or "{}")
+            )
             row["brand_kit"]["extras"] = json.loads(row["brand_kit"].get("extras") or "{}")
             try:
                 row["brand_kit"]["creative_config"] = json.loads(row["brand_kit"].get("creative_config") or "{}")
@@ -481,7 +542,7 @@ def brand_kit_get(company_id: str) -> Optional[Dict[str, Any]]:
         if not row:
             return None
         row = dict(row)
-        row["colors"] = json.loads(row.get("colors") or "{}")
+        row["colors"] = normalize_brand_colors(json.loads(row.get("colors") or "{}"))
         row["extras"] = json.loads(row.get("extras") or "{}")
         try:
             row["creative_config"] = json.loads(row.get("creative_config") or "{}")
@@ -500,7 +561,7 @@ def brand_kit_upsert(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     )
     insert_values: Dict[str, Any] = {
         "logo_url": data.get("logo_url"),
-        "colors": json.dumps(data.get("colors") or {}),
+        "colors": json.dumps(normalize_brand_colors(data.get("colors") or {})),
         "voice": data.get("voice"),
         "persona": data.get("persona"),
         "visual_prompt_base": data.get("visual_prompt_base"),
@@ -597,7 +658,10 @@ def brand_kit_apply_auto(
         assignments.append(
             "colors = CASE WHEN " + palette_condition + " THEN ? ELSE colors END"
         )
-        values.extend((1 if replace_manual_palette else 0, json.dumps(data.get("colors") or {})))
+        values.extend((
+            1 if replace_manual_palette else 0,
+            json.dumps(normalize_brand_colors(data.get("colors") or {})),
+        ))
         assignments.append(
             "extras = CASE WHEN " + palette_condition
             + " THEN json_set(" + extras_json + ", '$.palette_source', 'automatic') ELSE extras END"

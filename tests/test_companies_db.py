@@ -78,6 +78,35 @@ class BrandKitPersistenceTests(unittest.TestCase):
         self.assertEqual(replaced["voice"], "voz automática")
         self.assertEqual(replaced["extras"]["palette_source"], "automatic")
 
+    def test_brand_colors_always_expose_one_canonical_primary(self):
+        self.assertEqual(
+            companies_db.normalize_brand_colors({"accent": "#abc", "branco": "ffffff"}),
+            {"primary": "#AABBCC", "branco": "#FFFFFF"},
+        )
+        company = self.create_company("Contrato da paleta")
+        companies_db.brand_kit_upsert(company["id"], {
+            "colors": {"principal": "#123", "accentColor": "#456", "dourado": "#789abc"},
+        })
+        self.assertEqual(companies_db.brand_kit_get(company["id"])["colors"], {
+            "primary": "#112233", "accent": "#445566", "dourado": "#789ABC",
+        })
+
+        # Simula uma linha legada gravada antes do contrato de cor principal.
+        with db.get_conn() as conn:
+            conn.execute(
+                "UPDATE brand_kits SET colors = ? WHERE company_id = ?",
+                ('{"accent":"#0af","neutra":"#fff"}', company["id"]),
+            )
+        self.assertEqual(companies_db.brand_kit_get(company["id"])["colors"], {
+            "primary": "#00AAFF", "neutra": "#FFFFFF",
+        })
+
+        self.assertEqual(
+            companies_db.normalize_brand_colors({"primary": "azul", "verde": "#0f0"}),
+            {"primary": "#00FF00"},
+        )
+        self.assertEqual(companies_db.normalize_brand_colors({"primary": "azul"}), {})
+
     def test_concurrent_primary_selection_leaves_one_logo_and_matching_brand_kit(self):
         company = self.create_company("Logos concorrentes")
         first = companies_db.asset_create(company["id"], {

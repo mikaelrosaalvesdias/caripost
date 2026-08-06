@@ -1,4 +1,5 @@
 import importlib.util
+import asyncio
 import io
 import os
 import sys
@@ -34,12 +35,29 @@ fake_responses.JSONResponse = _JSONResponse
 fake_companies_db = types.ModuleType("app.db_companies")
 for symbol in (
     "company_list company_get company_create company_update company_delete brand_kit_get brand_kit_upsert brand_kit_extras_patch brand_kit_apply_auto "
+    "normalize_brand_colors "
     "competitor_list competitor_create competitor_delete asset_list asset_create asset_delete asset_get "
     "asset_update_meta asset_list_logos asset_list_photos asset_clear_primary asset_set_primary_logo asset_claim_primary_logo_if_empty product_list product_get "
     "product_create product_copy product_update product_delete solution_list solution_get solution_create "
     "solution_update solution_delete"
 ).split():
     setattr(fake_companies_db, symbol, Mock(name=symbol))
+
+
+def _fake_normalize_brand_colors(colors):
+    items = [(str(name), str(value)) for name, value in (colors or {}).items() if name and value]
+    if not items:
+        return {}
+    primary_index = next((i for i, (name, _value) in enumerate(items) if name.lower() == "primary"), -1)
+    if primary_index < 0:
+        primary_index = next((i for i, (name, _value) in enumerate(items) if name.lower() == "accent"), 0)
+    out = {"primary": items[primary_index][1]}
+    out.update({name: value for i, (name, value) in enumerate(items)
+                if i != primary_index and name.lower() != "primary"})
+    return out
+
+
+fake_companies_db.normalize_brand_colors = _fake_normalize_brand_colors
 fake_db = types.ModuleType("app.db")
 fake_db.settings_get = Mock(name="settings_get")
 fake_ai = types.ModuleType("app.services.ai")
@@ -183,6 +201,59 @@ class BrandPaletteTests(unittest.TestCase):
 
         self.assertTrue(any(_near(value, "#BFF503", 45) for value in colors.values()), colors)
         self.assertTrue(any(_near(value, "#FE6F1A", 45) for value in colors.values()), colors)
+
+
+class ManualPaletteValidationTests(unittest.TestCase):
+    def test_manual_palette_normalizes_hex_aliases_and_primary(self):
+        self.assertEqual(companies._normalize_manual_colors({
+            "Principal": "#bf5", "Dourado": "112233", "accentColor": "#aabbcc",
+        }), {
+            "primary": "#BBFF55", "Dourado": "#112233", "accent": "#AABBCC",
+        })
+        self.assertEqual(companies._normalize_manual_colors({
+            "accent": "#123456", "branco": "#fff",
+        }), {
+            "primary": "#123456", "branco": "#FFFFFF",
+        })
+
+    def test_manual_palette_rejects_empty_invalid_and_duplicate_roles(self):
+        for palette in (
+            {},
+            {"primary": "laranja"},
+            {"primary": "#123456", "principal": "#654321"},
+            {"primary": "#000000", "accent": "#111111", "Destaque": "#222222"},
+        ):
+            with self.subTest(palette=palette), self.assertRaises(ValueError):
+                companies._normalize_manual_colors(palette)
+
+    def test_brand_kit_endpoint_replaces_removed_colors_and_rejects_invalid_hex(self):
+        class Request:
+            def __init__(self, body):
+                self.body = body
+
+            async def json(self):
+                return self.body
+
+        existing = {"brand_kit": {"colors": {"primary": "#111111", "azul": "#222222"}, "extras": {}}}
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "company_get", return_value=existing), \
+             patch.object(companies, "brand_kit_extras_patch"), \
+             patch.object(companies, "brand_kit_upsert", side_effect=lambda _cid, data: data) as upsert:
+            result = asyncio.run(companies.save_brand_kit("c1", Request({
+                "colors": {"primary": "#ABCDEF", "branco": "#fff"},
+            })))
+
+        self.assertEqual(result["brand_kit"]["colors"], {
+            "primary": "#ABCDEF", "branco": "#FFFFFF",
+        })
+        self.assertNotIn("azul", upsert.call_args.args[1]["colors"])
+
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "company_get", return_value=existing):
+            invalid = asyncio.run(companies.save_brand_kit("c1", Request({
+                "colors": {"primary": "não-é-hex"},
+            })))
+        self.assertEqual(invalid.status_code, 422)
 
 
 class LogoCandidateTests(unittest.TestCase):

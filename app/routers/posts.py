@@ -477,7 +477,7 @@ async def generate_post_image(request: Request):
     visual_prompt = (body.get("visual_prompt") or "").strip()
     products = product_list(company_id) or []
     colors = (company.get("brand_kit") or {}).get("colors") or {}
-    brand_color = colors.get("accent") or colors.get("primary") or "#ED5E1F"
+    brand_color = colors.get("primary") or colors.get("accent") or "#ED5E1F"
     model_override = (body.get("model") or "").strip() or None
     ai_bg = bool(model_override) and model_override.lower() != "editorial"
     # Mapeia o post numa "tela" + carrega o PERFIL (mesma lógica do carrossel).
@@ -1124,7 +1124,7 @@ async def render_carousel(request: Request):
             lps = _all_raster_logos(asset_list_logos(company_id, p["id"]))   # variantes do app
             if lps:
                 app_logos[(p.get("name") or "").strip().lower()] = lps
-        brand_color = colors.get("accent") or colors.get("primary") or "#ED5E1F"
+        brand_color = colors.get("primary") or colors.get("accent") or "#ED5E1F"
         from ..services.template_composer import compose_logos_only, compose_cta_footer
         from ..services.ai import image_template_get
         tmpl = image_template_get(company, "carrossel", (body.get("template_id") or "").strip()) if body.get("template_id") else None

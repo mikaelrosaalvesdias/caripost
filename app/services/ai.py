@@ -3031,8 +3031,8 @@ def build_image_prompt(company: Dict[str, Any], theme: str, visual_prompt: str =
     }.get(int(variant) % 4, "COMPOSIÇÃO: assunto à direita, metade esquerda limpa.")
     rules = ((company.get("brand_kit") or {}).get("client_rules") or "").strip()
     cfg = (creative_cfg(company).get("image") or {})
-    color = (((company.get("brand_kit") or {}).get("colors") or {}).get("accent")
-             or ((company.get("brand_kit") or {}).get("colors") or {}).get("primary")
+    color = (((company.get("brand_kit") or {}).get("colors") or {}).get("primary")
+             or ((company.get("brand_kit") or {}).get("colors") or {}).get("accent")
              or "#ED5E1F")
     vals = {
         "company": name,
@@ -4627,7 +4627,7 @@ IMAGE_GEN: Dict[str, Any] = {
         "{system_prompt} {focus}Cena: {visual}. "
         "Estilo de CAMPANHA PUBLICITÁRIA PREMIUM: cinematográfico, iluminação de campanha, profundidade, "
         "cores ricas, foco/desfoque intencional, aparência de anúncio profissional de marca — NÃO foto de banco de imagem. "
-        "Paleta que combina com a marca {company} (acentos em laranja #ED5E1F quando natural). "
+        "Paleta que combina com a marca {company}, usando sua cor principal {color} quando natural. "
         "{composition} A FAIXA INFERIOR sempre limpa (vai o rodapé). É onde o sistema aplica texto e logos depois. "
         "PROIBIDO desenhar: qualquer texto, letra, número, palavra, título, logotipo, marca, ícone de app, "
         "telefone, site, rodapé, banner ou interface com palavras legíveis. Apenas o cenário. "

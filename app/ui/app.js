@@ -534,6 +534,15 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.114', date: '2026-08-06',
+    items: [
+      { type: 'feat', text: 'Clientes: envie quantas logos precisar, mantenha as variantes e escolha explicitamente qual é a principal.' },
+      { type: 'feat', text: 'Paleta: adicione e remova cores livremente, capture um ponto exato da logo/arte ou use o conta-gotas da tela.' },
+      { type: 'fix', text: 'Cor principal: toda paleta salva possui uma principal e as próximas gerações passam a respeitá-la.' },
+      { type: 'fix', text: 'Importações automáticas não sobrescrevem mais uma paleta que foi ajustada manualmente.' },
+    ],
+  },
+  {
     version: 'v1.27.113', date: '2026-08-06',
     items: [
       { type: 'fix', text: 'Clientes: cadastro e importação viraram um único fluxo com progresso real, avisos e opção clara de tentar novamente.' },

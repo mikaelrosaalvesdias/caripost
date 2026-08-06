@@ -198,7 +198,7 @@ async def analyze_brand(brand_id: str, request: Request):
     try:
         from ..db_companies import (
             asset_list,
-            brand_kit_upsert,
+            brand_kit_apply_auto,
             company_get,
             company_update,
             competitor_list,
@@ -296,12 +296,17 @@ async def analyze_brand(brand_id: str, request: Request):
                     normalized_colors = _lc
             except Exception:
                 pass
-            brand_kit_upsert(brand_id, {
-                "voice": identity.get("voice") or "",
-                "persona": identity.get("persona") or identity.get("positioning") or "",
-                "visual_prompt_base": identity.get("visual_prompt_base") or "",
-                "colors": normalized_colors,
-            })
+            auto_update = {
+                key: value for key, value in {
+                    "voice": identity.get("voice") or "",
+                    "persona": identity.get("persona") or identity.get("positioning") or "",
+                    "visual_prompt_base": identity.get("visual_prompt_base") or "",
+                }.items() if value
+            }
+            if normalized_colors:
+                auto_update["colors"] = normalized_colors
+            # Análise social é automática: nunca pode apagar uma paleta/voz já curada manualmente.
+            brand_kit_apply_auto(brand_id, auto_update)
 
         return {"report": report, "strategy": strategy_payload}
     except Exception as exc:

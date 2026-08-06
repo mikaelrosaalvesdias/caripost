@@ -120,9 +120,16 @@ def _text(value: Any, fallback: str = "") -> str:
 def _brand_colors(company: Dict[str, Any]) -> Tuple[Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]]:
     brand = company.get("brand_kit") or {}
     colors = brand.get("colors") or {}
-    primary = _hex_to_rgb(colors.get("primary") or colors.get("primaryColor") or "#111827", (20, 24, 32))
-    accent = _hex_to_rgb(colors.get("accent") or colors.get("accentColor") or "#ff7a18", (255, 122, 24))
-    secondary = _hex_to_rgb(colors.get("secondary") or colors.get("secondaryColor") or "#20d5ff", (32, 213, 255))
+    primary_raw = colors.get("primary") or colors.get("primaryColor")
+    accent_raw = colors.get("accent") or colors.get("accentColor")
+    secondary_raw = colors.get("secondary") or colors.get("secondaryColor")
+    primary = _hex_to_rgb(primary_raw or "#111827", (20, 24, 32))
+    # Uma paleta válida pode ter somente primary. Nesse caso toda a identidade parte dela;
+    # laranja/ciano são defaults apenas para uma empresa ainda sem paleta cadastrada.
+    accent = (_hex_to_rgb(accent_raw, primary) if accent_raw
+              else primary if colors else (255, 122, 24))
+    secondary = (_hex_to_rgb(secondary_raw, accent) if secondary_raw
+                 else accent if colors else (32, 213, 255))
     return primary, accent, secondary
 
 

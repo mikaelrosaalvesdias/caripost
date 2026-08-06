@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from .template_composer import _font, _hex, ORANGE, WHITE, compose_card_slide, _pick_logo_variant
+from .template_composer import _font, _hex, _brand_color, ORANGE, WHITE, compose_card_slide, _pick_logo_variant
 
 VW, VH = 1080, 1920   # 9:16
 
@@ -112,7 +112,7 @@ def _grade_filter(colors: Dict[str, Any], strength: float = 0.30) -> str:
     """Grade de cor da MARCA p/ TODO clipe (ffmpeg, determinístico): empurra sombras/midtones pra cor de acento
     + leve punch (contraste/saturação). Dá identidade de cor consistente mesmo com footage variado do modelo.
     'strength' é design token (default sutil); dá pra mover pra creative_config.design depois."""
-    r, g, b = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
+    r, g, b = _brand_color(colors)
     rm = round((r / 255.0 - 0.5) * strength, 3)
     gm = round((g / 255.0 - 0.5) * strength, 3)
     bm = round((b / 255.0 - 0.5) * strength, 3)
@@ -173,7 +173,7 @@ def _brand_frame(canvas: Image.Image, d: ImageDraw.ImageDraw, colors: Dict[str, 
 
 def _brand_bg_bytes(colors: Dict[str, Any]) -> bytes:
     """Fundo escuro da marca 1080x1920 (grafite + glow na cor de acento) — base do card de CTA."""
-    acc = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
+    acc = _brand_color(colors)
     base = Image.new("RGB", (VW, VH), (18, 16, 22))
     glow = Image.new("L", (VW, VH), 0)
     ImageDraw.Draw(glow).ellipse([VW // 2 - 560, VH // 2 - 700, VW // 2 + 560, VH // 2 + 700], fill=110)
@@ -233,7 +233,7 @@ def _cta_card_png(cta: Dict[str, Any], colors: Dict[str, Any], co_logos,
             return
     except Exception:
         pass
-    acc = _hex((colors or {}).get("accent") or (colors or {}).get("primary"), ORANGE)
+    acc = _brand_color(colors)
     _p0 = (co_logos[0] if isinstance(co_logos, list) and co_logos else co_logos)   # fallback PIL: 1ª variante
     canvas = Image.open(io.BytesIO(_brand_bg_bytes(colors))).convert("RGBA")
     d = ImageDraw.Draw(canvas)

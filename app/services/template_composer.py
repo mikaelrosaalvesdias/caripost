@@ -65,6 +65,12 @@ def _hex(c, default):
         return default
 
 
+def _brand_color(colors: Optional[Dict]) -> Tuple[int, int, int]:
+    """Return the curated primary color, keeping accent only as a legacy fallback."""
+    colors = colors or {}
+    return _hex(colors.get("primary") or colors.get("accent"), ORANGE)
+
+
 def _cover(img: Image.Image, w: int, h: int) -> Image.Image:
     img = img.convert("RGB")
     sr, dr = img.width / img.height, w / h
@@ -413,7 +419,7 @@ def compose_carousel_slide(slide: Dict, idx: int, total: int,
     design (opcional): override do design system DO CLIENTE (merge com EDITORIAL_DESIGN)."""
     DZ = _design(design)
     colors = colors or {}
-    orange = _hex(colors.get("accent") or colors.get("primary"), ORANGE)
+    orange = _brand_color(colors)
     dark = _hex(colors.get("dark"), CHAR)
     cream = _hex(colors.get("bg"), CREAM)
     t = (slide.get("type") or "content").lower()
@@ -736,7 +742,7 @@ def compose_card_slide(slide: Dict, idx: int, total: int,
                                       bg_bytes, app_logo_path, design, app_logos)
     try:
         colors = colors or {}
-        ACC = _hex(colors.get("accent") or colors.get("primary"), ORANGE)
+        ACC = _brand_color(colors)
         cardcfg = (design or {}).get("card") or {}
         tint = cardcfg.get("tint", [20, 12, 9, 184])   # opaco o bastante p/ ESCONDER quem estiver atrás (não "texto na cara")
         radius = int(cardcfg.get("radius", 40))
@@ -959,7 +965,7 @@ def compose_pattern1(img_bytes: bytes, title: str, subtitle: str = "", company_l
     desenhada por CÓDIGO (Poppins, cor da marca, confiável) + logo no topo + rodapé de contato. Estrutura fixa;
     marca/contato do cadastro. A IA só faz a cena (topo mais escuro/simples reservado ao texto)."""
     colors = colors or {}
-    ACC = _hex(colors.get("accent") or colors.get("primary"), ORANGE)
+    ACC = _brand_color(colors)
     canvas = _cover(Image.open(io.BytesIO(img_bytes)).convert("RGB"), W, H).convert("RGBA")
     # 1) scrim no ALTO (~52%) — legibilidade do texto + apaga qualquer junk da IA
     gh = int(H * 0.52)
@@ -1003,7 +1009,7 @@ def compose_cta_footer(img_bytes: bytes, company_logo_path: Optional[str] = None
     """Rodapé de contato na tela de CTA: barra com logo da empresa + 'FALE CONOSCO NO WHATSAPP: <número>'.
     Número vem do cadastro do cliente. Carimbado por código (a IA não acerta número)."""
     colors = colors or {}
-    orange = _hex(colors.get("accent") or colors.get("primary"), ORANGE)
+    orange = _brand_color(colors)
     base = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     if base.size != (W, H):
         base = _cover(base, W, H)

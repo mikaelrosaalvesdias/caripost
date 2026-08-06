@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from ..db_companies import (
     company_list, company_get, company_create, company_update, company_delete,
     brand_kit_get, brand_kit_upsert, brand_kit_extras_patch, brand_kit_apply_auto,
+    normalize_brand_colors,
     competitor_list, competitor_create, competitor_delete,
     asset_list, asset_create, asset_delete, asset_get, asset_update_meta,
     asset_list_logos, asset_list_photos, asset_clear_primary, asset_set_primary_logo,
@@ -294,6 +295,40 @@ def delete_company(company_id: str, request: Request):
 # Brand kit
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_manual_colors(colors: Any) -> Dict[str, str]:
+    """Validate a user-curated palette and guarantee its canonical primary color."""
+    if not isinstance(colors, dict) or not colors:
+        raise ValueError("Adicione pelo menos uma cor principal.")
+    cleaned: Dict[str, str] = {}
+    seen = set()
+    aliases = {
+        "primary": "primary", "primarycolor": "primary", "primarycolour": "primary",
+        "principal": "primary", "primaria": "primary", "corprincipal": "primary", "corprimaria": "primary",
+        "secondary": "secondary", "secondarycolor": "secondary", "secondarycolour": "secondary",
+        "secundaria": "secondary", "corsecundaria": "secondary",
+        "accent": "accent", "accentcolor": "accent", "accentcolour": "accent",
+        "destaque": "accent", "cordestaque": "accent",
+    }
+    for raw_name, raw_hex in colors.items():
+        name = str(raw_name or "").strip()
+        value = str(raw_hex or "").strip()
+        if not name or not value:
+            raise ValueError("Todas as cores precisam de nome e hexadecimal.")
+        compact = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+        compact = re.sub(r"[^a-z0-9]+", "", compact)
+        name = aliases.get(compact, name)
+        key = name.lower()
+        if key in seen:
+            raise ValueError(f'Nome de cor repetido: "{name}".')
+        seen.add(key)
+        raw = value.lstrip("#")
+        if re.fullmatch(r"[0-9a-fA-F]{3}", raw):
+            raw = "".join(char * 2 for char in raw)
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", raw):
+            raise ValueError(f'Cor inválida em "{name}". Use #RRGGBB.')
+        cleaned[name] = "#" + raw.upper()
+    return normalize_brand_colors(cleaned)
+
 @router.get("/{company_id}/brand-kit")
 def get_brand_kit(company_id: str, request: Request):
     err = _api_key_required(request)
@@ -321,14 +356,19 @@ async def save_brand_kit(company_id: str, request: Request):
     if isinstance(body.get("colors"), dict):
         # PALETA LIVRE: o usuário define QUANTAS cores quiser (nome → hex). SUBSTITUI a paleta inteira
         # (permite remover cor). Todas entram nos prompts via _palette_str.
-        data["colors"] = {str(k).strip(): str(v).strip() for k, v in body["colors"].items()
-                          if str(k).strip() and str(v).strip()}
+        try:
+            data["colors"] = _normalize_manual_colors(body["colors"])
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
     elif colors:
         if existing.get("brand_kit") and existing["brand_kit"].get("colors"):
             merged = existing["brand_kit"]["colors"].copy()
             merged.update(colors)
             colors = merged
-        data["colors"] = colors
+        try:
+            data["colors"] = _normalize_manual_colors(colors)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
     editable_fields = ("logo_url", "voice", "persona", "visual_prompt_base", "audience", "assuntos", "client_rules")
     for key in editable_fields:
         if key in body:
@@ -1349,7 +1389,9 @@ def _run_company_enrichment(
         company_id, run_id=run_id, state="running", stage="palette",
         message="Extraindo e agrupando as cores principais…", warnings=warnings,
     )
-    detected_colors = _company_logo_colors(company_id, 8) or dict(data.get("colors") or {})
+    detected_colors = normalize_brand_colors(
+        _company_logo_colors(company_id, 8) or dict(data.get("colors") or {})
+    )
     current_kit = brand_kit_get(company_id) or {}
     extras = dict(current_kit.get("extras") or {})
     current_colors = dict(current_kit.get("colors") or {})
