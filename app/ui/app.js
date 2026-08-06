@@ -534,6 +534,16 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.113', date: '2026-08-06',
+    items: [
+      { type: 'fix', text: 'Clientes: cadastro e importação viraram um único fluxo com progresso real, avisos e opção clara de tentar novamente.' },
+      { type: 'fix', text: 'Logos: sites Wix, ícones institucionais e variantes renderizadas são coletados sem duplicar arquivos; a logo principal pode ser escolhida com segurança.' },
+      { type: 'fix', text: 'Paleta: transparência e tons quase iguais são tratados corretamente, com até 8 cores reais e preservação de ajustes manuais.' },
+      { type: 'fix', text: 'Instagram oficial: @handles e links compartilhados com parâmetros agora são reconhecidos corretamente.' },
+      { type: 'fix', text: 'Erros de API deixam de aparecer como sucesso e jobs interrompidos não ficam presos para sempre.' },
+    ],
+  },
+  {
     version: 'v1.27.112', date: '2026-07-30',
     items: [
       { type: 'fix', text: 'Kie: callback entrega a arte assim que a geração termina, com polling de segurança a cada 30 segundos.' },

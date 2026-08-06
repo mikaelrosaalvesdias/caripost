@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import unicodedata
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
@@ -17,10 +19,11 @@ from fastapi.responses import JSONResponse
 
 from ..db_companies import (
     company_list, company_get, company_create, company_update, company_delete,
-    brand_kit_get, brand_kit_upsert,
+    brand_kit_get, brand_kit_upsert, brand_kit_extras_patch, brand_kit_apply_auto,
     competitor_list, competitor_create, competitor_delete,
     asset_list, asset_create, asset_delete, asset_get, asset_update_meta,
-    asset_list_logos, asset_list_photos, asset_clear_primary,
+    asset_list_logos, asset_list_photos, asset_clear_primary, asset_set_primary_logo,
+    asset_claim_primary_logo_if_empty,
     product_list, product_get, product_create, product_copy, product_update, product_delete,
     solution_list, solution_get, solution_create, solution_update, solution_delete,
 )
@@ -36,6 +39,58 @@ def _api_key_required(request: Request):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_ENRICHMENT_RUNNING: set[str] = set()
+_ENRICHMENT_GUARD = threading.Lock()
+
+
+def _enrichment_status(company_id: str) -> Dict[str, Any]:
+    extras = (brand_kit_get(company_id) or {}).get("extras") or {}
+    status = dict(extras.get("enrichment") or {})
+    if status.get("state") not in ("queued", "running"):
+        return status
+    with _ENRICHMENT_GUARD:
+        active_here = company_id in _ENRICHMENT_RUNNING
+    if active_here:
+        return status
+    # Threads are intentionally in-process. After a deploy/restart, turn an abandoned marker into
+    # a retryable failure instead of leaving the UI spinning forever.
+    timestamp = status.get("started_at") if status.get("state") == "running" else status.get("queued_at")
+    try:
+        when = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        stale = datetime.now(timezone.utc) - when > timedelta(minutes=15)
+    except Exception:
+        stale = True
+    if stale:
+        return _store_enrichment_status(
+            company_id,
+            state="failed",
+            stage="failed",
+            message="A importação foi interrompida por uma reinicialização. Tente novamente.",
+            error="Importação interrompida antes da conclusão.",
+            finished_at=_now(),
+        )
+    return status
+
+
+def _store_enrichment_status(
+    company_id: str, *, run_id: Optional[str] = None, replace: bool = False, **patch: Any,
+) -> Dict[str, Any]:
+    """Persist lightweight progress so create/update and the UI share one truthful flow."""
+    current = brand_kit_get(company_id) or {}
+    extras = dict(current.get("extras") or {})
+    previous = dict(extras.get("enrichment") or {})
+    if run_id and not replace and previous.get("run_id") not in (None, run_id):
+        return previous
+    status = {} if replace else previous
+    if run_id:
+        status["run_id"] = run_id
+    status.update({key: value for key, value in patch.items() if value is not None})
+    brand_kit_extras_patch(company_id, {"enrichment": status})
+    return status
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +118,9 @@ def get_company(company_id: str, request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    status = _enrichment_status(company_id)
+    if status and status != (((company.get("brand_kit") or {}).get("extras") or {}).get("enrichment") or {}):
+        company = company_get(company_id) or company
     # attach competitors and assets
     company["competitors"] = competitor_list(company_id)
     company["references"] = asset_list(company_id, role="brand_reference")
@@ -78,7 +136,7 @@ async def create_company(request: Request):
     if not body.get("name"):
         return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
     # parse socials
-    socials: Dict[str, str] = {}
+    socials: Dict[str, str] = dict(body.get("socials") or {})
     for key in ("instagram", "facebook", "tiktok"):
         val = body.get(f"social_{key}")
         if val:
@@ -109,27 +167,72 @@ async def create_company(request: Request):
             company = company_get(company["id"])
         except Exception:
             pass
-    # AUTO-ENRICH no CADASTRO: com site preenchido, o perfil (cores, voz, LOGO, planos) monta SOZINHO em
-    # background (~30-60s) — sem caçar botão. Mesmo caminho do botão "Puxar do site/Instagram da empresa".
+    # Cadastro e importação usam um único fluxo observável. A resposta já contém o status persistido,
+    # e a tela acompanha cada etapa sem depender de um segundo botão escondido.
+    enrichment = None
     if (company.get("website") or "").strip() or any((company.get("socials") or {}).get(k) for k in ("instagram", "facebook")):
-        _spawn_bg_enrich(company["id"])
-    return {"company": company}
+        enrichment = _spawn_bg_enrich(company["id"])
+        company = company_get(company["id"])
+    return {"company": company, "enrichment": enrichment}
 
 
-def _spawn_bg_enrich(company_id: str):
-    """Dispara o enrich (cores, voz, LOGO, planos) em BACKGROUND — perfil se monta sozinho, sem botão."""
-    import threading
+def _spawn_bg_enrich(company_id: str, overrides: Optional[Dict[str, Any]] = None):
+    """Start one in-process enrichment per company and expose its real progress in the DB."""
+    with _ENRICHMENT_GUARD:
+        already_running = company_id in _ENRICHMENT_RUNNING
+        if not already_running:
+            _ENRICHMENT_RUNNING.add(company_id)
+    if already_running:
+        return _enrichment_status(company_id)
+    run_id = uuid.uuid4().hex
+    try:
+        queued = _store_enrichment_status(
+            company_id, run_id=run_id, replace=True,
+            state="queued",
+            stage="queued",
+            message="Preparando a importação da identidade…",
+            queued_at=_now(),
+            warnings=[],
+            logos_added=0,
+            logos_total=0,
+            colors_found=0,
+            products_added=0,
+            palette_preserved=False,
+            error="",
+        )
+    except Exception as exc:
+        with _ENRICHMENT_GUARD:
+            _ENRICHMENT_RUNNING.discard(company_id)
+        return {"state": "failed", "stage": "failed", "error": str(exc)[:300]}
 
-    def _bg(cid: str):
+    def _bg(cid: str, payload: Dict[str, Any], rid: str):
         try:
-            import httpx as _hx
-            _hx.post("http://localhost:8765/api/companies/" + cid + "/enrich",
-                     headers={"X-API-Key": os.environ.get("ADULT_META_API_KEY", "")},
-                     json={}, timeout=_hx.Timeout(420.0, connect=10.0))
-        except Exception:
-            pass
+            _run_company_enrichment(cid, payload, run_id=rid)
+        except Exception as exc:
+            _store_enrichment_status(
+                cid, run_id=rid,
+                state="failed",
+                stage="failed",
+                message="Não foi possível concluir a importação.",
+                error=str(exc)[:300],
+                finished_at=_now(),
+            )
+        finally:
+            with _ENRICHMENT_GUARD:
+                _ENRICHMENT_RUNNING.discard(cid)
 
-    threading.Thread(target=_bg, args=(company_id,), daemon=True).start()
+    try:
+        threading.Thread(
+            target=_bg, args=(company_id, dict(overrides or {}), run_id), daemon=True,
+        ).start()
+    except Exception as exc:
+        with _ENRICHMENT_GUARD:
+            _ENRICHMENT_RUNNING.discard(company_id)
+        return _store_enrichment_status(
+            company_id, run_id=run_id, state="failed", stage="failed",
+            message="Não foi possível iniciar a importação.", error=str(exc)[:300], finished_at=_now(),
+        )
+    return queued
 
 
 @router.put("/{company_id}")
@@ -142,7 +245,9 @@ async def update_company(company_id: str, request: Request):
     if not existing:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     # merge socials
-    socials = existing.get("socials") or {}
+    # Copy before editing: mutating the existing dict made old/new sources identical and
+    # prevented automatic enrichment after Instagram/Facebook were added.
+    socials = dict(existing.get("socials") or {})
     for key in ("instagram", "facebook", "tiktok"):
         val = body.get(f"social_{key}")
         if val is not None:
@@ -160,8 +265,7 @@ async def update_company(company_id: str, request: Request):
         ((existing.get("socials") or {}).get("facebook") or "").strip(),
     )
     company = company_update(company_id, data)
-    # site ADICIONADO depois do cadastro, com perfil ainda vazio → monta sozinho (mesmo auto do create).
-    # Perfil já preenchido não é sobrescrito (curadoria do usuário vale mais que o robô).
+    # Uma fonte oficial adicionada ou alterada inicia o mesmo fluxo observável do cadastro.
     _new_identity_sources = (
         (company.get("website") or "").strip(),
         ((company.get("socials") or {}).get("instagram") or "").strip(),
@@ -225,9 +329,24 @@ async def save_brand_kit(company_id: str, request: Request):
             merged.update(colors)
             colors = merged
         data["colors"] = colors
-    for key in ("logo_url", "voice", "persona", "visual_prompt_base", "audience", "assuntos", "client_rules"):
+    editable_fields = ("logo_url", "voice", "persona", "visual_prompt_base", "audience", "assuntos", "client_rules")
+    for key in editable_fields:
         if key in body:
             data[key] = body[key]
+    kit = existing.get("brand_kit") or {}
+    extras = dict(kit.get("extras") or {})
+    manual_fields = set(extras.get("manual_fields") or [])
+    manual_fields.update(key for key in editable_fields if key in body)
+    extra_patch: Dict[str, Any] = {}
+    if manual_fields:
+        extra_patch["manual_fields"] = sorted(manual_fields)
+    if "colors" in data:
+        extra_patch["palette_source"] = "manual"
+        extra_patch["palette_curated_at"] = _now()
+    if extra_patch:
+        data["source"] = "MANUAL"
+    if extra_patch:
+        brand_kit_extras_patch(company_id, extra_patch)
     bk = brand_kit_upsert(company_id, data)
     return {"brand_kit": bk}
 
@@ -235,6 +354,9 @@ async def save_brand_kit(company_id: str, request: Request):
 @router.get("/{company_id}/creative-config")
 def get_creative_config(company_id: str, request: Request):
     """Config criativa do cliente: defaults globais + override atual (nada travado no código)."""
+    err = _api_key_required(request)
+    if err:
+        return err
     co = company_get(company_id)
     if not co:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -248,6 +370,9 @@ def get_creative_config(company_id: str, request: Request):
 @router.post("/{company_id}/creative-config")
 async def save_creative_config(company_id: str, request: Request):
     """Salva os overrides criativos do cliente (prompts/regras/design/imagem/vídeo). {} = restaura padrão."""
+    err = _api_key_required(request)
+    if err:
+        return err
     co = company_get(company_id)
     if not co:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -267,11 +392,69 @@ async def save_creative_config(company_id: str, request: Request):
 
 UPLOAD_DIR = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
 UPLOAD_URL_PREFIX = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
+_MAX_LOGO_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _normalize_logo_upload(content: bytes) -> bytes:
+    """Validate raster image bytes and normalize them to a safe, transparent PNG."""
+    if not content:
+        raise ValueError("O arquivo da logo está vazio.")
+    if len(content) > _MAX_LOGO_UPLOAD_BYTES:
+        raise ValueError("A logo deve ter no máximo 10 MB.")
+    try:
+        import io
+        from PIL import Image, ImageOps
+        probe = Image.open(io.BytesIO(content))
+        if probe.width < 2 or probe.height < 2:
+            raise ValueError("A imagem da logo é pequena demais.")
+        if probe.width * probe.height > 40_000_000:
+            raise ValueError("A imagem da logo tem dimensões grandes demais.")
+        probe.verify()
+        image = Image.open(io.BytesIO(content))
+        image.seek(0)
+        image = ImageOps.exif_transpose(image)
+        image.load()
+        rgba = image.convert("RGBA")
+        visible = sum(1 for _r, _g, _b, alpha in rgba.getdata() if alpha >= 32)
+        if visible / float(max(1, rgba.width * rgba.height)) < 0.002:
+            raise ValueError("A logo enviada está totalmente transparente.")
+        output = io.BytesIO()
+        rgba.save(output, "PNG", optimize=True)
+        return output.getvalue()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Envie uma logo raster válida em PNG, JPEG ou WebP.") from exc
 
 
 def _identity_key(value: str) -> str:
     value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode().lower()
     return re.sub(r"[^a-z0-9]+", "", value)
+
+
+def _instagram_handle(value: str) -> str:
+    """Normalize an Instagram @handle or profile URL, dropping query strings and fragments."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    candidate = raw.rstrip("/")
+    looks_like_url = bool(re.match(r"(?i)^https?://", raw))
+    looks_like_instagram_host = bool(re.match(r"(?i)^(?:www\.|m\.)?instagram\.com(?:/|$)", raw))
+    if looks_like_url or looks_like_instagram_host:
+        parsed = urlparse(raw if looks_like_url else "https://" + raw)
+        host = (parsed.hostname or "").lower()
+        if host not in ("instagram.com", "www.instagram.com", "m.instagram.com"):
+            return ""
+        segments = [segment for segment in (parsed.path or "").split("/") if segment]
+        if not segments or segments[0].lower() in {
+            "accounts", "direct", "explore", "p", "reel", "reels", "stories", "tv",
+        }:
+            return ""
+        candidate = segments[0]
+
+    candidate = candidate.lstrip("@").strip()
+    return candidate if re.fullmatch(r"[A-Za-z0-9._]{1,30}", candidate) else ""
 
 
 _THIRD_PARTY_BRANDS = {
@@ -288,6 +471,49 @@ class _ImageCandidateParser(HTMLParser):
         self._in_header = 0
         self._in_nav = 0
 
+    @staticmethod
+    def _best_srcset(srcset: str) -> str:
+        candidates = []
+        raw_srcset = srcset or ""
+        # Commas are legal inside image URLs (Wix resize paths use many of them). A comma is a
+        # separator only after a density/width descriptor or before a new absolute/root URL.
+        parts, start = [], 0
+        for match in re.finditer(",", raw_srcset):
+            left = raw_srcset[start:match.start()].strip()
+            right = raw_srcset[match.end():].lstrip()
+            if (re.search(r"\s\d+(?:\.\d+)?[wx]\s*$", left, re.I)
+                    or re.match(r"(?:(?:https?:)?//|/|\.\.?/)", right, re.I)):
+                parts.append(left)
+                start = match.end()
+        parts.append(raw_srcset[start:].strip())
+        for idx, part in enumerate(parts):
+            bits = part.strip().split()
+            if not bits:
+                continue
+            weight = idx
+            if len(bits) > 1:
+                raw = bits[-1].lower().rstrip("wx")
+                try:
+                    weight = int(float(raw))
+                except Exception:
+                    pass
+            candidates.append((weight, bits[0]))
+        return max(candidates, default=(0, ""))[1]
+
+    def _append(self, src: str, attrs: Dict[str, str], kind: str) -> None:
+        if not (src or "").strip():
+            return
+        self.images.append({
+            "src": src.strip(),
+            # Keep descriptive attributes, not raw src: the company name in a domain must not
+            # turn every product image into an institutional match.
+            "attrs": " ".join(v for k, v in attrs.items()
+                              if k not in ("src", "data-src", "data-lazy-src", "srcset", "href", "content")),
+            "header": "1" if self._in_header else "",
+            "nav": "1" if self._in_nav else "",
+            "kind": kind,
+        })
+
     def handle_starttag(self, tag: str, attrs):
         amap = {str(k).lower(): str(v or "") for k, v in attrs}
         if tag == "header":
@@ -295,17 +521,19 @@ class _ImageCandidateParser(HTMLParser):
         if tag == "nav":
             self._in_nav += 1
         if tag == "img":
-            src = amap.get("src") or amap.get("data-src") or amap.get("data-lazy-src") or ""
-            if src:
-                self.images.append({
-                    "src": src,
-                    # Do not include src here: the company name in the site's DOMAIN would otherwise
-                    # make every product image look like an institutional match.
-                    "attrs": " ".join(v for k, v in amap.items()
-                                      if k not in ("src", "data-src", "data-lazy-src", "srcset")),
-                    "header": "1" if self._in_header else "",
-                    "nav": "1" if self._in_nav else "",
-                })
+            src = (self._best_srcset(amap.get("srcset") or "") or amap.get("src")
+                   or amap.get("data-src") or amap.get("data-lazy-src") or "")
+            self._append(src, amap, "img")
+        elif tag == "source":
+            self._append(self._best_srcset(amap.get("srcset") or ""), amap, "picture")
+        elif tag == "link":
+            rel = (amap.get("rel") or "").lower()
+            if "icon" in rel:
+                self._append(amap.get("href") or "", amap, "site-icon")
+        elif tag == "meta":
+            marker = (amap.get("property") or amap.get("name") or "").lower()
+            if marker in ("og:logo", "og:image", "twitter:image", "twitter:image:src"):
+                self._append(amap.get("content") or "", amap, marker)
 
     def handle_endtag(self, tag: str):
         if tag == "header" and self._in_header:
@@ -328,34 +556,71 @@ def _site_logo_candidates(html: str, base_url: str, company_name: str) -> List[D
         pass
     company_key = _identity_key(company_name)
     ranked: List[Dict[str, Any]] = []
-    seen = set()
     for idx, item in enumerate(parser.images):
         absolute = urljoin(base_url, item["src"].strip())
-        if absolute in seen:
+        if urlparse(absolute).scheme not in ("http", "https"):
             continue
-        seen.add(absolute)
-        haystack = _identity_key(item["attrs"] + " " + urlparse(absolute).path)
-        basename = _identity_key(os.path.basename(urlparse(absolute).path))
+        kind = item.get("kind") or "img"
+        haystack = _identity_key(item["attrs"] + " " + urlparse(absolute).path + " " + kind)
+        basename = _identity_key(os.path.splitext(os.path.basename(urlparse(absolute).path))[0])
         score, reasons = max(0, 18 - idx // 4), []
-        if company_key and len(company_key) >= 3 and company_key in haystack:
+        strong_identity = False
+        if (kind not in ("og:image", "twitter:image", "twitter:image:src")
+                and company_key and len(company_key) >= 3 and company_key in haystack):
             score += 80
             reasons.append("company-name")
+            strong_identity = True
         if any(mark in haystack for mark in ("customlogo", "sitelogo", "brandlogo", "headerlogo")):
             score += 70
             reasons.append("brand-marker")
+            strong_identity = True
         elif "logo" in haystack:
             score += 14
             reasons.append("generic-logo")
         if item["header"] or item["nav"]:
             score += 45
             reasons.append("header-nav")
+        if kind == "site-icon":
+            score += 58
+            reasons.append("site-icon")
+            strong_identity = True
+        elif kind == "og:logo":
+            score += 65
+            reasons.append("og-logo")
+            strong_identity = True
+        elif kind in ("og:image", "twitter:image", "twitter:image:src"):
+            score += 8
+            reasons.append("social-preview")
         if basename in ("logo", "logotipo", company_key) and basename:
             score += 25
+            strong_identity = True
         foreign = sorted(x for x in _THIRD_PARTY_BRANDS if x in haystack and x not in company_key)
         if foreign:
             score -= 140
             reasons.append("third-party:" + ",".join(foreign))
-        ranked.append({"url": absolute, "score": score, "reasons": reasons, "index": idx})
+        if (kind in ("img", "picture") and (item["header"] or item["nav"])
+                and not strong_identity):
+            suspicious_context = any(mark in haystack for mark in (
+                "parceiro", "partner", "patrocin", "sponsor", "associad", "certific",
+                "pagamento", "payment", "bandeira", "flag", "social", "search", "lupa",
+            ))
+            if "generic-logo" in reasons and idx <= 5 and not suspicious_context:
+                score += 18
+                reasons.append("early-header-logo")
+                strong_identity = True
+            else:
+                score -= 32
+                reasons.append("ambiguous-header-logo")
+        ranked.append({
+            "url": absolute, "score": score, "reasons": reasons, "index": idx,
+            "kind": kind, "strong_identity": strong_identity,
+        })
+    best_by_url: Dict[str, Dict[str, Any]] = {}
+    for item in ranked:
+        previous = best_by_url.get(item["url"])
+        if previous is None or int(item["score"]) > int(previous["score"]):
+            best_by_url[item["url"]] = item
+    ranked = list(best_by_url.values())
     ranked.sort(key=lambda x: (-int(x["score"]), int(x["index"])))
     return ranked
 
@@ -405,7 +670,10 @@ def _render_site(url: str) -> Dict[str, Any]:
         with sync_playwright() as p:
             b = p.chromium.launch(headless=True)
             pg = b.new_page(viewport={"width": 1366, "height": 900}, device_scale_factor=3)   # logo nítida (3x)
-            pg.goto(url, timeout=35000, wait_until="networkidle")
+            # Wix/analytics pages may never become network-idle. The brand header is available
+            # after DOMContentLoaded plus a short render window.
+            pg.goto(url, timeout=35000, wait_until="domcontentloaded")
+            pg.wait_for_timeout(1800)
             html = pg.content() or ""
             txt = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S | re.I)
             txt = re.sub(r"<[^>]+>", " ", txt)
@@ -414,18 +682,18 @@ def _render_site(url: str) -> Dict[str, Any]:
             try:
                 # <img> de logo OU SVG INLINE em container 'logo' (site sem <img> de logo — ex.: kpsfibra)
                 # OU 1º svg do header. Screenshot do ELEMENTO vira PNG transparente.
-                for _sel in ("header img, nav img, img.custom-logo, [class*='site-logo' i] img",
-                             "img[src*='logo' i], img[alt*='logo' i], img[class*='logo' i]",
+                for _sel in ("img.custom-logo, [class*='site-logo' i] img, img[src*='logo' i], "
+                             "img[alt*='logo' i], img[class*='logo' i]",
                              "a[class*='logo' i], div[class*='logo' i], span[class*='logo' i]",   # CONTAINER (ícone+texto)
                              "[class*='logo' i] svg, svg[class*='logo' i], svg[id*='logo' i]",
-                             "header svg, a[href='/'] svg"):
+                             "header a[href='/'] img, nav a[href='/'] img, header a[href='/'] svg, a[href='/'] svg"):
                     el = pg.locator(_sel).first
                     if not el or el.count() == 0:
                         continue
                     try:
                         bb = el.bounding_box() or {}
                         _w, _h = (bb.get("width") or 0), (bb.get("height") or 0)
-                        if (_w < 40 and _h < 40) or _w > 720 or _h > 240:
+                        if (_w <= 40 and _h <= 40) or _w > 720 or _h > 240:
                             continue                           # ícone minúsculo OU wrapper gigante ≠ logo
                     except Exception:
                         pass
@@ -523,18 +791,37 @@ def _auto_extract_products(company_id: str, website: str) -> int:
         items = data.get("products") or []
     except Exception:
         return 0
-    existing = {(p.get("name") or "").strip().lower() for p in (product_list(company_id) or [])}
+    company_words = set(re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKD", (company_get(company_id) or {}).get("name") or "")
+                                   .encode("ascii", "ignore").decode().lower()))
+    generic_words = {
+        "plano", "planos", "servico", "servicos", "produto", "produtos", "oferta", "ofertas",
+        "internet", "telecom", "telecomunicacoes", "fibra", "da", "de", "do", "para", "com",
+    }
+
+    def _offer_key(name: str) -> str:
+        clean = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+        words = [word for word in re.findall(r"[a-z0-9]+", clean)
+                 if word not in company_words and word not in generic_words]
+        # Numbers distinguish real speed tiers (500 mega vs 700 mega); an empty key represents
+        # a generic restatement of the company, which must not be duplicated on every refresh.
+        return "|".join(sorted(set(words))) or "__generic_company_offer__"
+
+    existing_products = product_list(company_id) or []
+    existing_names = {(p.get("name") or "").strip().lower() for p in existing_products}
+    existing_keys = {_offer_key(p.get("name") or "") for p in existing_products}
     added = 0
     for it in items[:12]:
         nm = (it.get("name") or "").strip()
-        if not nm or nm.lower() in existing:
+        offer_key = _offer_key(nm)
+        if not nm or nm.lower() in existing_names or offer_key in existing_keys:
             continue
         _fns = [str(f).strip() for f in (it.get("functions") or []) if str(f).strip()][:8]
         if (it.get("price") or "").strip():
             _fns.append("Preço: " + it["price"].strip())
         product_create(company_id, {"name": nm, "description": (it.get("description") or "").strip(),
                                     "objective": (it.get("objective") or "").strip(), "functions": _fns})
-        existing.add(nm.lower())
+        existing_names.add(nm.lower())
+        existing_keys.add(offer_key)
         added += 1
     return added
 
@@ -548,7 +835,7 @@ def _ig_fetch_brand(company_id: str, instagram: str) -> Dict[str, int]:
     import httpx as _hx
     from PIL import Image as _Img
     out = {"logo": 0, "refs": 0}
-    handle = (instagram or "").strip().rstrip("/").split("/")[-1].lstrip("@")
+    handle = _instagram_handle(instagram)
     if not handle:
         return out
     try:
@@ -571,10 +858,10 @@ def _ig_fetch_brand(company_id: str, instagram: str) -> Dict[str, int]:
             u = f"{UPLOAD_URL_PREFIX}/{company_id}/{sub}/{fn}"
             saved_meta = dict(meta, role=role)
             if role == "logo":
-                saved_meta.update({"identity_scope": "company", "confidence": 0.95})
-            asset_create(company_id, {"kind": kind, "source": "INSTAGRAM", "url": u, "meta": saved_meta})
-            if role == "logo" and not (brand_kit_get(company_id) or {}).get("logo_url"):
-                brand_kit_upsert(company_id, {"logo_url": u})
+                saved_meta.update({"identity_scope": "company", "confidence": 0.95, "is_primary": False})
+            asset = asset_create(company_id, {"kind": kind, "source": "INSTAGRAM", "url": u, "meta": saved_meta})
+            if role == "logo":
+                asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
             return True
         except Exception:
             return False
@@ -640,27 +927,56 @@ def _facebook_fetch_logo(company_id: str, facebook: str) -> int:
         filename = f"{_uuid.uuid4().hex}.png"
         image.convert("RGBA").save(os.path.join(subdir, filename), "PNG")
         url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
-        is_primary = not bool(asset_list_logos(company_id))
-        asset_create(company_id, {
+        asset = asset_create(company_id, {
             "kind": "IMAGE", "source": "FACEBOOK", "url": url,
-            "meta": {"role": "logo", "is_primary": is_primary, "from": "facebook_profile",
+            "meta": {"role": "logo", "is_primary": False, "from": "facebook_profile",
                      "source_url": page_url[:200], "identity_scope": "company", "confidence": 0.9},
         })
-        if is_primary or not (brand_kit_get(company_id) or {}).get("logo_url"):
-            brand_kit_upsert(company_id, {"logo_url": url})
+        asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
         return 1
     except Exception:
         return 0
 
 
+def _canonical_logo_source(url: str) -> str:
+    """Collapse CDN resize URLs to one source asset while keeping genuinely different marks."""
+    parsed = urlparse(url or "")
+    path = parsed.path or ""
+    if "static.wixstatic.com" in parsed.netloc and "/media/" in path:
+        wix_asset = path.split("/media/", 1)[1].split("/", 1)[0]
+        return f"{parsed.netloc}/media/{wix_asset}"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{parsed.scheme}://{parsed.netloc}{path}{query}"
+
+
+def _logo_visual_hash(image) -> str:
+    """Shape + color hash: resize duplicates collapse, but light/dark variants remain distinct."""
+    try:
+        import imagehash
+        from PIL import Image
+        rgba = image.convert("RGBA")
+        bg = Image.new("RGBA", rgba.size, (127, 127, 127, 255))
+        flattened = Image.alpha_composite(bg, rgba).convert("RGB")
+        visible = [(r, g, b, a) for r, g, b, a in rgba.getdata() if a >= 48]
+        if visible:
+            total_alpha = sum(pixel[3] for pixel in visible)
+            mean = tuple(int(sum(pixel[channel] * pixel[3] for pixel in visible) / total_alpha)
+                         for channel in range(3))
+        else:
+            mean = (127, 127, 127)
+        return f"{imagehash.phash(flattened)}:{mean[0]:02x}{mean[1]:02x}{mean[2]:02x}"
+    except Exception:
+        return ""
+
+
 def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
-    """Baixa o LOGO do site do cliente (og:image / apple-touch-icon / <img ...logo...>) e cadastra como asset
-    primário — pra montagem de perfil vir com logo + cores + identidade já preenchidos. Retorna a URL ou None."""
-    import re
-    import uuid as _uuid
+    """Discover multiple institutional marks, idempotently, without replacing a curated primary logo."""
+    import hashlib
     import io as _io
+    import uuid as _uuid
     import httpx as _hx
     from PIL import Image as _Img
+
     if not website:
         return None
     base = website if website.startswith("http") else "https://" + website
@@ -670,85 +986,169 @@ def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
         html = r.text or ""
     except Exception:
         return None
+
     company = company_get(company_id) or {}
-    ranked = _site_logo_candidates(html, str(r.url), company.get("name") or "")
-    # Abaixo deste limiar é mais seguro fotografar o cabeçalho do que promover uma marca de produto.
-    cands = [c for c in ranked if c["score"] >= 55]
-    seen = set()
-    content_seen = set()
-    first_url = None
-    for candidate in cands:
-        u = candidate["url"]
-        if u in seen or u.lower().endswith(".svg"):
-            continue
-        seen.add(u)
+    existing = list(asset_list_logos(company_id) or [])
+    existing_sha, existing_phash, existing_capture = set(), [], set()
+    kit_logo_url = (brand_kit_get(company_id) or {}).get("logo_url") or ""
+    has_primary = bool(kit_logo_url and not kit_logo_url.startswith(UPLOAD_URL_PREFIX))
+    valid_existing = []
+    for logo in existing:
+        meta = logo.get("meta") or {}
+        local_url = logo.get("url") or ""
+        if local_url.startswith(UPLOAD_URL_PREFIX):
+            path = os.path.join(UPLOAD_DIR, local_url[len(UPLOAD_URL_PREFIX):].lstrip("/"))
+            if not path.lower().endswith(".svg"):
+                try:
+                    with open(path, "rb") as handle:
+                        raw = handle.read()
+                    image = _Img.open(_io.BytesIO(raw))
+                    if image.width * image.height > 40_000_000:
+                        raise ValueError("imagem grande demais")
+                    image.load()
+                except Exception:
+                    # Only auto-imported WEB rows are safe to self-heal. Never delete a curated
+                    # upload merely because Pillow cannot decode it (legacy SVGs are valid here).
+                    if logo.get("source") == "WEB":
+                        asset_delete(logo.get("id"))
+                        if kit_logo_url == local_url:
+                            kit_logo_url = ""
+                            brand_kit_upsert(company_id, {"logo_url": None})
+                        continue
+                else:
+                    existing_sha.add(hashlib.sha256(raw).hexdigest())
+                    phash = _logo_visual_hash(image)
+                    if phash:
+                        existing_phash.append(phash)
+        valid_existing.append(logo)
+        if meta.get("sha256"):
+            existing_sha.add(str(meta["sha256"]))
+        if meta.get("phash"):
+            existing_phash.append(str(meta["phash"]))
+        origin = str(meta.get("from") or "")
+        if origin.startswith("playwright_"):
+            existing_capture.add(origin)
+        if meta.get("is_primary") or (kit_logo_url and kit_logo_url == local_url):
+            has_primary = True
+    existing = valid_existing
+    existing = _ensure_logo_primary_consistency(company_id, existing)
+    if any((logo.get("meta") or {}).get("is_primary") for logo in existing):
+        has_primary = True
+
+    def _looks_duplicate(digest: str, phash: str) -> bool:
+        if digest in existing_sha:
+            return True
+        if not phash:
+            return False
         try:
-            ir = _hx.get(u, timeout=_hx.Timeout(20.0, connect=10.0), follow_redirects=True)
-            if ir.status_code >= 400 or not ir.content:
-                continue
-            import hashlib
-            digest = hashlib.sha256(ir.content).hexdigest()
-            if digest in content_seen:
-                continue
-            content_seen.add(digest)
-            im = _Img.open(_io.BytesIO(ir.content))
-            if im.width < 64 and im.height < 64:   # só rejeita se AMBAS as dimensões forem minúsculas
-                continue                            # (logo horizontal real pode ter só ~40px de altura)
-            ext = ".png"
-            subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
-            os.makedirs(subdir, exist_ok=True)
-            filename = f"{_uuid.uuid4().hex}{ext}"
-            im.convert("RGBA").save(os.path.join(subdir, filename), "PNG")
+            import imagehash
+            current_shape, _, current_color = phash.partition(":")
+            for old in existing_phash:
+                old_shape, _, old_color = old.partition(":")
+                if not old_shape:
+                    continue
+                if imagehash.hex_to_hash(current_shape) - imagehash.hex_to_hash(old_shape) > 5:
+                    continue
+                if current_color and old_color and len(current_color) == 6 and len(old_color) == 6:
+                    current_rgb = tuple(int(current_color[index:index + 2], 16) for index in (0, 2, 4))
+                    old_rgb = tuple(int(old_color[index:index + 2], 16) for index in (0, 2, 4))
+                    distance = sum((current_rgb[index] - old_rgb[index]) ** 2 for index in range(3)) ** 0.5
+                    if distance <= 42:
+                        return True
+                elif current_shape == old_shape:
+                    return True
+            return False
+        except Exception:
+            return phash in existing_phash
+
+    subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
+    os.makedirs(subdir, exist_ok=True)
+    saved_urls: List[str] = []
+
+    def _save_image(raw: bytes, *, origin: str, variant: str, confidence: float,
+                    evidence: Optional[List[str]] = None) -> Optional[str]:
+        nonlocal has_primary
+        if not raw or len(raw) > 10 * 1024 * 1024:
+            return None
+        try:
+            digest = hashlib.sha256(raw).hexdigest()
+            im = _Img.open(_io.BytesIO(raw))
+            if im.width * im.height > 40_000_000:
+                return None
+            im.load()
+            if im.width < 48 and im.height < 48:
+                return None
+            rgba = im.convert("RGBA")
+            visible_pixels = sum(1 for _r, _g, _b, alpha in rgba.getdata() if alpha >= 32)
+            if visible_pixels / float(max(1, rgba.width * rgba.height)) < 0.002:
+                return None
+            phash = _logo_visual_hash(rgba)
+            if _looks_duplicate(digest, phash):
+                return None
+            filename = f"{_uuid.uuid4().hex}.png"
+            rgba.save(os.path.join(subdir, filename), "PNG")
             url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
-            asset_create(company_id, {"kind": "IMAGE", "source": "WEB", "url": url,
-                                      "meta": {"role": "logo", "is_primary": first_url is None, "from": u[:200],
-                                               "identity_scope": "company",
-                                               "confidence": min(1.0, candidate["score"] / 100.0),
-                                               "evidence": candidate["reasons"]}})
-            if first_url is None:
-                first_url = url
-                brand_kit_upsert(company_id, {"logo_url": url})
-            if len(content_seen) >= 4:
-                break
+            asset = asset_create(company_id, {
+                "kind": "IMAGE", "source": "WEB", "url": url,
+                "meta": {
+                    "role": "logo", "variant": variant, "is_primary": False,
+                    "from": origin[:500], "source_key": _canonical_logo_source(origin),
+                    "identity_scope": "company", "confidence": confidence,
+                    "evidence": evidence or [], "sha256": digest, "phash": phash,
+                },
+            })
+            existing_sha.add(digest)
+            if phash:
+                existing_phash.append(phash)
+            is_primary = asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
+            if is_primary:
+                has_primary = True
+            saved_urls.append(url)
+            return url
+        except Exception:
+            return None
+
+    ranked = _site_logo_candidates(html, str(r.url), company.get("name") or "")
+    candidates = [candidate for candidate in ranked if candidate["score"] >= 55]
+    for candidate in candidates[:12]:
+        if len(saved_urls) >= 5 or urlparse(candidate["url"]).path.lower().endswith(".svg"):
+            continue
+        try:
+            response = _hx.get(candidate["url"], timeout=_hx.Timeout(20.0, connect=10.0),
+                               follow_redirects=True,
+                               headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"})
+            if response.status_code >= 400:
+                continue
+            variant = "site_icon" if candidate.get("kind") == "site-icon" else "site_logo"
+            _save_image(response.content, origin=candidate["url"], variant=variant,
+                        confidence=min(1.0, candidate["score"] / 100.0),
+                        evidence=candidate.get("reasons") or [])
         except Exception:
             continue
-    if first_url:
-        return first_url
-    # FALLBACK (site JS / logo SVG): Playwright fotografa a logo em 2 VERSÕES — transparente (primária)
-    # e no fundo do site — e cadastra as duas como variantes (o Estúdio escolhe a que encaixa na arte).
-    try:
-        _r2 = _render_site(base)
-        subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
-        os.makedirs(subdir, exist_ok=True)
-        first_url = None
-        for _png, _tag in ((_r2.get("logo_png_alpha"), "playwright_alpha"),
-                           (_r2.get("logo_png"), "playwright_render")):
-            if not _png:
-                continue
-            try:
-                im = _Img.open(_io.BytesIO(_png))
-                if im.width < 64 and im.height < 64:
+
+    # A rendered-on-site version is useful for white marks. Unlike the old fallback, it is
+    # attempted even after a raster was found; captures already saved are not repeated.
+    wanted_captures = ["playwright_render"]
+    if not existing and not saved_urls:
+        wanted_captures.insert(0, "playwright_alpha")
+    if any(tag not in existing_capture for tag in wanted_captures):
+        try:
+            rendered = _render_site(base)
+            capture_map = {
+                "playwright_alpha": rendered.get("logo_png_alpha"),
+                "playwright_render": rendered.get("logo_png"),
+            }
+            for tag in wanted_captures:
+                raw = capture_map.get(tag)
+                if not raw or tag in existing_capture:
                     continue
-                if _tag == "playwright_alpha":                # captura transparente VAZIA (logo era CSS-bg) → pula
-                    _a = im.convert("RGBA").getchannel("A")
-                    if (sum(1 for px in _a.getdata() if px > 16) / float(im.width * im.height)) < 0.01:
-                        continue
-                fn = f"{_uuid.uuid4().hex}.png"
-                im.convert("RGBA").save(os.path.join(subdir, fn), "PNG")
-                url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{fn}"
-                asset_create(company_id, {"kind": "IMAGE", "source": "WEB", "url": url,
-                                          "meta": {"role": "logo", "is_primary": first_url is None, "from": _tag,
-                                                   "identity_scope": "company", "confidence": 0.7}})
-                if first_url is None:
-                    first_url = url
-                    brand_kit_upsert(company_id, {"logo_url": url})
-            except Exception:
-                continue
-        if first_url:
-            return first_url
-    except Exception:
-        pass
-    return None
+                _save_image(raw, origin=tag, variant=("transparent" if tag.endswith("alpha") else "site_render"),
+                            confidence=0.72, evidence=["rendered-header"])
+        except Exception:
+            pass
+
+    return ((brand_kit_get(company_id) or {}).get("logo_url")
+            or (saved_urls[0] if saved_urls else None))
 
 
 
@@ -771,7 +1171,7 @@ def _ig_import(company_id: str, handle: str, kind: str = "reference", count: int
     import uuid as _uuid
     import httpx as _hx
     from PIL import Image as _Img
-    handle = (handle or "").strip().rstrip("/").split("/")[-1].lstrip("@")
+    handle = _instagram_handle(handle)
     if not handle:
         return {"error": "informe o @ do perfil"}
     H, has_sess = _ig_headers()
@@ -803,18 +1203,21 @@ def _ig_import(company_id: str, handle: str, kind: str = "reference", count: int
             url2 = f"{UPLOAD_URL_PREFIX}/{company_id}/{sub}/{fn}"
             saved_meta = dict(meta, role=role)
             if role == "logo":
-                saved_meta.update({"identity_scope": "company", "confidence": 0.95})
-            asset_create(company_id, {"kind": "IMAGE", "source": "INSTAGRAM", "url": url2, "meta": saved_meta})
+                saved_meta.update({"identity_scope": "company", "confidence": 0.95, "is_primary": False})
+            asset = asset_create(company_id, {"kind": "IMAGE", "source": "INSTAGRAM", "url": url2, "meta": saved_meta})
             if role == "logo":
-                brand_kit_upsert(company_id, {"logo_url": url2})
+                asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
             return url2
         except Exception:
             return None
 
     out = {"logo": 0, "refs": 0, "handle": handle}
-    if kind == "own" and not (asset_list_logos(company_id) or []):
+    profile_origin = f"instagram:@{handle}"
+    has_profile_logo = any((logo.get("meta") or {}).get("from") == profile_origin
+                           for logo in (asset_list_logos(company_id) or []))
+    if kind == "own" and not has_profile_logo:
         pic = u.get("profile_pic_url_hd") or u.get("profile_pic_url")
-        if pic and _save_img(pic, "logo", "logo", {"is_primary": True, "from": f"instagram:@{handle}"}):
+        if pic and _save_img(pic, "logo", "logo", {"from": profile_origin}):
             out["logo"] = 1
     edges = ((u.get("edge_owner_to_timeline_media") or {}).get("edges")) or []
     for e in edges[:max(1, min(8, int(count or 4)))]:
@@ -847,81 +1250,251 @@ async def import_instagram(company_id: str, request: Request):
     return res
 
 
+def _run_company_enrichment(
+    company_id: str, overrides: Optional[Dict[str, Any]] = None, *, run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Single, observable enrichment service used by create, update and manual refresh."""
+    overrides = dict(overrides or {})
+    company = company_get(company_id)
+    if not company:
+        raise ValueError("Empresa não encontrada")
+
+    website = (overrides.get("website") or company.get("website") or "").strip()
+    socials = dict(company.get("socials") or {})
+    instagram = (overrides.get("instagram") or socials.get("instagram") or "").strip()
+    facebook = (overrides.get("facebook") or socials.get("facebook") or "").strip()
+    if not website and not instagram and not facebook:
+        raise ValueError("Cadastre o site, Instagram ou Facebook primeiro.")
+
+    started_at = _now()
+    warnings: List[str] = []
+    _store_enrichment_status(
+        company_id, run_id=run_id, state="running", stage="profile", started_at=started_at,
+        message="Lendo site e posicionamento da empresa…", error="", warnings=[],
+    )
+
+    data: Dict[str, Any] = {}
+    try:
+        from ..services.ai import enrich_company_from_web
+        data = enrich_company_from_web(
+            company.get("name") or "", website, instagram, company.get("segment") or "", facebook,
+        )
+    except Exception as exc:
+        warnings.append("Perfil verbal: " + str(exc)[:220])
+
+    socials.update({"instagram": instagram, "facebook": facebook})
+    update: Dict[str, Any] = {"website": website, "socials": {k: v for k, v in socials.items() if v}}
+    if data.get("segment"):
+        update["segment"] = data["segment"]
+    if data.get("description") and not (company.get("notes") or "").strip():
+        update["notes"] = data["description"]
+    company_update(company_id, update)
+
+    _store_enrichment_status(
+        company_id, run_id=run_id, state="running", stage="logos",
+        message="Localizando logos e variantes institucionais…", warnings=warnings,
+    )
+    before_logos = {logo.get("id") for logo in (asset_list_logos(company_id) or [])}
+    try:
+        _remove_misclassified_web_logos(company_id, company.get("name") or "")
+    except Exception as exc:
+        warnings.append("Limpeza de logos antigas: " + str(exc)[:180])
+    if website:
+        try:
+            # Always rediscover. The importer is idempotent and keeps a manually selected primary.
+            _auto_fetch_logo(company_id, website)
+        except Exception as exc:
+            warnings.append("Site/logos: " + str(exc)[:180])
+
+    instagram_stats = {"logo": 0, "refs": 0}
+    if instagram:
+        try:
+            instagram_stats = _ig_import(company_id, instagram, "own", 4)
+            instagram_error = instagram_stats.pop("error", "")
+            if instagram_error:
+                instagram_stats = _ig_fetch_brand(company_id, instagram)
+            if not instagram_stats.get("logo") and not instagram_stats.get("refs"):
+                detail = (": " + instagram_error[:140]) if instagram_error else ""
+                warnings.append("Instagram não liberou imagens deste perfil" + detail)
+        except Exception as exc:
+            warnings.append("Instagram: " + str(exc)[:180])
+    facebook_logo = 0
+    if facebook:
+        try:
+            facebook_logo = _facebook_fetch_logo(company_id, facebook)
+            if not facebook_logo:
+                warnings.append("Facebook não liberou a foto pública desta página.")
+        except Exception as exc:
+            warnings.append("Facebook: " + str(exc)[:180])
+
+    after_logos = list(asset_list_logos(company_id) or [])
+    logo_ids = {logo.get("id") for logo in after_logos}
+    logos_added = len(logo_ids - before_logos)
+    if website and not after_logos:
+        warnings.append("Nenhuma logo institucional foi encontrada no site.")
+
+    _store_enrichment_status(
+        company_id, run_id=run_id, state="running", stage="products",
+        message="Importando produtos e serviços sem duplicar cadastros…",
+        logos_added=logos_added, logos_total=len(after_logos), warnings=warnings,
+    )
+    products_added = 0
+    if website:
+        try:
+            products_added = _auto_extract_products(company_id, website)
+        except Exception as exc:
+            warnings.append("Produtos e serviços: " + str(exc)[:180])
+
+    _store_enrichment_status(
+        company_id, run_id=run_id, state="running", stage="palette",
+        message="Extraindo e agrupando as cores principais…", warnings=warnings,
+    )
+    detected_colors = _company_logo_colors(company_id, 8) or dict(data.get("colors") or {})
+    current_kit = brand_kit_get(company_id) or {}
+    extras = dict(current_kit.get("extras") or {})
+    current_colors = dict(current_kit.get("colors") or {})
+    palette_source = extras.get("palette_source")
+    legacy_three_keys = set(current_colors).issubset({"primary", "secondary", "accent"})
+    legacy_has_duplicate = any(
+        _brand_colors_similar(first, second)
+        for index, first in enumerate(current_colors.values())
+        for second in list(current_colors.values())[index + 1:]
+    )
+    # Older automatic palettes were incorrectly stored as MANUAL. The Rio Cable signature is the
+    # old fixed three slots with a duplicated color family; repair that automatically, but preserve
+    # every unmarked legacy palette that may have been curated by a person.
+    legacy_auto_palette = bool(current_colors and legacy_three_keys and legacy_has_duplicate)
+    palette_is_manual = palette_source in ("manual", "legacy_preserved") or (
+        bool(current_colors) and not palette_source and not legacy_auto_palette
+    )
+    replace_manual = bool(overrides.get("replace_manual_palette"))
+    extra_patch: Dict[str, Any] = {
+        "detected_colors": detected_colors,
+        "palette_detected_at": _now(),
+    }
+
+    kit_update: Dict[str, Any] = {}
+    manual_fields = set(extras.get("manual_fields") or [])
+    replace_curated = bool(overrides.get("replace_curated_fields"))
+    for key in ("voice", "persona", "visual_prompt_base", "audience"):
+        if data.get(key) and (replace_curated or (not current_kit.get(key) and key not in manual_fields)):
+            kit_update[key] = data[key]
+    if detected_colors and (not palette_is_manual or replace_manual):
+        kit_update["colors"] = detected_colors
+    elif current_colors and not palette_source:
+        extra_patch["palette_source"] = "legacy_preserved"
+    brand_kit_apply_auto(
+        company_id, kit_update,
+        replace_manual_palette=replace_manual,
+        replace_curated_fields=replace_curated,
+    )
+    brand_kit_extras_patch(company_id, extra_patch)
+
+    final_colors = (brand_kit_get(company_id) or {}).get("colors") or {}
+    final_status = _store_enrichment_status(
+        company_id, run_id=run_id,
+        state="done",
+        stage="done",
+        message="Identidade pronta para revisão.",
+        finished_at=_now(),
+        logos_added=logos_added,
+        logos_total=len(after_logos),
+        colors_found=len(final_colors),
+        products_added=products_added,
+        palette_preserved=bool(palette_is_manual and not replace_manual),
+        warnings=warnings,
+        error="",
+    )
+    return {
+        "company": company_get(company_id), "extracted": data,
+        "products_added": products_added, "instagram": instagram_stats,
+        "facebook_logo": facebook_logo, "logos_added": logos_added,
+        "logos_total": len(after_logos), "colors": final_colors,
+        "warnings": warnings, "enrichment": final_status,
+    }
+
+
 @router.post("/{company_id}/enrich")
 async def enrich_company(company_id: str, request: Request):
-    """Read the company's site + Instagram and fill Dados Gerais + Voz e Persona
-    (tom de voz, persona, público/modelo, base visual) + colors from the logo. No prices."""
+    """Backward-compatible synchronous enrichment; the OS uses the observable background endpoint."""
     err = _api_key_required(request)
     if err:
         return err
-    co = company_get(company_id)
-    if not co:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    with _ENRICHMENT_GUARD:
+        already_running = company_id in _ENRICHMENT_RUNNING
+        if not already_running:
+            _ENRICHMENT_RUNNING.add(company_id)
+    if already_running:
+        return JSONResponse(
+            {"detail": "A importação desta empresa já está em andamento.",
+             "enrichment": _enrichment_status(company_id)},
+            status_code=409,
+        )
+    run_id = uuid.uuid4().hex
+    try:
+        import asyncio
+        _store_enrichment_status(
+            company_id, run_id=run_id, replace=True, state="queued", stage="queued",
+            message="Preparando a importação da identidade…", queued_at=_now(), warnings=[], error="",
+        )
+        return await asyncio.to_thread(_run_company_enrichment, company_id, body, run_id=run_id)
+    except ValueError as exc:
+        _store_enrichment_status(
+            company_id, run_id=run_id, state="failed", stage="failed",
+            message="Não foi possível concluir a importação.", error=str(exc)[:300], finished_at=_now(),
+        )
+        status = 404 if "não encontrada" in str(exc) else 422
+        return JSONResponse({"detail": str(exc)}, status_code=status)
+    except Exception as exc:
+        _store_enrichment_status(
+            company_id, run_id=run_id, state="failed", stage="failed",
+            message="Não foi possível concluir a importação.", error=str(exc)[:300], finished_at=_now(),
+        )
+        return JSONResponse({"detail": "Falha ao importar a identidade: " + str(exc)[:260]}, status_code=500)
+    finally:
+        with _ENRICHMENT_GUARD:
+            _ENRICHMENT_RUNNING.discard(company_id)
+
+
+@router.post("/{company_id}/enrich/start")
+async def start_company_enrichment(company_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    company = company_get(company_id)
+    if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     try:
         body = await request.json()
     except Exception:
         body = {}
-    website = (body.get("website") or co.get("website") or "").strip()
-    instagram = (body.get("instagram") or (co.get("socials") or {}).get("instagram") or "").strip()
-    facebook = (body.get("facebook") or (co.get("socials") or {}).get("facebook") or "").strip()
-    if not website and not instagram and not facebook:
-        return JSONResponse({"detail": "Cadastre o site e/ou o Instagram em Dados Gerais primeiro."}, status_code=422)
-    data: Dict[str, Any] = {}
-    ai_warning = ""
-    try:
-        import asyncio
-        from ..services.ai import enrich_company_from_web
-        # to_thread: a montagem do perfil (site+Instagram+IA) leva 30-120s — rodar síncrono aqui TRAVAVA o
-        # event loop inteiro e derrubava a plataforma toda com 502 enquanto durava.
-        data = await asyncio.to_thread(
-            enrich_company_from_web, co.get("name") or "", website, instagram, co.get("segment") or "", facebook,
-        )
-    except Exception as exc:
-        # Logo/cores/fontes oficiais are deterministic and must still be imported when the
-        # language-model profile is temporarily unavailable or not configured.
-        ai_warning = str(exc)[:300]
-    # Dados Gerais
-    cup: Dict[str, Any] = {"website": website, "socials": {**(co.get("socials") or {}), "instagram": instagram}}
-    if data.get("segment"):
-        cup["segment"] = data["segment"]
-    if data.get("description") and not (co.get("notes") or "").strip():
-        cup["notes"] = data["description"]
-    company_update(company_id, cup)
-    # LOGO automático do site (se a empresa ainda não tem) → alimenta as cores abaixo e o motor de arte.
-    ig_stats = {"logo": 0, "refs": 0}
-    facebook_logo = 0
-    prods_added = 0
-    try:
-        import asyncio as _aio
-        _remove_misclassified_web_logos(company_id, co.get("name") or "")
-        if not (asset_list_logos(company_id) or []):
-            await _aio.to_thread(_auto_fetch_logo, company_id, website)
-        # INSTAGRAM → logo (perfil) + artes de referência (posts) — identidade visual real do cliente
-        if instagram:
-            ig_stats = await _aio.to_thread(_ig_fetch_brand, company_id, instagram)
-        if facebook:
-            facebook_logo = await _aio.to_thread(_facebook_fetch_logo, company_id, facebook)
-        # SITE → catálogo de ofertas (planos/serviços/produtos) cadastrado automaticamente
-        prods_added = await _aio.to_thread(_auto_extract_products, company_id, website)
-    except Exception:
-        pass
-    # Cores: a LOGO é a verdade da marca (mais confiável que texto do site ou palpite da IA).
-    colors = dict(data.get("colors") or {})
-    logo_cols = _company_logo_colors(company_id)
-    if logo_cols:
-        colors.update(logo_cols)                    # sobrescreve o palpite da IA com a cor real da logo
-    # Voz e Persona (brand kit)
-    bk: Dict[str, Any] = {}
-    for k in ("voice", "persona", "visual_prompt_base", "audience"):
-        if data.get(k):
-            bk[k] = data[k]
-    if colors:
-        bk["colors"] = colors
-    if bk:
-        brand_kit_upsert(company_id, bk)
-    return {"company": company_get(company_id), "extracted": data,
-            "products_added": prods_added, "instagram": ig_stats, "facebook_logo": facebook_logo,
-            "warning": ai_warning or None}
+    sources = [
+        (body.get("website") or company.get("website") or "").strip(),
+        (body.get("instagram") or (company.get("socials") or {}).get("instagram") or "").strip(),
+        (body.get("facebook") or (company.get("socials") or {}).get("facebook") or "").strip(),
+    ]
+    if not any(sources):
+        return JSONResponse({"detail": "Cadastre o site, Instagram ou Facebook primeiro."}, status_code=422)
+    enrichment = _spawn_bg_enrich(company_id, body)
+    return JSONResponse(
+        {"enrichment": enrichment}, status_code=500 if enrichment.get("state") == "failed" else 202,
+    )
+
+
+@router.get("/{company_id}/enrich/status")
+def get_company_enrichment_status(company_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    return {"enrichment": _enrichment_status(company_id)}
 
 
 @router.post("/{company_id}/logo")
@@ -933,20 +1506,21 @@ async def upload_logo(company_id: str, request: Request, file: UploadFile = File
     if not existing:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     import uuid as _uuid
-    ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
     os.makedirs(subdir, exist_ok=True)
-    filename = f"{_uuid.uuid4().hex}{ext}"
+    filename = f"{_uuid.uuid4().hex}.png"
     filepath = os.path.join(subdir, filename)
-    content = await file.read()
+    try:
+        content = _normalize_logo_upload(await file.read(_MAX_LOGO_UPLOAD_BYTES + 1))
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
     with open(filepath, "wb") as f:
         f.write(content)
     url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
-    # update brand kit
-    brand_kit_upsert(company_id, {"logo_url": url})
-    # create asset
-    asset_create(company_id, {"kind": "IMAGE", "source": "UPLOADED", "url": url,
-                              "meta": {"role": "logo", "identity_scope": "company", "confidence": 1.0}})
+    asset = asset_create(company_id, {"kind": "IMAGE", "source": "UPLOADED", "url": url,
+                                        "meta": {"role": "logo", "is_primary": False,
+                                                 "identity_scope": "company", "confidence": 1.0}})
+    asset_set_primary_logo(company_id, asset["id"], "MANUAL")
     return {"url": url}
 
 
@@ -1354,20 +1928,19 @@ def _refresh_reference_profile(company_id: str) -> None:
                 profile["confidence"] = parsed_confidence if parsed else 0.0
         except Exception as exc:
             profile["analysis_note"] = ("análise visual indisponível: " + str(exc))[:300]
-    extras["reference_profile"] = profile
-    brand_kit_upsert(company_id, {"extras": extras})
+    brand_kit_extras_patch(company_id, {"reference_profile": profile})
 
 
 def _spawn_reference_analysis(company_id: str) -> None:
     import threading
     current = brand_kit_get(company_id) or {}
     extras = dict(current.get("extras") or {})
-    extras["reference_profile"] = {
+    reference_profile = {
         **(extras.get("reference_profile") or {}),
         "status": "analyzing",
         "reference_count": len(asset_list(company_id, role="brand_reference")),
     }
-    brand_kit_upsert(company_id, {"extras": extras})
+    brand_kit_extras_patch(company_id, {"reference_profile": reference_profile})
     threading.Thread(target=_refresh_reference_profile, args=(company_id,), daemon=True).start()
 
 
@@ -1760,76 +2333,186 @@ def clear_product_kb(company_id: str, product_id: str, request: Request):
     return {"ok": True}
 
 
-def _dominant_colors(path: str, n: int = 3) -> List[str]:
-    """Cores REAIS da marca a partir da logo, como #RRGGBB. Ranqueia por SATURAÇÃO×presença (a cor viva
-    da marca ganha do anti-aliasing lavado — o bug antigo era ordenar só por contagem de pixel, então
-    cinzas de borda venciam o azul/verde da marca). Fallback p/ logo monocromática (preto/cinza)."""
+def _hex_hsv(value: str):
+    import colorsys
+    value = (value or "").lstrip("#")
+    r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    return colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+
+
+def _brand_colors_similar(first: str, second: str) -> bool:
+    """Group perceptually equivalent shades, including the lime pair seen on Rio Cable."""
     try:
+        a = tuple(int(first.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        b = tuple(int(second.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        if sum((a[i] - b[i]) ** 2 for i in range(3)) ** 0.5 < 46:
+            return True
+        ah, ass, av = _hex_hsv(first)
+        bh, bss, bv = _hex_hsv(second)
+        if ass < 0.16 and bss < 0.16:
+            return abs(av - bv) < 0.18
+        hue_distance = min(abs(ah - bh), 1.0 - abs(ah - bh))
+        return ass >= 0.16 and bss >= 0.16 and hue_distance < 0.045 and abs(av - bv) < 0.28
+    except Exception:
+        return first.upper() == second.upper()
+
+
+def _dominant_colors(path: str, n: int = 8, *, remove_background: bool = False) -> List[str]:
+    """Extract up to ``n`` distinct brand colors while preserving white/black foreground marks.
+
+    Transparent pixels are ignored instead of being composited over white. On opaque images only a
+    dominant border color is treated as page background. Chromatic families are ranked by presence,
+    then useful neutral colors are appended.
+    """
+    try:
+        import colorsys
+        from collections import Counter
         from PIL import Image
+
         img = Image.open(path).convert("RGBA")
-        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        img = Image.alpha_composite(bg, img).convert("RGB").resize((128, 128))
-        q = img.quantize(colors=32)
-        pal = q.getpalette() or []
-        cols = []                                   # (count, sat, r, g, b) — sem near-white/near-black
-        for cnt, idx in (q.getcolors() or []):
-            r, g, b = pal[idx * 3], pal[idx * 3 + 1], pal[idx * 3 + 2]
-            mx, mn = max(r, g, b), min(r, g, b)
-            if mx > 238 and mn > 238:               # near-white (fundo)
-                continue
-            if mx < 26:                              # near-black
-                continue
-            cols.append((cnt, mx - mn, r, g, b))
+        img.thumbnail((192, 192), Image.Resampling.LANCZOS)
+        pixels = list(img.getdata())
+        visible_pixels = [(r, g, b, a) for r, g, b, a in pixels if a >= 64]
+        if not visible_pixels:
+            return []
+        visible = [(r, g, b) for r, g, b, _a in visible_pixels]
+        total_visible_weight = sum(a / 255.0 for _r, _g, _b, a in visible_pixels)
 
-        def _pick(min_sat: int, weight: float) -> List[str]:
-            scored = [(cnt * ((sat / 255.0) ** weight if weight else 1.0), r, g, b)
-                      for (cnt, sat, r, g, b) in cols if sat >= min_sat]
-            scored.sort(reverse=True)
-            picked: List[str] = []
-            for _s, r, g, b in scored:
-                hexv = "#%02X%02X%02X" % (r, g, b)
-                # dedup por proximidade (evita dois tons quase iguais ocupando 2 das 3 vagas)
-                if any(abs(int(h[1:3], 16) - r) + abs(int(h[3:5], 16) - g) + abs(int(h[5:7], 16) - b) < 60
-                       for h in picked):
-                    continue
-                picked.append(hexv)
-                if len(picked) >= n:
-                    break
-            return picked
+        transparent_ratio = sum(1 for _r, _g, _b, a in pixels if a < 240) / float(len(pixels))
+        background = None
+        if remove_background and transparent_ratio < 0.02 and img.width > 2 and img.height > 2:
+            border = []
+            for x in range(img.width):
+                border.extend((img.getpixel((x, 0))[:3], img.getpixel((x, img.height - 1))[:3]))
+            for y in range(1, img.height - 1):
+                border.extend((img.getpixel((0, y))[:3], img.getpixel((img.width - 1, y))[:3]))
+            buckets = Counter(tuple(min(255, int(round(channel / 16.0) * 16)) for channel in rgb)
+                              for rgb in border)
+            if buckets:
+                candidate, count = buckets.most_common(1)[0]
+                if count / float(len(border)) >= 0.48:
+                    share = sum(1 for rgb in visible
+                                if sum((rgb[i] - candidate[i]) ** 2 for i in range(3)) ** 0.5 < 34) / float(len(visible))
+                    if share >= 0.22:
+                        background = candidate
 
-        out = _pick(45, 1.5)                         # cores VIVAS da marca (peso na saturação)
-        if len(out) < n:                             # logo monocromática → completa com o que houver
-            for h in _pick(0, 0.0):
-                if h not in out:
-                    out.append(h)
-                if len(out) >= n:
-                    break
-        return out
+        strip = Image.new("RGB", (len(visible), 1))
+        strip.putdata(visible)
+        quantized = strip.quantize(colors=48)
+        palette = quantized.getpalette() or []
+        weighted_counts: Counter = Counter()
+        for index, (_r, _g, _b, alpha) in zip(quantized.getdata(), visible_pixels):
+            weighted_counts[index] += alpha / 255.0
+        candidates = []
+        for index, count in weighted_counts.items():
+            r, g, b = palette[index * 3:index * 3 + 3]
+            if background and sum(((r, g, b)[i] - background[i]) ** 2 for i in range(3)) ** 0.5 < 38:
+                continue
+            h, saturation, value = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            if count / total_visible_weight < 0.0015:
+                continue
+            score = count * (0.78 + 0.22 * saturation)
+            candidates.append((score, count, saturation, value, r, g, b))
+
+        # Merge a color family before ranking it. Merely dropping the second lime shade made a
+        # small orange detail outrank Rio Cable's structural green instead of adding both lime shares.
+        families: List[Dict[str, Any]] = []
+        for item in sorted(candidates, key=lambda candidate: candidate[1], reverse=True):
+            score, count, saturation, value, r, g, b = item
+            color = f"#{r:02X}{g:02X}{b:02X}"
+            family = next((entry for entry in families
+                           if _brand_colors_similar(color, entry["color"])), None)
+            if family:
+                family["score"] += score
+                family["count"] += count
+                if count > family["representative_count"]:
+                    family.update({"color": color, "saturation": saturation, "value": value,
+                                   "rgb": (r, g, b), "representative_count": count})
+            else:
+                families.append({
+                    "color": color, "score": score, "count": count, "saturation": saturation,
+                    "value": value, "rgb": (r, g, b), "representative_count": count,
+                })
+
+        grouped = [(entry["score"], entry["count"], entry["saturation"], entry["value"], *entry["rgb"])
+                   for entry in families]
+        chromatic = sorted((item for item in grouped if item[2] >= 0.16), reverse=True)
+        neutral = sorted((item for item in grouped if item[2] < 0.16), key=lambda item: item[1], reverse=True)
+        picked: List[str] = []
+        for item in chromatic + neutral:
+            _score, _count, _sat, _value, r, g, b = item
+            value = f"#{r:02X}{g:02X}{b:02X}"
+            if any(_brand_colors_similar(value, old) for old in picked):
+                continue
+            picked.append(value)
+            if len(picked) >= max(1, n):
+                break
+        return picked
     except Exception:
         return []
 
 
-def _company_logo_colors(company_id: str) -> Dict[str, str]:
-    """{primary, secondary, accent} extraídos da PRIMEIRA logo (não-SVG) da empresa — FONTE ÚNICA de cor
-    (logo = verdade da marca). Vazio se não houver logo utilizável. Usado pelo enrich e pelo social analyze
-    (assim o palpite da IA nunca sobrescreve a cor real da logo)."""
+def _company_logo_colors(company_id: str, max_colors: int = 8) -> Dict[str, str]:
+    """Build one free-size palette from every trusted logo, with semantic neutral names."""
     try:
         company_name = (company_get(company_id) or {}).get("name") or ""
         logos = list(asset_list_logos(company_id) or [])
-        logos.sort(key=lambda lg: 0 if (lg.get("meta") or {}).get("is_primary") else 1)
-        for lg in logos:
-            if not _trusted_company_logo(lg, company_name):
+        logos.sort(key=lambda logo: (
+            0 if (logo.get("meta") or {}).get("is_primary") else 1,
+            1 if (logo.get("meta") or {}).get("variant") == "site_render" else 0,
+        ))
+        palette: List[str] = []
+        for logo in logos:
+            if not _trusted_company_logo(logo, company_name):
                 continue
-            u = lg.get("url") or ""
-            if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
+            meta = logo.get("meta") or {}
+            # A screenshot with the site's background is a useful logo variant, but its background
+            # must not contaminate the official palette when transparent assets are available.
+            has_chromatic = any(_hex_hsv(color)[1] >= 0.16 for color in palette)
+            if meta.get("variant") == "site_render" and has_chromatic:
                 continue
-            cols = _dominant_colors(os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/")))
-            if cols:
-                keys = ["primary", "secondary", "accent"]
-                return {keys[i]: c for i, c in enumerate(cols)}
+            url = logo.get("url") or ""
+            if url.lower().endswith(".svg") or not url.startswith(UPLOAD_URL_PREFIX):
+                continue
+            path = os.path.join(UPLOAD_DIR, url[len(UPLOAD_URL_PREFIX):].lstrip("/"))
+            for color in _dominant_colors(path, max_colors):
+                if any(_brand_colors_similar(color, old) for old in palette):
+                    continue
+                palette.append(color)
+                if len(palette) >= max_colors:
+                    break
+            if len(palette) >= max_colors:
+                break
+
+        if not palette:
+            return {}
+        chromatic, neutrals = [], []
+        for color in palette:
+            (_h, saturation, value) = _hex_hsv(color)
+            (chromatic if saturation >= 0.16 else neutrals).append((color, value))
+
+        named: Dict[str, str] = {}
+        if chromatic:
+            named["primary"] = chromatic[0][0]
+            if len(chromatic) == 2:
+                named["accent"] = chromatic[1][0]
+            elif len(chromatic) >= 3:
+                named["secondary"] = chromatic[1][0]
+                named["accent"] = chromatic[2][0]
+                for index, (color, _value) in enumerate(chromatic[3:], start=4):
+                    named[f"color{index}"] = color
+        else:
+            named["primary"] = neutrals.pop(0)[0]
+
+        neutral_names = {"light": 0, "mid": 0, "dark": 0}
+        for color, value in neutrals:
+            tone = "light" if value >= 0.78 else ("dark" if value <= 0.30 else "mid")
+            neutral_names[tone] += 1
+            suffix = "" if neutral_names[tone] == 1 else str(neutral_names[tone])
+            named[f"neutral_{tone}{suffix}"] = color
+        return named
     except Exception:
-        pass
-    return {}
+        return {}
 
 
 @router.post("/{company_id}/products/{product_id}/enrich")
@@ -1863,7 +2546,10 @@ async def enrich_product(company_id: str, product_id: str, request: Request):
             u = lg.get("url") or ""
             if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
                 continue
-            cols = _dominant_colors(os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/")))
+            # Product colors are still stored in the legacy three semantic slots.
+            cols = _dominant_colors(
+                os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/")), 3,
+            )
             if cols:
                 keys = ["primary", "secondary", "accent"]
                 data["colors"] = {**(data.get("colors") or {}), **{keys[i]: c for i, c in enumerate(cols)}}
@@ -2014,12 +2700,40 @@ def delete_solution(company_id: str, solution_id: str, request: Request):
 # Multi-logo (company): principal + variations (light/dark/format)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _logo_promotion_rank(logo: Dict[str, Any]):
+    meta = logo.get("meta") or {}
+    source = logo.get("source") or ""
+    variant = meta.get("variant") or ""
+    source_rank = 0 if source == "UPLOADED" else (1 if source in ("INSTAGRAM", "FACEBOOK") else 2)
+    variant_rank = {
+        "transparent": 0, "site_logo": 1, "logo": 1, "light": 1,
+        "dark": 1, "site_icon": 3, "site_render": 5,
+    }.get(variant, 2)
+    return source_rank, variant_rank, logo.get("created_at") or "", logo.get("id") or ""
+
+
+def _ensure_logo_primary_consistency(
+    company_id: str, logos: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    logos = list(logos if logos is not None else (asset_list_logos(company_id) or []))
+    if not logos:
+        return logos
+    primary = [logo for logo in logos if (logo.get("meta") or {}).get("is_primary")]
+    kit_url = (brand_kit_get(company_id) or {}).get("logo_url") or ""
+    matching = next((logo for logo in logos if logo.get("url") == kit_url), None)
+    if len(primary) == 1 and (not matching or primary[0].get("id") == matching.get("id")):
+        return logos
+    chosen = matching or min(logos, key=_logo_promotion_rank)
+    source = None if matching else ("MANUAL" if chosen.get("source") == "UPLOADED" else "AUTO")
+    asset_set_primary_logo(company_id, chosen["id"], source)
+    return list(asset_list_logos(company_id) or logos)
+
 @router.get("/{company_id}/logos")
 def list_logos(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
-    return {"logos": asset_list_logos(company_id)}
+    return {"logos": _ensure_logo_primary_consistency(company_id)}
 
 
 @router.post("/{company_id}/logos")
@@ -2036,23 +2750,41 @@ async def upload_logo_variant(
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     import uuid as _uuid
-    ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "logos")
     os.makedirs(subdir, exist_ok=True)
-    filename = f"{_uuid.uuid4().hex}{ext}"
+    filename = f"{_uuid.uuid4().hex}.png"
+    try:
+        content = _normalize_logo_upload(await file.read(_MAX_LOGO_UPLOAD_BYTES + 1))
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
     with open(os.path.join(subdir, filename), "wb") as f:
-        f.write(await file.read())
+        f.write(content)
     url = f"{UPLOAD_URL_PREFIX}/{company_id}/logos/{filename}"
-    is_primary = str(primary).lower() in ("1", "true", "yes")
-    if is_primary:
-        asset_clear_primary(company_id)
+    is_primary = str(primary).lower() in ("1", "true", "yes") or not bool(asset_list_logos(company_id))
     asset = asset_create(company_id, {
         "kind": "IMAGE", "source": "UPLOADED", "url": url,
-        "meta": {"role": "logo", "variant": variant or "light", "is_primary": is_primary},
+        "meta": {"role": "logo", "variant": variant or "logo", "is_primary": False,
+                 "identity_scope": "company", "confidence": 1.0},
     })
     # Keep brand kit's primary logo_url in sync when this is the primary logo.
     if is_primary:
-        brand_kit_upsert(company_id, {"logo_url": url})
+        asset = asset_set_primary_logo(company_id, asset["id"], "MANUAL") or asset
+    return {"logo": asset}
+
+
+@router.post("/{company_id}/logos/{asset_id}/primary")
+def set_primary_logo(company_id: str, asset_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    asset = asset_get(asset_id)
+    meta = (asset or {}).get("meta") or {}
+    if (not asset or asset.get("company_id") != company_id or asset.get("product_id") is not None
+            or meta.get("role") != "logo"):
+        return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
+    asset = asset_set_primary_logo(company_id, asset_id, "MANUAL")
+    if not asset:
+        return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     return {"logo": asset}
 
 
@@ -2062,6 +2794,10 @@ def delete_logo(company_id: str, asset_id: str, request: Request):
     if err:
         return err
     asset = asset_get(asset_id)
+    meta = (asset or {}).get("meta") or {}
+    if (not asset or asset.get("company_id") != company_id or asset.get("product_id") is not None
+            or meta.get("role") != "logo"):
+        return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     if asset and (asset.get("url") or "").startswith(UPLOAD_URL_PREFIX):
         rel_path = asset["url"][len(UPLOAD_URL_PREFIX):].lstrip("/")
         abs_path = os.path.join(UPLOAD_DIR, rel_path)
@@ -2069,4 +2805,12 @@ def delete_logo(company_id: str, asset_id: str, request: Request):
             os.remove(abs_path)
     if not asset_delete(asset_id):
         return JSONResponse({"detail": "Logo não encontrado"}, status_code=404)
-    return {"deleted": True}
+    kit = brand_kit_get(company_id) or {}
+    if meta.get("is_primary") or kit.get("logo_url") == asset.get("url"):
+        remaining = list(asset_list_logos(company_id) or [])
+        if remaining:
+            chosen = min(remaining, key=_logo_promotion_rank)
+            chosen = asset_set_primary_logo(company_id, chosen["id"], "MANUAL") or chosen
+        else:
+            brand_kit_upsert(company_id, {"logo_url": None})
+    return {"deleted": True, "logos": asset_list_logos(company_id)}

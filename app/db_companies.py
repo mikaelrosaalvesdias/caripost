@@ -492,40 +492,126 @@ def brand_kit_get(company_id: str) -> Optional[Dict[str, Any]]:
 
 @_sqlite_retry
 def brand_kit_upsert(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Atomically create or patch a brand kit, preserving every omitted field."""
     now = _now()
-    existing = brand_kit_get(company_id)
-    colors = json.dumps(data.get("colors") or (existing.get("colors") if existing else {}))
-    extras = json.dumps(data.get("extras") or (existing.get("extras") if existing else {}))
-    if existing:
-        fields = []
-        values: List[Any] = []
-        for key in ("logo_url", "voice", "persona", "visual_prompt_base", "audience", "client_rules", "assuntos"):
-            if key in data:
-                fields.append(f"{key} = ?")
-                values.append(data[key])
-        if "colors" in data:
-            fields.append("colors = ?")
-            values.append(colors)
-        if "extras" in data:
-            fields.append("extras = ?")
-            values.append(extras)
-        if "creative_config" in data:
-            fields.append("creative_config = ?")
-            values.append(json.dumps(data.get("creative_config") or {}))
-        if not fields:
-            return existing
-        fields.append("updated_at = ?")
-        values.append(now)
-        values.append(existing["id"])
-        with get_conn() as conn:
-            conn.execute(f"UPDATE brand_kits SET {', '.join(fields)} WHERE id = ?", values)
+    scalar_columns = (
+        "logo_url", "voice", "persona", "visual_prompt_base", "audience",
+        "client_rules", "assuntos", "source",
+    )
+    insert_values: Dict[str, Any] = {
+        "logo_url": data.get("logo_url"),
+        "colors": json.dumps(data.get("colors") or {}),
+        "voice": data.get("voice"),
+        "persona": data.get("persona"),
+        "visual_prompt_base": data.get("visual_prompt_base"),
+        "extras": json.dumps(data.get("extras") or {}),
+        "source": data.get("source") or "MANUAL",
+        "audience": data.get("audience"),
+        "client_rules": data.get("client_rules"),
+        "assuntos": data.get("assuntos"),
+        "creative_config": json.dumps(data.get("creative_config") or {}),
+    }
+    update_columns = [column for column in scalar_columns if column in data]
+    update_columns += [column for column in ("colors", "extras", "creative_config") if column in data]
+    assignments = [f"{column} = excluded.{column}" for column in update_columns]
+    if assignments:
+        assignments.append("updated_at = excluded.updated_at")
+        conflict_sql = "DO UPDATE SET " + ", ".join(assignments)
     else:
-        bk_id = _uuid()
-        with get_conn() as conn:
-            conn.execute("""
-                INSERT INTO brand_kits (id, company_id, logo_url, colors, voice, persona, visual_prompt_base, extras, source, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'MANUAL', ?, ?)
-            """, (bk_id, company_id, data.get("logo_url"), colors, data.get("voice"), data.get("persona"), data.get("visual_prompt_base"), extras, now, now))
+        conflict_sql = "DO NOTHING"
+    with get_conn() as conn:
+        conn.execute(f"""
+            INSERT INTO brand_kits (
+                id, company_id, logo_url, colors, voice, persona, visual_prompt_base,
+                extras, source, audience, client_rules, assuntos, creative_config,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(company_id) {conflict_sql}
+        """, (
+            _uuid(), company_id, insert_values["logo_url"], insert_values["colors"],
+            insert_values["voice"], insert_values["persona"], insert_values["visual_prompt_base"],
+            insert_values["extras"], insert_values["source"], insert_values["audience"],
+            insert_values["client_rules"], insert_values["assuntos"],
+            insert_values["creative_config"], now, now,
+        ))
+    return brand_kit_get(company_id)
+
+
+@_sqlite_retry
+def brand_kit_extras_patch(company_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Atomically replace named top-level extras namespaces without losing concurrent edits."""
+    clean = {str(key): value for key, value in (patch or {}).items() if str(key)}
+    if not clean:
+        return brand_kit_get(company_id) or brand_kit_upsert(company_id, {})
+    now = _now()
+    initial_extras = json.dumps(clean)
+    json_args: List[Any] = []
+    setters = []
+    for key, value in clean.items():
+        setters.extend([f"$.{key}", json.dumps(value)])
+    for index in range(0, len(setters), 2):
+        json_args.extend((setters[index], setters[index + 1]))
+    json_set_sql = ", ".join("?, json(?)" for _ in clean)
+    with get_conn() as conn:
+        conn.execute(f"""
+            INSERT INTO brand_kits (
+                id, company_id, colors, extras, source, creative_config, created_at, updated_at
+            ) VALUES (?, ?, '{{}}', ?, 'MANUAL', '{{}}', ?, ?)
+            ON CONFLICT(company_id) DO UPDATE SET
+                extras = json_set(
+                    CASE WHEN json_valid(brand_kits.extras) THEN brand_kits.extras ELSE '{{}}' END,
+                    {json_set_sql}
+                ),
+                updated_at = excluded.updated_at
+        """, (_uuid(), company_id, initial_extras, now, now, *json_args))
+    return brand_kit_get(company_id)
+
+
+@_sqlite_retry
+def brand_kit_apply_auto(
+    company_id: str,
+    data: Dict[str, Any],
+    *,
+    replace_manual_palette: bool = False,
+    replace_curated_fields: bool = False,
+) -> Dict[str, Any]:
+    """Apply detected fields without racing over edits marked as manual."""
+    brand_kit_upsert(company_id, {})
+    assignments: List[str] = []
+    values: List[Any] = []
+    extras_json = "CASE WHEN json_valid(extras) THEN extras ELSE '{}' END"
+    for field in ("voice", "persona", "visual_prompt_base", "audience"):
+        if field not in data:
+            continue
+        assignments.append(
+            f"{field} = CASE WHEN ? OR NOT EXISTS ("
+            f"SELECT 1 FROM json_each({extras_json}, '$.manual_fields') WHERE value = ?"
+            f") THEN ? ELSE {field} END"
+        )
+        values.extend((1 if replace_curated_fields else 0, field, data[field]))
+    if "colors" in data:
+        palette_condition = (
+            "? OR COALESCE(json_extract(" + extras_json
+            + ", '$.palette_source'), '') NOT IN ('manual', 'legacy_preserved')"
+        )
+        assignments.append(
+            "colors = CASE WHEN " + palette_condition + " THEN ? ELSE colors END"
+        )
+        values.extend((1 if replace_manual_palette else 0, json.dumps(data.get("colors") or {})))
+        assignments.append(
+            "extras = CASE WHEN " + palette_condition
+            + " THEN json_set(" + extras_json + ", '$.palette_source', 'automatic') ELSE extras END"
+        )
+        values.append(1 if replace_manual_palette else 0)
+    if not assignments:
+        return brand_kit_get(company_id)
+    assignments.append("updated_at = ?")
+    values.extend((_now(), company_id))
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE brand_kits SET {', '.join(assignments)} WHERE company_id = ?",
+            values,
+        )
     return brand_kit_get(company_id)
 
 
@@ -919,6 +1005,87 @@ def asset_clear_primary(company_id: str, product_id: Optional[str] = None) -> No
             if meta.get("is_primary"):
                 meta["is_primary"] = 0
                 conn.execute("UPDATE company_assets SET meta = ? WHERE id = ?", (json.dumps(meta), r["id"]))
+
+
+@_sqlite_retry
+def asset_set_primary_logo(
+    company_id: str, asset_id: str, brand_source: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Atomically select one primary company logo and optionally sync the brand kit URL."""
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        target = conn.execute(
+            """SELECT * FROM company_assets
+               WHERE id = ? AND company_id = ? AND product_id IS NULL
+                 AND json_extract(meta, '$.role') = 'logo'""",
+            (asset_id, company_id),
+        ).fetchone()
+        if not target:
+            return None
+        conn.execute(
+            """UPDATE company_assets
+               SET meta = json_set(
+                   CASE WHEN json_valid(meta) THEN meta ELSE '{}' END,
+                   '$.is_primary', CASE WHEN id = ? THEN 1 ELSE 0 END
+               )
+               WHERE company_id = ? AND product_id IS NULL
+                 AND json_extract(meta, '$.role') = 'logo'""",
+            (asset_id, company_id),
+        )
+        if brand_source:
+            now = _now()
+            conn.execute("""
+                INSERT INTO brand_kits (
+                    id, company_id, logo_url, colors, extras, source, created_at, updated_at
+                ) VALUES (?, ?, ?, '{}', '{}', ?, ?, ?)
+                ON CONFLICT(company_id) DO UPDATE SET
+                    logo_url = excluded.logo_url,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+            """, (_uuid(), company_id, target["url"], brand_source, now, now))
+    return asset_get(asset_id)
+
+
+@_sqlite_retry
+def asset_claim_primary_logo_if_empty(company_id: str, asset_id: str, brand_source: str = "AUTO") -> bool:
+    """Promote an imported logo only when no manual/concurrent primary already exists."""
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        target = conn.execute(
+            """SELECT url FROM company_assets
+               WHERE id = ? AND company_id = ? AND product_id IS NULL
+                 AND json_extract(meta, '$.role') = 'logo'""",
+            (asset_id, company_id),
+        ).fetchone()
+        if not target:
+            return False
+        primary = conn.execute(
+            """SELECT 1 FROM company_assets
+               WHERE company_id = ? AND product_id IS NULL
+                 AND json_extract(meta, '$.role') = 'logo'
+                 AND COALESCE(json_extract(meta, '$.is_primary'), 0) = 1 LIMIT 1""",
+            (company_id,),
+        ).fetchone()
+        kit = conn.execute("SELECT logo_url FROM brand_kits WHERE company_id = ?", (company_id,)).fetchone()
+        if primary or (kit and kit["logo_url"]):
+            return False
+        conn.execute(
+            """UPDATE company_assets
+               SET meta = json_set(CASE WHEN json_valid(meta) THEN meta ELSE '{}' END, '$.is_primary', 1)
+               WHERE id = ?""",
+            (asset_id,),
+        )
+        now = _now()
+        conn.execute("""
+            INSERT INTO brand_kits (
+                id, company_id, logo_url, colors, extras, source, created_at, updated_at
+            ) VALUES (?, ?, ?, '{}', '{}', ?, ?, ?)
+            ON CONFLICT(company_id) DO UPDATE SET
+                logo_url = excluded.logo_url,
+                source = excluded.source,
+                updated_at = excluded.updated_at
+        """, (_uuid(), company_id, target["url"], brand_source, now, now))
+        return True
 
 
 @_sqlite_retry

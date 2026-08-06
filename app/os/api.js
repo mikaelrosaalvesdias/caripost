@@ -69,12 +69,18 @@
     const res = await fetch(url, { ...opts, headers });
     const ct = res.headers.get('content-type') || '';
     if (ct.includes('application/json')) {
-      const data = await res.json();
+      const data = (await readJson(res)) || {};
       if (res.status === 401 || isAuthError(data)) {
         _isOpen = false;
         clearToken();
         showLogin();
         throw new Error(data.detail || data.error || 'unauthorized');
+      }
+      if (!res.ok) {
+        const error = new Error(data?.detail || data?.error || `Erro HTTP ${res.status}`);
+        error.status = res.status;
+        error.data = data;
+        throw error;
       }
       return data;
     }
@@ -84,7 +90,14 @@
       showLogin();
       throw new Error('unauthorized');
     }
-    return res.text();
+    const text = await res.text();
+    if (!res.ok) {
+      const safeText = ct.includes('text/html') ? '' : text.trim().slice(0, 300);
+      const error = new Error(safeText || `Erro HTTP ${res.status}`);
+      error.status = res.status;
+      throw error;
+    }
+    return text;
   }
 
   /* ── Login overlay ── */
@@ -1184,6 +1197,13 @@
     async enrichCompany(companyId, payload) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/enrich', { method: 'POST', body: JSON.stringify(payload || {}) });
     },
+    async startCompanyEnrichment(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/enrich/start', { method: 'POST', body: JSON.stringify(payload || {}) });
+    },
+    async companyEnrichmentStatus(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/enrich/status');
+      return r.enrichment || {};
+    },
     async uploadProductLogo(companyId, productId, file) {
       const fd = new FormData();
       fd.append('file', file);
@@ -1204,7 +1224,7 @@
     /* ════════ MULTI-LOGO (empresa) ════════ */
 
     async listLogos(companyId) {
-      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/logos').catch(() => ({ logos: [] }));
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/logos');
       return r.logos || [];
     },
     async uploadLogoVariant(companyId, file, variant, primary) {
@@ -1216,6 +1236,10 @@
     },
     async deleteLogo(companyId, assetId) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/logos/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async setPrimaryLogo(companyId, assetId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/logos/' + _enc(assetId) + '/primary', { method: 'POST' });
+      return r.logo;
     },
 
     /* ════════ NOTIFICAÇÕES (Evolution WhatsApp + SMTP) ════════ */

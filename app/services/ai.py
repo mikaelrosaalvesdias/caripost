@@ -4304,7 +4304,9 @@ def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", 
         '"voice":"tom de voz em poucas palavras (ex: próximo, confiante, sem jargão técnico)",'
         '"persona":"persona da marca: quem é, como fala, como se posiciona",'
         '"visual_prompt_base":"base visual para as imagens dos posts: estilo, paleta, elementos, clima",'
-        '"colors":{"primary":"#RRGGBB","secondary":"#RRGGBB","accent":"#RRGGBB"}}\n'
+        '"colors":{"nome_da_cor":"#RRGGBB"}}\n'
+        "Em colors, retorne apenas cores sustentadas pelo site, com nomes curtos e até 8 tons realmente distintos; "
+        "não invente variações quase iguais para completar quantidade. "
         "Sem preços. Responda só o JSON."
     )
     raw = _call_openai_compat(config["provider"], config["apiKey"], config["model"], system, user, 1600)

@@ -2,6 +2,17 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.113 - 2026-08-06
+
+- **fix(clientes): cadastro e importacao em um unico fluxo observavel.** Nome, site e redes oficiais entram no mesmo formulario; a identidade e puxada em background com etapas, contagens, avisos, falha real e retry, sem botoes concorrentes espalhados pelas abas.
+- **fix(clientes): multiplas logos institucionais de verdade.** O parser aceita `srcset` Wix com virgulas, favicon/apple-touch-icon e variantes renderizadas, baixa novamente quando a origem muda, recupera arquivos ausentes, deduplica por conteudo/forma+cor e permite escolher a principal.
+- **fix(clientes): paleta livre e fiel aos assets.** Pixels transparentes nao viram fundo branco, antialias tem peso por alfa, familias quase iguais sao agrupadas e ate 8 cores distintas sao mantidas. A paleta antiga incorreta da Rio Cable e reconhecida para reparo, enquanto curadoria manual e preservada.
+- **fix(clientes): persistencia e concorrencia.** Status possui `run_id`, uma empresa executa um enriquecimento por vez, `brand_kit` usa upsert atomico, namespaces de extras nao se apagam e a selecao da logo principal fica alinhada ao `logo_url` mesmo sob concorrencia.
+- **fix(os): erros HTTP deixam de parecer sucesso.** Respostas 4xx/5xx sao exibidas de forma curta e o polling de progresso nao sobrepoe requisicoes.
+- **fix(clientes): Instagram oficial normalizado.** Handles e URLs compartilhadas com query/fragmento passam pelo mesmo validador antes da importacao.
+- Testes: 23 casos Python de logos/paleta/persistencia/concorrencia e 5 casos Node do cliente HTTP.
+- Versao: main.py/UI/OS 1.27.113, cache bust `app.js?v=127113` e OS `v=127113`.
+
 ## v1.27.112 - 2026-07-30
 
 - **fix(kie): callback substitui a espera atrasada do polling.** O endpoint dedicado agora recebe `callBackUrl`, acorda o render assim que a Kie envia a URL e mantém polling de segurança a cada 30 segundos. O callback também atravessa múltiplos workers pelo volume compartilhado.
