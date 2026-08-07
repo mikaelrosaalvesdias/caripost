@@ -1,6 +1,7 @@
 import importlib.util
 import asyncio
 import io
+import json
 import os
 import sys
 import tempfile
@@ -340,6 +341,175 @@ class LogoCandidateTests(unittest.TestCase):
         self.assertNotEqual(light, dark)
 
 
+class ProductCatalogExtractionTests(unittest.TestCase):
+    def test_catalog_http_rejects_private_redirect_before_requesting_it(self):
+        calls = []
+
+        class RedirectResponse:
+            status_code = 302
+            url = "https://empresa.example"
+            text = ""
+            headers = {"location": "http://100.64.0.1/admin"}
+
+        client = types.SimpleNamespace(get=lambda url, **_kwargs: (calls.append(url) or RedirectResponse()))
+        with patch.object(companies, "_catalog_public_url", side_effect=lambda url: "100.64.0.1" not in url):
+            with self.assertRaises(RuntimeError):
+                companies._catalog_http_get(
+                    client, "https://empresa.example", timeout=5, headers={"User-Agent": "test"},
+                )
+
+        self.assertEqual(calls, ["https://empresa.example"])
+
+    def test_catalog_public_url_rejects_local_private_and_nonstandard_ports(self):
+        for url in (
+            "http://127.0.0.1", "http://169.254.169.254/latest/meta-data",
+            "http://100.64.0.1", "http://localhost", "https://example.com:8443",
+        ):
+            self.assertFalse(companies._catalog_public_url(url), url)
+
+    def test_catalog_candidates_ignore_assets_and_prioritize_registered_city(self):
+        html = """
+        <a href="https://static.parastorage.com/services/wix-thunderbolt/app.css">Wix services</a>
+        <a href="https://tracking.example/services/offers">Ofertas externas</a>
+        <a href="/contratos">Contratos</a>
+        <a href="/cópia-contratos">Cópia contratos</a>
+        <a href="/sobre">Saiba mais</a>
+        <a href="/historia">Conheça</a>
+        <a href="/carreiras">Saiba mais</a>
+        <a href="/planos-empresariais">Planos empresariais</a>
+        <a href="/planos-sem-contrato">Planos sem contrato</a>
+        <a href="/internet-no-boleto">Internet no boleto</a>
+        <p>Escolha sua cidade:</p>
+        <script type="application/json">{"options":[
+          {"value":"/resende","text":"Resende"},
+          {"value":"/cordeiro","text":"Cordeiro"},
+          {"value":"/logout","text":"Sair"},
+          {"value":"/account/delete","text":"Excluir conta"}
+        ]}</script>
+        """
+
+        candidates = companies._catalog_page_candidates(
+            "https://www.riocable.com.br", [html], city="Cordeiro",
+        )
+        urls = [item["url"] for item in candidates]
+
+        self.assertEqual(urls[0], "https://www.riocable.com.br/cordeiro")
+        self.assertIn("https://www.riocable.com.br/planos-empresariais", urls)
+        self.assertIn("https://www.riocable.com.br/planos-sem-contrato", urls)
+        self.assertIn("https://www.riocable.com.br/internet-no-boleto", urls)
+        self.assertNotIn("https://www.riocable.com.br/resende", urls)
+        self.assertNotIn("https://www.riocable.com.br/contratos", urls)
+        self.assertNotIn("https://www.riocable.com.br/cópia-contratos", urls)
+        self.assertNotIn("https://www.riocable.com.br/logout", urls)
+        self.assertNotIn("https://www.riocable.com.br/account/delete", urls)
+        self.assertFalse(any(url.endswith(("/sobre", "/historia", "/carreiras")) for url in urls))
+        self.assertFalse(any("parastorage" in url or "tracking.example" in url for url in urls))
+
+    def test_city_hub_over_300_chars_renders_and_creates_real_tiers_idempotently(self):
+        base = "https://www.riocable.com.br"
+        city_url = base + "/cordeiro"
+        home_html = (
+            "<html><body>Planos de internet | Serviços | Área do cliente. Escolha sua cidade "
+            + ("Informações institucionais. " * 30) +
+            '<a href="https://static.parastorage.com/services/wix/app.css">CSS Wix</a>'
+            '<script type="application/json">{"options":[{"value":"/cordeiro","text":"Cordeiro-RJ"}]}</script>'
+            '</body></html>'
+        )
+        city_shell = "<html><body>" + ("Carregando conteúdo. " * 25) + "</body></html>"
+        city_text = (
+            "Planos de Internet Cordeiro. 400 MEGA por R$ 89,90/mês. "
+            "700 MEGA com TV digital por R$ 159,90/mês. Contratar agora."
+        )
+        http_calls = []
+
+        class Response:
+            def __init__(self, text, url):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+                self.headers = {"content-type": "text/html; charset=utf-8"}
+
+        fake_httpx = types.ModuleType("httpx")
+
+        def http_get(url, **_kwargs):
+            http_calls.append(url)
+            if url == base:
+                return Response(home_html, base)
+            if url == city_url:
+                return Response(city_shell, city_url)
+            raise AssertionError("URL externa não deveria ser acessada: " + url)
+
+        fake_httpx.get = http_get
+        render_calls = []
+
+        def render(url):
+            render_calls.append(url)
+            if url == city_url:
+                return {"text": city_text, "html": "<main>" + city_text + "</main>"}
+            return {"text": "Escolha sua cidade", "html": home_html}
+
+        first_ai_payload = json.dumps({"products": [
+            {
+                "name": "400 Mega", "description": "Internet de 400 Mega.",
+                "objective": "Vender velocidade com economia.", "functions": ["400 Mbps"],
+                "price": "R$ 89,90/mês", "location": "", "source_url": city_url,
+            },
+            {
+                "name": "700 Mega", "description": "Internet de 700 Mega com TV.",
+                "objective": "Vender conectividade e entretenimento.", "functions": ["700 Mbps", "TV digital"],
+                "price": "R$ 159,90/mês", "location": "Cordeiro-RJ", "source_url": city_url,
+            },
+            {"name": "Internet Fibra Óptica", "location": "Cordeiro-RJ", "source_url": city_url},
+        ]})
+        second_ai_payload = json.dumps({"products": [
+            {
+                "name": "400 Mbps", "description": "Internet de 400 Mega.",
+                "objective": "Vender velocidade com economia.", "functions": ["400 Mbps"],
+                "price": "R$ 89,90/mês", "location": "Cordeiro", "source_url": "",
+            },
+            {
+                "name": "700 Mbps", "description": "Internet de 700 Mega com TV.",
+                "objective": "Vender conectividade e entretenimento.", "functions": ["700 Mbps", "TV digital"],
+                "price": "R$ 159,90/mês", "location": "Cordeiro", "source_url": city_url,
+            },
+        ]})
+        stored = []
+
+        def create_product(_company_id, data):
+            product = dict(data, id=f"p{len(stored) + 1}")
+            stored.append(product)
+            return product
+
+        with patch.dict(sys.modules, {
+                 "httpx": fake_httpx, "app.services.ai": fake_ai, "app.db_companies": fake_companies_db,
+             }), \
+             patch.object(companies, "company_get", return_value={"id": "c1", "name": "Rio Cable", "city": ""}), \
+             patch.object(companies, "_catalog_public_url", return_value=True), \
+             patch.object(companies, "_render_site", side_effect=render), \
+             patch.object(fake_companies_db, "product_list", side_effect=lambda _cid: list(stored)), \
+             patch.object(fake_companies_db, "product_create", side_effect=create_product), \
+             patch.object(fake_ai, "get_ai_config", return_value={"provider": "test"}, create=True), \
+             patch.object(fake_ai, "cheap_text_config", side_effect=lambda value: value, create=True), \
+             patch.object(fake_ai, "complete_ai", side_effect=[first_ai_payload, second_ai_payload], create=True), \
+             patch.object(fake_ai, "extract_json", side_effect=json.loads, create=True):
+            first = companies._auto_extract_products("c1", base)
+            second = companies._auto_extract_products("c1", base)
+
+        self.assertGreater(len(companies._catalog_visible_text(home_html)), 300)
+        self.assertGreaterEqual(companies._catalog_offer_score(home_html), companies._CATALOG_MIN_SCORE)
+        self.assertFalse(companies._catalog_has_concrete_offer_signal(home_html))
+        self.assertIn(base, render_calls, "A home longa, mas sem ofertas, precisa ser renderizada")
+        self.assertIn(city_url, render_calls)
+        self.assertFalse(any("parastorage" in url for url in http_calls))
+        self.assertEqual(first["found"], 2, first)
+        self.assertEqual(first["added"], 2)
+        self.assertEqual(second["found"], 2)
+        self.assertEqual(second["added"], 0)
+        self.assertEqual([item["name"] for item in stored], ["400 Mega — Cordeiro-RJ", "700 Mega — Cordeiro-RJ"])
+        self.assertIn("Preço: R$ 89,90/mês", stored[0]["functions"])
+        self.assertEqual(stored[0]["website"], city_url)
+
+
 class EnrichmentOrchestrationTests(unittest.TestCase):
     @staticmethod
     def _png_bytes(color, alpha=255):
@@ -355,17 +525,25 @@ class EnrichmentOrchestrationTests(unittest.TestCase):
              patch.object(companies, "company_update"), \
              patch.object(companies, "brand_kit_get", return_value={"colors": {}, "extras": {}}), \
              patch.object(companies, "brand_kit_upsert"), \
-             patch.object(companies, "_store_enrichment_status", return_value={}), \
+             patch.object(companies, "_store_enrichment_status", return_value={}) as store_status, \
              patch.object(companies, "asset_list_logos", return_value=[existing_logo]), \
              patch.object(companies, "_remove_misclassified_web_logos"), \
              patch.object(companies, "_auto_fetch_logo") as discover, \
-             patch.object(companies, "_auto_extract_products", return_value=0), \
+             patch.object(companies, "_auto_extract_products", return_value={
+                 "added": 2, "found": 3, "pages_scanned": 4, "warnings": ["uma oferta foi ignorada"],
+             }), \
              patch.object(companies, "_company_logo_colors", return_value={"primary": "#112233"}), \
              patch.object(fake_ai, "enrich_company_from_web", return_value={}), \
              patch.dict(sys.modules, {"app.services.ai": fake_ai}):
             companies._run_company_enrichment("c1", {})
 
         discover.assert_called_once_with("c1", "https://example.com")
+        final_status = next(call.kwargs for call in reversed(store_status.call_args_list)
+                            if call.kwargs.get("state") == "done")
+        self.assertEqual(final_status["products_added"], 2)
+        self.assertEqual(final_status["products_found"], 3)
+        self.assertEqual(final_status["product_pages_scanned"], 4)
+        self.assertIn("Produtos e serviços: uma oferta foi ignorada", final_status["warnings"])
 
     def _run_palette_case(self, current_kit, detected):
         company = {"id": "c1", "name": "Rio Cable", "website": "https://example.com", "socials": {}}

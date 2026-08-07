@@ -2,6 +2,15 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.115 - 2026-08-07
+
+- **fix(clientes): catalogo real em sites com portais por cidade.** O crawler usa links e seletores oficiais, inclusive dados JSON de Wix, prioriza a cidade cadastrada e mantem localidade quando os precos variam. A Rio Cable passa a fornecer as paginas de Cantagalo, Cordeiro e Corrego da Prata em vez da home institucional.
+- **fix(clientes): somente paginas validas entram na IA.** Links externos, CSS, scripts, fontes e midias deixam de ocupar as vagas do crawler; paginas longas sem oferta nao impedem mais a descoberta por relevancia.
+- **fix(clientes): detalhes dos produtos persistidos.** Objetivo, funcoes, beneficios, preco, conhecimento e fonte oficial agora sobrevivem ao `product_create`, e ofertas genericas que apenas repetem o nome da empresa sao rejeitadas.
+- **fix(os): resultado observavel e atualizado.** A aba de produtos recarrega ao concluir o enriquecimento, erros da API deixam de parecer lista vazia e o resumo mostra ofertas encontradas, novas e paginas verificadas.
+- Testes: 35 casos Python, 2 suites Node, compilacao JSX e diagnostico real isolado que encontrou 400/600/700 MEGA e precos nas rotas oficiais da Rio Cable.
+- Versao: main.py/UI/OS 1.27.115, cache bust `app.js?v=127115` e OS `v=127115`.
+
 ## v1.27.114 - 2026-08-06
 
 - **feat(clientes): logos manuais sem limite fixo.** O upload multiplo fica visivel na Identidade Visual, preserva os arquivos que deram certo em uma importacao parcial e permite incluir, excluir e escolher a variante principal.

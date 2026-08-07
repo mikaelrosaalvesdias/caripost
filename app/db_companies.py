@@ -1246,11 +1246,19 @@ def product_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
             n += 1
     socials = json.dumps(data.get("socials") or {})
     colors = json.dumps(data.get("colors") or {})
+    functions = json.dumps(data.get("functions") or [])
     with get_conn() as conn:
         conn.execute("""
-            INSERT INTO products (id, company_id, name, slug, description, category, website, socials, colors, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        """, (pid, company_id, data.get("name", ""), slug, data.get("description"), data.get("category"), data.get("website"), socials, colors, now, now))
+            INSERT INTO products (
+                id, company_id, name, slug, description, category, website, socials, colors,
+                active, created_at, updated_at, objective, functions, knowledge, web_brief, web_brief_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            pid, company_id, data.get("name", ""), slug, data.get("description"),
+            data.get("category"), data.get("website"), socials, colors, now, now,
+            data.get("objective"), functions, data.get("knowledge"), data.get("web_brief"),
+            data.get("web_brief_at"),
+        ))
     return product_get(pid)
 
 

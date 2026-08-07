@@ -1062,7 +1062,7 @@
     /* ════════ PRODUTOS → SOLUÇÕES (fontes de conteúdo) ════════ */
 
     async listProducts(companyId) {
-      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products').catch(() => ({ products: [] }));
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products');
       return r.products || [];
     },
     async createProduct(companyId, payload) {

@@ -181,7 +181,9 @@ function CompanyEnrichmentPanel({ company, onRefresh, onReview }) {
     {status.state === 'done' && <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
       <span className="hint"><b>{status.logos_total || 0}</b> logo(s)</span>
       <span className="hint"><b>{status.colors_found || 0}</b> cor(es)</span>
-      <span className="hint"><b>{status.products_added || 0}</b> produto(s) novo(s)</span>
+      <span className="hint"><b>{status.products_found ?? status.products_added ?? 0}</b> oferta(s) encontrada(s)</span>
+      <span className="hint"><b>{status.products_added || 0}</b> nova(s) cadastrada(s)</span>
+      {!!status.product_pages_scanned && <span className="hint"><b>{status.product_pages_scanned}</b> página(s) verificada(s)</span>}
       {status.palette_preserved && (detectedPaletteApplied
         ? <Pill kind="good">Paleta detectada aplicada</Pill>
         : <Pill kind="warn">Paleta manual preservada</Pill>)}
@@ -286,6 +288,8 @@ function CompanyProdutos({ company }) {
   const [newName, setNewName] = React.useState('');
   const [msg, setMsg] = React.useState('');
   const [copyOpen, setCopyOpen] = React.useState(false);
+  const enrichment = company?.brand_kit?.extras?.enrichment || {};
+  const enrichmentRefreshKey = [enrichment.run_id || '', enrichment.state || '', enrichment.finished_at || ''].join(':');
 
   const load = React.useCallback(() => {
     if (!window.mpApi) return;
@@ -295,7 +299,7 @@ function CompanyProdutos({ company }) {
       .catch(e => { setMsg('Erro: ' + e.message); setLoading(false); });
   }, [company.id]);
 
-  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { load(); }, [load, enrichmentRefreshKey]);
 
   async function addProduct() {
     if (!newName.trim()) { setMsg('Informe o nome do produto.'); return; }

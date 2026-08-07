@@ -152,6 +152,30 @@ class BrandKitPersistenceTests(unittest.TestCase):
         kit = companies_db.brand_kit_get(company["id"])
         self.assertEqual(kit["logo_url"], manual["url"])
 
+    def test_product_create_round_trips_briefing_fields(self):
+        company = self.create_company("Produtos completos")
+        product = companies_db.product_create(company["id"], {
+            "name": "700 Mega",
+            "description": "Internet por fibra com streaming.",
+            "category": "Internet",
+            "website": "https://example.com/700-mega",
+            "socials": {"instagram": "@provedor"},
+            "colors": {"primary": "#123456"},
+            "objective": "Converter famílias que usam muitos dispositivos.",
+            "functions": ["700 Mbps", "Wi-Fi incluso", "R$ 159,90/mês"],
+            "knowledge": "Instalação grátis sujeita à viabilidade técnica.",
+            "web_brief": "Oferta confirmada no site oficial.",
+            "web_brief_at": "2026-08-07T12:00:00+00:00",
+        })
+
+        stored = companies_db.product_get(product["id"])
+
+        self.assertEqual(stored["objective"], "Converter famílias que usam muitos dispositivos.")
+        self.assertEqual(stored["functions"], ["700 Mbps", "Wi-Fi incluso", "R$ 159,90/mês"])
+        self.assertEqual(stored["knowledge"], "Instalação grátis sujeita à viabilidade técnica.")
+        self.assertEqual(stored["web_brief"], "Oferta confirmada no site oficial.")
+        self.assertEqual(stored["web_brief_at"], "2026-08-07T12:00:00+00:00")
+
 
 if __name__ == "__main__":
     unittest.main()

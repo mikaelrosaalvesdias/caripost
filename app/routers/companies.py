@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urldefrag, urljoin, urlparse
 
 from fastapi import APIRouter, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse
@@ -198,6 +198,8 @@ def _spawn_bg_enrich(company_id: str, overrides: Optional[Dict[str, Any]] = None
             logos_total=0,
             colors_found=0,
             products_added=0,
+            products_found=0,
+            product_pages_scanned=0,
             palette_preserved=False,
             error="",
         )
@@ -705,11 +707,30 @@ def _render_site(url: str) -> Dict[str, Any]:
     PNG da logo (screenshot do elemento <img ...logo...> — resolve logo SVG que o PIL não lê)."""
     import re
     out = {"text": "", "html": "", "logo_png": None}
+    if not _catalog_public_url(url):
+        return out
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             b = p.chromium.launch(headless=True)
-            pg = b.new_page(viewport={"width": 1366, "height": 900}, device_scale_factor=3)   # logo nítida (3x)
+            context = b.new_context(
+                viewport={"width": 1366, "height": 900}, device_scale_factor=3,
+                service_workers="block",
+            )   # logo nítida (3x)
+            pg = context.new_page()
+            def _guard_request(route):
+                request_url = route.request.url
+                scheme = urlparse(request_url).scheme.lower()
+                if scheme in ("about", "blob", "data") or _catalog_public_url(request_url):
+                    route.continue_()
+                else:
+                    route.abort()
+            pg.route("**/*", _guard_request)
+            try:
+                # Static brand/catalog reading never needs a WebSocket; blocking it closes an SSRF bypass.
+                pg.route_web_socket("**/*", lambda websocket: websocket.close())
+            except (AttributeError, TypeError):
+                pass
             # Wix/analytics pages may never become network-idle. The brand header is available
             # after DOMContentLoaded plus a short render window.
             pg.goto(url, timeout=35000, wait_until="domcontentloaded")
@@ -765,105 +786,622 @@ def _render_site(url: str) -> Dict[str, Any]:
     return out
 
 
-def _auto_extract_products(company_id: str, website: str) -> int:
-    """Extrai PLANOS/SERVIÇOS/PRODUTOS do SITE do cliente (home + páginas de planos/serviços) via IA e
-    cadastra os que faltam — o usuário não precisa cadastrar oferta por oferta. Retorna quantos criou."""
-    import re
-    import httpx as _hx
-    from ..db_companies import product_list, product_create
-    if not website:
-        return 0
-    base = website if website.startswith("http") else "https://" + website
-    ua = {"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"}
-    texts = []
+_CATALOG_ASSET_EXTENSIONS = {
+    ".css", ".js", ".mjs", ".json", ".xml", ".map", ".txt", ".pdf",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
+    ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".mp4", ".webm", ".zip",
+}
+_CATALOG_URL_TERMS = re.compile(
+    r"plano|planos|servi[cç]|produto|combo|pacote|oferta|internet|fibra|residencial|empresarial|loja|"
+    r"contrate|contratar|assine|assinar",
+    re.I,
+)
+_CATALOG_ACTION_TERMS = re.compile(
+    r"\bcontrat(?:e|ar|a[cç][aã]o)\b|\bassin(?:e|ar)\b|conhe[cç]a|ver\s+planos?|saiba\s+mais", re.I,
+)
+_CATALOG_SENSITIVE_PATH = re.compile(
+    r"/(?:_?api|admin|auth|login|logout|sign-?in|sign-?out|conta|account|perfil|profile|"
+    r"delete|remove|cancel|checkout|cart|carrinho|boletos?|faturas?|segunda-?via|"
+    r"(?:c[oó]pia-)?contratos?)(?:/|$)",
+    re.I,
+)
+_BRAZIL_STATE_LABEL = re.compile(
+    r"(?:^|[-,\s])(?:AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\s*$",
+    re.I,
+)
+_CATALOG_MIN_SCORE = 5
+
+
+def _catalog_fold(value: str) -> str:
+    return unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode().lower()
+
+
+class _CatalogLinkParser(HTMLParser):
+    """Collect navigable catalog links, including locality selectors rendered by JS sites."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.items: List[Dict[str, Any]] = []
+        self._active: List[tuple[str, Dict[str, Any]]] = []
+        self._json_parts: Optional[List[str]] = None
+
+    def _append_json_options(self, value: Any) -> None:
+        if isinstance(value, dict):
+            target = value.get("value")
+            label = value.get("text")
+            if (isinstance(target, str) and isinstance(label, str)
+                    and re.match(r"^(?:https?:)?//|^/", target.strip())):
+                self.items.append({
+                    "target": target.strip(), "label": label.strip(),
+                    "kind": "option", "index": len(self.items),
+                })
+            for child in value.values():
+                self._append_json_options(child)
+        elif isinstance(value, list):
+            for child in value:
+                self._append_json_options(child)
+
+    def handle_starttag(self, tag: str, attrs):
+        tag = tag.lower()
+        amap = {str(key).lower(): str(value or "") for key, value in attrs}
+        if tag == "script" and "json" in (amap.get("type") or "").lower():
+            self._json_parts = []
+            return
+        if tag not in ("a", "option"):
+            return
+        target = amap.get("href") if tag == "a" else amap.get("value")
+        if not (target or "").strip():
+            return
+        item = {
+            "target": target.strip(),
+            "label": " ".join(filter(None, (amap.get("aria-label"), amap.get("title")))).strip(),
+            "kind": tag,
+            "index": len(self.items),
+        }
+        self.items.append(item)
+        self._active.append((tag, item))
+
+    def handle_data(self, data: str):
+        if self._json_parts is not None:
+            self._json_parts.append(data or "")
+            return
+        clean = re.sub(r"\s+", " ", data or " ").strip()
+        if not clean:
+            return
+        for _tag, item in self._active:
+            item["label"] = (item["label"] + " " + clean).strip()
+
+    def handle_endtag(self, tag: str):
+        tag = tag.lower()
+        if tag == "script" and self._json_parts is not None:
+            try:
+                import json
+                self._append_json_options(json.loads("".join(self._json_parts)))
+            except Exception:
+                pass
+            self._json_parts = None
+            return
+        for index in range(len(self._active) - 1, -1, -1):
+            if self._active[index][0] == tag:
+                self._active.pop(index)
+                break
+
+
+class _CatalogTextParser(HTMLParser):
+    """Extract user-facing text plus useful image labels; never feed JS/CSS payloads to the AI."""
+
+    _SKIP = {"script", "style", "noscript", "template", "svg"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs):
+        tag = tag.lower()
+        if tag in self._SKIP:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        amap = {str(key).lower(): str(value or "") for key, value in attrs}
+        for key in ("aria-label", "alt", "title"):
+            if amap.get(key):
+                self.parts.append(amap[key])
+
+    def handle_endtag(self, tag: str):
+        if tag.lower() in self._SKIP and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str):
+        if not self._skip_depth and (data or "").strip():
+            self.parts.append(data)
+
+
+def _catalog_visible_text(html: str) -> str:
+    parser = _CatalogTextParser()
     try:
-        r = _hx.get(base, timeout=20.0, follow_redirects=True, headers=ua)
-        html = r.text or ""
-        texts.append(html)
-        # até 3 páginas internas de planos/serviços/produtos
-        links = re.findall(r'href=["\']([^"\']+)["\']', html, re.I)
-        from urllib.parse import urljoin
-        seen = set()
-        for u in links:
-            if re.search(r"plano|servi|produto|combo|pacote|internet", u, re.I):
-                full = urljoin(str(r.url), u)
-                if full.startswith("http") and full not in seen and len(seen) < 3:
-                    seen.add(full)
-                    try:
-                        texts.append(_hx.get(full, timeout=15.0, follow_redirects=True, headers=ua).text or "")
-                    except Exception:
-                        pass
+        parser.feed(html or "")
     except Exception:
-        return 0
-    blob = " ".join(re.sub(r"<script.*?</script>|<style.*?</style>", " ", t, flags=re.S | re.I) for t in texts)
-    blob = re.sub(r"<[^>]+>", " ", blob)
-    blob = re.sub(r"\s+", " ", blob)[:14000]
-    if len(blob) < 300:
-        # site 100% JavaScript (HTML estático vazio) → renderiza com Playwright e usa o texto REAL
-        rend = _render_site(base)
-        blob = (rend.get("text") or "")[:14000]
-        # + páginas internas de planos/serviços renderizadas (até 2)
+        pass
+    return re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+
+
+def _catalog_offer_score(text: str) -> int:
+    """Rank actual commercial content instead of treating any long page as a catalog."""
+    raw = text or ""
+    folded = _catalog_fold(raw)
+    score = 0
+    score += min(3, len(re.findall(r"\b\d{2,4}\s*(?:mega|mb(?:ps)?|giga|gb(?:ps)?)\b", folded))) * 12
+    score += min(3, len(re.findall(r"r\$\s*\d", folded))) * 12
+    if re.search(r"\bplanos?\b|\bpacotes?\b|\bcombos?\b|\bofertas?\b", folded):
+        score += 7
+    if re.search(r"\bprodutos?\b|\bservicos?\b", folded):
+        score += 5
+    if re.search(r"contrat|assine|por\s+mes|mensal", folded):
+        score += 4
+    if re.search(r"\binternet\b|\bfibra\b", folded):
+        score += 2
+    return score
+
+
+def _catalog_has_concrete_offer_signal(text: str) -> bool:
+    """Prices/speeds prove card content; generic menu words alone must still trigger rendering."""
+    folded = _catalog_fold(text or "")
+    return bool(
+        re.search(r"\b\d{2,4}\s*(?:mega|mb(?:ps)?|giga|gb(?:ps)?)\b", folded)
+        or re.search(r"r\$\s*\d", folded)
+    )
+
+
+def _catalog_should_render(text: str, html: str) -> bool:
+    if _catalog_has_concrete_offer_signal(text):
+        return False
+    visible_length = len((text or "").strip())
+    html_length = len(html or "")
+    return visible_length < 2500 or bool(html_length and visible_length * 30 < html_length)
+
+
+def _catalog_host(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    return host[4:] if host.startswith("www.") else host
+
+
+def _catalog_related_host(url: str, base_host: str) -> bool:
+    host = _catalog_host(url)
+    normalized_base = (base_host or "").lower().rstrip(".")
+    return bool(host and normalized_base and (host == normalized_base or host.endswith("." + normalized_base)))
+
+
+def _catalog_public_host(host: str, port: int) -> bool:
+    import ipaddress
+    import socket
+
+    normalized = (host or "").lower().rstrip(".")
+    if (not normalized or normalized == "localhost"
+            or normalized.endswith((".localhost", ".local", ".internal"))):
+        return False
+    try:
+        addresses = {item[4][0].split("%", 1)[0] for item in socket.getaddrinfo(normalized, port, type=socket.SOCK_STREAM)}
+    except Exception:
+        return False
+    if not addresses:
+        return False
+    try:
+        return all(ipaddress.ip_address(address).is_global for address in addresses)
+    except ValueError:
+        return False
+
+
+def _catalog_public_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if port not in (80, 443):
+            return False
+        return _catalog_public_host(parsed.hostname or "", port)
+    except (TypeError, ValueError):
+        return False
+
+
+class _CatalogResponse:
+    def __init__(self, *, status_code: int, url: str, headers: Dict[str, str], body: bytes):
+        self.status_code = status_code
+        self.url = url
+        self.headers = headers
+        content_type = headers.get("content-type", "")
+        charset_match = re.search(r"charset=([\w.-]+)", content_type, re.I)
+        charset = charset_match.group(1) if charset_match else "utf-8"
         try:
-            from urllib.parse import urljoin
-            _lks = re.findall(r'href=["\']([^"\']+)["\']', rend.get("html") or "", re.I)
-            _seen = set()
-            for _u in _lks:
-                if re.search(r"plano|servi|produto|combo", _u, re.I):
-                    _full = urljoin(base, _u)
-                    if _full.startswith("http") and _full not in _seen and len(_seen) < 2:
-                        _seen.add(_full)
-                        blob += " " + (_render_site(_full).get("text") or "")[:6000]
+            self.text = body.decode(charset, errors="replace")
+        except LookupError:
+            self.text = body.decode("utf-8", errors="replace")
+
+
+def _catalog_http_get(
+    client: Any, url: str, *, timeout: float, headers: Dict[str, str], allowed_host: str = "",
+):
+    """Follow redirects one by one so no request can jump from an official site to a private host."""
+    import time
+
+    current = url
+    deadline = time.monotonic() + max(20.0, timeout + 5.0)
+    max_body_bytes = 3 * 1024 * 1024
+    for _attempt in range(5):
+        if not _catalog_public_url(current):
+            raise RuntimeError("URL de catálogo não é pública ou usa uma porta não permitida")
+        if allowed_host and not _catalog_related_host(current, allowed_host):
+            raise RuntimeError("redirecionamento para domínio não oficial bloqueado")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("o site excedeu o tempo total permitido")
+        stream = getattr(client, "stream", None)
+        if callable(stream):
+            with stream(
+                "GET", current, timeout=min(timeout, 10.0), follow_redirects=False, headers=headers,
+            ) as streamed:
+                status_code = int(getattr(streamed, "status_code", 200) or 200)
+                response_headers = {str(key).lower(): str(value) for key, value in streamed.headers.items()}
+                length = response_headers.get("content-length") or ""
+                if length.isdigit() and int(length) > max_body_bytes:
+                    raise RuntimeError("a página excede o limite de 3 MB")
+                location = response_headers.get("location", "").strip()
+                if status_code in (301, 302, 303, 307, 308) and location:
+                    current = urldefrag(urljoin(current, location))[0]
+                    continue
+                body = bytearray()
+                content_type = response_headers.get("content-type", "").lower()
+                if status_code < 400 and (not content_type or "html" in content_type):
+                    for chunk in streamed.iter_bytes():
+                        body.extend(chunk)
+                        if len(body) > max_body_bytes:
+                            raise RuntimeError("a página excede o limite de 3 MB")
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("o site excedeu o tempo total permitido")
+                return _CatalogResponse(
+                    status_code=status_code, url=str(streamed.url), headers=response_headers, body=bytes(body),
+                )
+        response = client.get(current, timeout=timeout, follow_redirects=False, headers=headers)
+        status_code = int(getattr(response, "status_code", 200) or 200)
+        location = str((getattr(response, "headers", {}) or {}).get("location", "")).strip()
+        if status_code in (301, 302, 303, 307, 308) and location:
+            current = urldefrag(urljoin(current, location))[0]
+            continue
+        return response
+    raise RuntimeError("o site excedeu o limite seguro de redirecionamentos")
+
+
+def _catalog_page_candidates(base_url: str, html_sources: List[str], city: str = "") -> List[Dict[str, Any]]:
+    """Return ranked, same-site HTML pages. Option values let city-hub sites expose their plans."""
+    base_host = _catalog_host(base_url)
+    base_parts = urlparse(base_url)
+    base_path = (base_parts.path or "/").rstrip("/") or "/"
+    city_key = re.sub(r"[^a-z0-9]", "", _catalog_fold(city))
+    merged: Dict[str, Dict[str, Any]] = {}
+    source_index = 0
+    for source in html_sources:
+        parser = _CatalogLinkParser()
+        try:
+            parser.feed(source or "")
         except Exception:
             pass
-        blob = blob[:14000]
-    if len(blob) < 300:
-        return 0
+        option_count = sum(1 for item in parser.items if item.get("kind") == "option")
+        location_hint = bool(re.search(
+            r"(?:escolha|selecione|informe|troque).{0,40}(?:cidade|localidade)|(?:sua|por)\s+cidade",
+            _catalog_fold(_catalog_visible_text(source or "")), re.I,
+        ))
+        for item in parser.items:
+            full = urldefrag(urljoin(base_url, item["target"]))[0]
+            parsed = urlparse(full)
+            if parsed.scheme not in ("http", "https") or not _catalog_related_host(full, base_host):
+                continue
+            path = unquote(parsed.path or "/")
+            if (path.rstrip("/") or "/") == base_path and not parsed.query:
+                continue
+            if os.path.splitext(path.lower())[1] in _CATALOG_ASSET_EXTENSIONS:
+                continue
+            if (_CATALOG_SENSITIVE_PATH.search(path)
+                    or re.search(r"(?:^|[?&])(?:action|do)=(?:delete|remove|logout|cancel)(?:&|$)", parsed.query, re.I)):
+                continue
+            label = re.sub(r"\s+", " ", item.get("label") or "").strip()
+            haystack = f"{path} {label}"
+            folded_haystack = _catalog_fold(haystack)
+            compact_haystack = re.sub(r"[^a-z0-9]", "", folded_haystack)
+            city_match = bool(city_key and city_key in compact_haystack)
+            state_label = bool(_BRAZIL_STATE_LABEL.search(label))
+            catalog_term = bool(_CATALOG_URL_TERMS.search(haystack))
+            location_option = bool(city_match or state_label or (option_count >= 2 and location_hint))
+            score = 0
+            if item.get("kind") == "option" and (location_option or catalog_term):
+                score += 70
+            if catalog_term:
+                score += 100
+            if catalog_term and _CATALOG_ACTION_TERMS.search(label):
+                score += 30
+            if city_match:
+                score += 220
+            if score <= 0:
+                continue
+            normalized = parsed._replace(fragment="").geturl()
+            candidate = {
+                "url": normalized,
+                "label": label,
+                "kind": item.get("kind") or "a",
+                "score": score,
+                "city_match": city_match,
+                "is_location": location_option,
+                "index": source_index + int(item.get("index") or 0),
+            }
+            previous = merged.get(normalized)
+            if not previous or candidate["score"] > previous["score"]:
+                merged[normalized] = candidate
+            elif previous and label and label not in previous.get("label", ""):
+                previous["label"] = (previous.get("label", "") + " / " + label).strip(" /")
+        source_index += len(parser.items) + 1
+    candidates = sorted(merged.values(), key=lambda item: (-item["score"], item["index"], item["url"]))
+    if city_key and any(item["city_match"] for item in candidates):
+        # A known city is authoritative. Keep its locality plus generic catalog pages, not prices
+        # from unrelated municipalities.
+        candidates = [item for item in candidates if item["city_match"] or item["kind"] != "option"]
+    return candidates
+
+
+def _auto_extract_products(company_id: str, website: str) -> Dict[str, Any]:
+    """Discover real offer pages, extract their catalog with AI and persist only missing items."""
+    import httpx as _hx
+    from ..db_companies import product_list, product_create
+
+    result: Dict[str, Any] = {
+        "added": 0, "found": 0, "pages_scanned": 0, "source_pages": [], "warnings": [],
+    }
+    if not website:
+        return result
+    base = website if website.startswith("http") else "https://" + website
+    ua = {"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"}
+    company = company_get(company_id) or {}
+    city = (company.get("city") or "").strip()
+    render_budget = 2
+
+    def _render_catalog_page(url: str) -> Dict[str, Any]:
+        nonlocal render_budget
+        if render_budget <= 0:
+            return {}
+        render_budget -= 1
+        return _render_site(url) or {}
+
+    try:
+        response = _catalog_http_get(_hx, base, timeout=20.0, headers=ua)
+        if int(getattr(response, "status_code", 200) or 200) >= 400:
+            raise RuntimeError(f"site respondeu HTTP {response.status_code}")
+    except Exception as exc:
+        result["warnings"].append("Não foi possível abrir o site para importar ofertas: " + str(exc)[:160])
+        return result
+
+    home_url = str(getattr(response, "url", None) or base)
+    home_html = response.text or ""
+    home_text = _catalog_visible_text(home_html)
+    home_score = _catalog_offer_score(home_text)
+    rendered_home: Dict[str, Any] = {}
+    if _catalog_should_render(home_text, home_html):
+        # Length is not relevance: Wix/SPA shells can have thousands of chars and no offer at all.
+        rendered_home = _render_catalog_page(home_url)
+        rendered_text = (rendered_home.get("text") or "").strip()
+        if not rendered_text and rendered_home.get("html"):
+            rendered_text = _catalog_visible_text(rendered_home["html"])
+        rendered_score = _catalog_offer_score(rendered_text)
+        if rendered_text and (
+            _catalog_has_concrete_offer_signal(rendered_text)
+            or rendered_score > home_score
+            or (rendered_score >= _CATALOG_MIN_SCORE and len(rendered_text) > len(home_text))
+            or not home_text
+        ):
+            home_text, home_score = rendered_text, rendered_score
+
+    candidate_sources = [home_html]
+    if rendered_home.get("html"):
+        candidate_sources.append(rendered_home["html"])
+    candidates = _catalog_page_candidates(home_url, candidate_sources, city)
+    selected = candidates[:3]
+    pages: List[Dict[str, Any]] = []
+    result["pages_scanned"] = 1
+    if home_score >= _CATALOG_MIN_SCORE and home_text:
+        pages.append({
+            "url": home_url, "label": "Página inicial", "text": home_text,
+            "score": home_score, "is_location": False,
+        })
+
+    page_errors: List[str] = []
+    for candidate in selected:
+        try:
+            page_response = _catalog_http_get(
+                _hx, candidate["url"], timeout=18.0, headers=ua, allowed_host=_catalog_host(home_url),
+            )
+            result["pages_scanned"] += 1
+            status_code = int(getattr(page_response, "status_code", 200) or 200)
+            content_type = str((getattr(page_response, "headers", {}) or {}).get("content-type", "")).lower()
+            final_url = str(getattr(page_response, "url", None) or candidate["url"])
+            if status_code >= 400 or not _catalog_related_host(final_url, _catalog_host(home_url)):
+                continue
+            if content_type and "html" not in content_type:
+                continue
+            page_html = page_response.text or ""
+            page_text = _catalog_visible_text(page_html)
+            page_score = _catalog_offer_score(page_text)
+            if _catalog_should_render(page_text, page_html):
+                rendered = _render_catalog_page(final_url)
+                rendered_text = (rendered.get("text") or "").strip()
+                if not rendered_text and rendered.get("html"):
+                    rendered_text = _catalog_visible_text(rendered["html"])
+                rendered_score = _catalog_offer_score(rendered_text)
+                if rendered_text and (
+                    _catalog_has_concrete_offer_signal(rendered_text)
+                    or rendered_score > page_score
+                    or (rendered_score >= _CATALOG_MIN_SCORE and len(rendered_text) > len(page_text))
+                ):
+                    page_text, page_score = rendered_text, rendered_score
+            if page_text and page_score >= _CATALOG_MIN_SCORE:
+                pages.append({
+                    "url": final_url,
+                    "label": candidate.get("label") or urlparse(final_url).path.strip("/") or "Oferta",
+                    "text": page_text,
+                    "score": page_score + min(20, candidate["score"] // 10),
+                    "is_location": bool(candidate.get("is_location")),
+                })
+        except Exception as exc:
+            page_errors.append(str(exc)[:100])
+
+    if not pages:
+        detail = " O site possui seletor de localidade; informe a cidade da empresa." if any(
+            item.get("is_location") for item in candidates
+        ) else ""
+        result["warnings"].append("Nenhuma página oficial com ofertas reais foi encontrada." + detail)
+        if page_errors:
+            result["warnings"].append("Algumas páginas de oferta não puderam ser abertas.")
+        return result
+
+    if not city and any(item.get("is_location") for item in selected):
+        result["warnings"].append(
+            "O site varia planos por cidade. Como o cadastro não informa uma cidade, as ofertas importadas mantêm a localidade da fonte."
+        )
+
+    # Most relevant offer pages go first, so navigation/footer copy can never consume the prompt.
+    corpus_parts: List[str] = []
+    source_context: Dict[str, Dict[str, Any]] = {}
+    remaining = 22000
+    seen_texts = set()
+    for page in sorted(pages, key=lambda item: -item["score"]):
+        text_key = _catalog_fold(page["text"][:7000])
+        if text_key in seen_texts:
+            continue
+        seen_texts.add(text_key)
+        header = f"\n### FONTE OFICIAL\nURL: {page['url']}\nLOCALIDADE/CONTEXTO: {page['label']}\n"
+        body = page["text"][:7000]
+        if len(body) < 80:
+            continue
+        if remaining < len(header) + 80:
+            break
+        chunk = (header + body)[:remaining]
+        corpus_parts.append(chunk)
+        result["source_pages"].append(page["url"])
+        source_context[page["url"].rstrip("/")] = page
+        remaining -= len(chunk)
+        if remaining < 500:
+            break
+    blob = "".join(corpus_parts)
+    if not corpus_parts:
+        result["warnings"].append("O conteúdo das páginas de oferta foi insuficiente para leitura.")
+        return result
+
     try:
         from ..services.ai import cheap_text_config, get_ai_config, complete_ai, extract_json
         cfg = cheap_text_config(get_ai_config())
         if not cfg:
-            return 0
-        sysm = "Você extrai o catálogo de ofertas de um site. Responda SÓ JSON válido, pt-BR."
-        usr = ('Do texto do site abaixo, liste as OFERTAS REAIS da empresa (planos, serviços, produtos, combos). '
-               'Formato: {"products":[{"name":"nome curto EXATO","description":"1 frase","objective":"como vender (1 frase)",'
-               '"functions":["velocidade/itens inclusos/beneficios reais",...],"price":"preço REAL publicado (ex.: R$ 99,90/mês) ou vazio"}]} (até 12). TEXTO: ' + blob)
-        data = extract_json(complete_ai(cfg, sysm, usr, 2000)) or {}
+            result["warnings"].append("A IA de texto não está configurada para importar produtos.")
+            return result
+        sysm = "Você extrai catálogos de fontes oficiais. Responda SOMENTE JSON válido, em pt-BR, sem inventar dados."
+        usr = (
+            'Liste somente OFERTAS REAIS e específicas (planos, serviços, produtos ou combos) publicadas nas fontes. '
+            'Não transforme o nome/descrição genérica da empresa em produto. Preserve velocidade, itens, benefícios e preço exatos. '
+            'Se as fontes forem de cidades diferentes, não misture condições: informe "location" e inclua a localidade no nome. '
+            'Use em "source_url" apenas uma URL fornecida abaixo. Formato: '
+            '{"products":[{"name":"nome curto e exato","description":"1 frase factual",'
+            '"objective":"como posicionar/vender em 1 frase","functions":["velocidade/item/benefício real",...],'
+            '"price":"preço publicado ou vazio","location":"cidade/região ou vazio","source_url":"URL da fonte"}]} '
+            '(até 12). FONTES:' + blob
+        )
+        data = extract_json(complete_ai(cfg, sysm, usr, 2400)) or {}
         items = data.get("products") or []
-    except Exception:
-        return 0
-    company_words = set(re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKD", (company_get(company_id) or {}).get("name") or "")
-                                   .encode("ascii", "ignore").decode().lower()))
+        if not isinstance(items, list):
+            items = []
+    except Exception as exc:
+        result["warnings"].append("A IA não conseguiu interpretar as ofertas do site: " + str(exc)[:160])
+        return result
+
+    company_words = set(re.findall(r"[a-z0-9]+", _catalog_fold(company.get("name") or "")))
     generic_words = {
         "plano", "planos", "servico", "servicos", "produto", "produtos", "oferta", "ofertas",
-        "internet", "telecom", "telecomunicacoes", "fibra", "da", "de", "do", "para", "com",
+        "internet", "telecom", "telecomunicacoes", "fibra", "optica", "banda", "larga",
+        "conexao", "conectividade", "da", "de", "do", "para", "com",
+    }
+    state_words = {
+        "ac", "al", "ap", "am", "ba", "ce", "df", "es", "go", "ma", "mt", "ms", "mg",
+        "pa", "pb", "pr", "pe", "pi", "rj", "rn", "rs", "ro", "rr", "sc", "sp", "se", "to",
     }
 
     def _offer_key(name: str) -> str:
-        clean = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+        clean = _catalog_fold(name)
+        clean = re.sub(r"(\d)\s*(?:mb|mbps|megabits?)\b", r"\1 mega", clean)
+        clean = re.sub(r"(\d)\s*(?:gb|gbps|gigabits?)\b", r"\1 giga", clean)
         words = [word for word in re.findall(r"[a-z0-9]+", clean)
-                 if word not in company_words and word not in generic_words]
-        # Numbers distinguish real speed tiers (500 mega vs 700 mega); an empty key represents
-        # a generic restatement of the company, which must not be duplicated on every refresh.
+                 if word not in company_words and word not in generic_words and word not in state_words]
         return "|".join(sorted(set(words))) or "__generic_company_offer__"
 
     existing_products = product_list(company_id) or []
     existing_names = {(p.get("name") or "").strip().lower() for p in existing_products}
     existing_keys = {_offer_key(p.get("name") or "") for p in existing_products}
-    added = 0
-    for it in items[:12]:
-        nm = (it.get("name") or "").strip()
-        offer_key = _offer_key(nm)
-        if not nm or nm.lower() in existing_names or offer_key in existing_keys:
+    known_sources = {url.rstrip("/"): url for url in result["source_pages"]}
+    rejected_without_source = 0
+    for item in items[:12]:
+        if not isinstance(item, dict):
             continue
-        _fns = [str(f).strip() for f in (it.get("functions") or []) if str(f).strip()][:8]
-        if (it.get("price") or "").strip():
-            _fns.append("Preço: " + it["price"].strip())
-        product_create(company_id, {"name": nm, "description": (it.get("description") or "").strip(),
-                                    "objective": (it.get("objective") or "").strip(), "functions": _fns})
-        existing_names.add(nm.lower())
+        raw_name = str(item.get("name") or "").strip()
+        location = str(item.get("location") or "").strip()[:80]
+        requested_source = str(item.get("source_url") or "").strip().rstrip("/")
+        source_url = known_sources.get(requested_source, "")
+        if not source_url and location:
+            location_key = re.sub(r"[^a-z0-9]", "", _catalog_fold(location))
+            matching_sources = [url for key, url in known_sources.items()
+                                if location_key and location_key in re.sub(
+                                    r"[^a-z0-9]", "", _catalog_fold((source_context.get(key) or {}).get("label") or "")
+                                )]
+            if len(matching_sources) == 1:
+                source_url = matching_sources[0]
+        if not source_url and len(known_sources) == 1:
+            source_url = next(iter(known_sources.values()))
+        if not source_url:
+            rejected_without_source += 1
+            continue
+        source_page = source_context.get(source_url.rstrip("/")) if source_url else None
+        if not location and source_page and source_page.get("is_location"):
+            location = str(source_page.get("label") or "").strip()[:80]
+        name = raw_name
+        if location and _catalog_fold(location) not in _catalog_fold(name):
+            name = f"{name} — {location}" if name else location
+        offer_key = _offer_key(name)
+        # Reject the exact failure mode seen in Rio: company/profile summaries posing as products.
+        if not name or _offer_key(raw_name) == "__generic_company_offer__":
+            continue
+        result["found"] += 1
+        if name.lower() in existing_names or offer_key in existing_keys:
+            continue
+        raw_functions = item.get("functions") or []
+        if isinstance(raw_functions, str):
+            raw_functions = [raw_functions]
+        functions = [str(value).strip() for value in raw_functions if str(value).strip()][:8]
+        price = str(item.get("price") or "").strip()
+        if price and not any(price.lower() in value.lower() for value in functions):
+            functions.append("Preço: " + price)
+        if location and not any(location.lower() in value.lower() for value in functions):
+            functions.append("Disponibilidade: " + location)
+        product_create(company_id, {
+            "name": name[:180],
+            "description": str(item.get("description") or "").strip(),
+            "objective": str(item.get("objective") or "").strip(),
+            "functions": functions[:10],
+            "website": source_url or None,
+        })
+        existing_names.add(name.lower())
         existing_keys.add(offer_key)
-        added += 1
-    return added
+        result["added"] += 1
+
+    if rejected_without_source:
+        result["warnings"].append(
+            f"{rejected_without_source} item(ns) sem página oficial identificável foram ignorados."
+        )
+    if not result["found"]:
+        result["warnings"].append("A leitura terminou, mas nenhuma oferta específica e verificável foi identificada.")
+    return result
 
 
 def _ig_fetch_brand(company_id: str, instagram: str) -> Dict[str, int]:
@@ -1379,9 +1917,23 @@ def _run_company_enrichment(
         logos_added=logos_added, logos_total=len(after_logos), warnings=warnings,
     )
     products_added = 0
+    products_found = 0
+    product_pages_scanned = 0
     if website:
         try:
-            products_added = _auto_extract_products(company_id, website)
+            product_result = _auto_extract_products(company_id, website)
+            if isinstance(product_result, dict):
+                products_added = int(product_result.get("added") or 0)
+                products_found = int(product_result.get("found") or 0)
+                product_pages_scanned = int(product_result.get("pages_scanned") or 0)
+                for product_warning in product_result.get("warnings") or []:
+                    warning = "Produtos e serviços: " + str(product_warning)[:220]
+                    if warning not in warnings:
+                        warnings.append(warning)
+            else:
+                # Compatibility with older mocks/extensions that returned only the added count.
+                products_added = int(product_result or 0)
+                products_found = products_added
         except Exception as exc:
             warnings.append("Produtos e serviços: " + str(exc)[:180])
 
@@ -1443,13 +1995,16 @@ def _run_company_enrichment(
         logos_total=len(after_logos),
         colors_found=len(final_colors),
         products_added=products_added,
+        products_found=products_found,
+        product_pages_scanned=product_pages_scanned,
         palette_preserved=bool(palette_is_manual and not replace_manual),
         warnings=warnings,
         error="",
     )
     return {
         "company": company_get(company_id), "extracted": data,
-        "products_added": products_added, "instagram": instagram_stats,
+        "products_added": products_added, "products_found": products_found,
+        "product_pages_scanned": product_pages_scanned, "instagram": instagram_stats,
         "facebook_logo": facebook_logo, "logos_added": logos_added,
         "logos_total": len(after_logos), "colors": final_colors,
         "warnings": warnings, "enrichment": final_status,

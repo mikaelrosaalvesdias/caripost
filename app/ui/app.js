@@ -534,6 +534,15 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.115', date: '2026-08-07',
+    items: [
+      { type: 'fix', text: 'Produtos: a importação segue somente páginas oficiais e ignora CSS, scripts, CDNs e links externos.' },
+      { type: 'fix', text: 'Provedores com seletor de cidade agora têm seus planos, velocidades, preços e benefícios identificados por localidade.' },
+      { type: 'fix', text: 'Produtos importados passam a salvar objetivo, benefícios, preço e página oficial, sem perder os detalhes retornados pela IA.' },
+      { type: 'fix', text: 'A tela atualiza os produtos ao terminar a importação e mostra ofertas encontradas, novas e páginas verificadas.' },
+    ],
+  },
+  {
     version: 'v1.27.114', date: '2026-08-06',
     items: [
       { type: 'feat', text: 'Clientes: envie quantas logos precisar, mantenha as variantes e escolha explicitamente qual é a principal.' },
