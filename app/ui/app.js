@@ -534,6 +534,13 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.116', date: '2026-08-07',
+    items: [
+      { type: 'fix', text: 'Produtos importados não repetem a cidade no nome quando a fonte já informa a mesma localidade com ou sem UF.' },
+      { type: 'fix', text: 'Rio Cable validada em produção com 8 ofertas reais, preços, benefícios, localidade e página oficial.' },
+    ],
+  },
+  {
     version: 'v1.27.115', date: '2026-08-07',
     items: [
       { type: 'fix', text: 'Produtos: a importação segue somente páginas oficiais e ignora CSS, scripts, CDNs e links externos.' },

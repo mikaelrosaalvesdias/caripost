@@ -342,6 +342,17 @@ class LogoCandidateTests(unittest.TestCase):
 
 
 class ProductCatalogExtractionTests(unittest.TestCase):
+    def test_catalog_name_location_ignores_state_suffix_and_punctuation(self):
+        self.assertTrue(companies._catalog_name_has_location(
+            "700 Mega + Streaming – Cordeiro", "Cordeiro-RJ",
+        ))
+        self.assertTrue(companies._catalog_name_has_location(
+            "Plano São Gonçalo, RJ", "São Gonçalo / RJ",
+        ))
+        self.assertFalse(companies._catalog_name_has_location(
+            "700 Mega + Streaming", "Cordeiro-RJ",
+        ))
+
     def test_catalog_http_rejects_private_redirect_before_requesting_it(self):
         calls = []
 
@@ -455,7 +466,7 @@ class ProductCatalogExtractionTests(unittest.TestCase):
                 "price": "R$ 89,90/mês", "location": "", "source_url": city_url,
             },
             {
-                "name": "700 Mega", "description": "Internet de 700 Mega com TV.",
+                "name": "700 Mega + Streaming – Cordeiro", "description": "Internet de 700 Mega com TV.",
                 "objective": "Vender conectividade e entretenimento.", "functions": ["700 Mbps", "TV digital"],
                 "price": "R$ 159,90/mês", "location": "Cordeiro-RJ", "source_url": city_url,
             },
@@ -468,7 +479,7 @@ class ProductCatalogExtractionTests(unittest.TestCase):
                 "price": "R$ 89,90/mês", "location": "Cordeiro", "source_url": "",
             },
             {
-                "name": "700 Mbps", "description": "Internet de 700 Mega com TV.",
+                "name": "700 Mbps + Streaming - Cordeiro", "description": "Internet de 700 Mega com TV.",
                 "objective": "Vender conectividade e entretenimento.", "functions": ["700 Mbps", "TV digital"],
                 "price": "R$ 159,90/mês", "location": "Cordeiro", "source_url": city_url,
             },
@@ -505,7 +516,10 @@ class ProductCatalogExtractionTests(unittest.TestCase):
         self.assertEqual(first["added"], 2)
         self.assertEqual(second["found"], 2)
         self.assertEqual(second["added"], 0)
-        self.assertEqual([item["name"] for item in stored], ["400 Mega — Cordeiro-RJ", "700 Mega — Cordeiro-RJ"])
+        self.assertEqual(
+            [item["name"] for item in stored],
+            ["400 Mega — Cordeiro-RJ", "700 Mega + Streaming – Cordeiro"],
+        )
         self.assertIn("Preço: R$ 89,90/mês", stored[0]["functions"])
         self.assertEqual(stored[0]["website"], city_url)
 

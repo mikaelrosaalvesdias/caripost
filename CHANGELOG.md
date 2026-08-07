@@ -2,6 +2,12 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.116 - 2026-08-07
+
+- **fix(clientes): localidade sem repeticao nos produtos importados.** Nomes que ja trazem a cidade deixam de receber novamente a mesma localidade apenas porque a fonte acrescentou a UF, mantendo a deduplicacao entre importacoes.
+- Validacao: 36 testes Python e conferencia dos 8 produtos reais importados para a Rio Cable nas fontes oficiais de Cantagalo, Cordeiro e Corrego da Prata.
+- Versao: main.py/UI/OS 1.27.116, cache bust `app.js?v=127116` e OS `v=127116`.
+
 ## v1.27.115 - 2026-08-07
 
 - **fix(clientes): catalogo real em sites com portais por cidade.** O crawler usa links e seletores oficiais, inclusive dados JSON de Wix, prioriza a cidade cadastrada e mantem localidade quando os precos variam. A Rio Cable passa a fornecer as paginas de Cantagalo, Cordeiro e Corrego da Prata em vez da home institucional.

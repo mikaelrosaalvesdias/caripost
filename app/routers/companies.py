@@ -809,11 +809,29 @@ _BRAZIL_STATE_LABEL = re.compile(
     r"(?:^|[-,\s])(?:AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\s*$",
     re.I,
 )
+_BRAZIL_STATE_CODES = frozenset(
+    "ac al ap am ba ce df es go ma mt ms mg pa pb pr pe pi rj rn rs ro rr sc sp se to".split()
+)
 _CATALOG_MIN_SCORE = 5
 
 
 def _catalog_fold(value: str) -> str:
     return unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode().lower()
+
+
+def _catalog_name_has_location(name: str, location: str) -> bool:
+    name_words = re.findall(r"[a-z0-9]+", _catalog_fold(name))
+    location_words = re.findall(r"[a-z0-9]+", _catalog_fold(location))
+    if not name_words or not location_words:
+        return False
+    candidates = [location_words]
+    if len(location_words) > 1 and location_words[-1] in _BRAZIL_STATE_CODES:
+        candidates.append(location_words[:-1])
+    return any(
+        name_words[index:index + len(candidate)] == candidate
+        for candidate in candidates
+        for index in range(len(name_words) - len(candidate) + 1)
+    )
 
 
 class _CatalogLinkParser(HTMLParser):
@@ -1324,10 +1342,7 @@ def _auto_extract_products(company_id: str, website: str) -> Dict[str, Any]:
         "internet", "telecom", "telecomunicacoes", "fibra", "optica", "banda", "larga",
         "conexao", "conectividade", "da", "de", "do", "para", "com",
     }
-    state_words = {
-        "ac", "al", "ap", "am", "ba", "ce", "df", "es", "go", "ma", "mt", "ms", "mg",
-        "pa", "pb", "pr", "pe", "pi", "rj", "rn", "rs", "ro", "rr", "sc", "sp", "se", "to",
-    }
+    state_words = _BRAZIL_STATE_CODES
 
     def _offer_key(name: str) -> str:
         clean = _catalog_fold(name)
@@ -1366,7 +1381,7 @@ def _auto_extract_products(company_id: str, website: str) -> Dict[str, Any]:
         if not location and source_page and source_page.get("is_location"):
             location = str(source_page.get("label") or "").strip()[:80]
         name = raw_name
-        if location and _catalog_fold(location) not in _catalog_fold(name):
+        if location and not _catalog_name_has_location(name, location):
             name = f"{name} — {location}" if name else location
         offer_key = _offer_key(name)
         # Reject the exact failure mode seen in Rio: company/profile summaries posing as products.
