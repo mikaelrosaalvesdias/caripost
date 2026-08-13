@@ -300,7 +300,7 @@ class ComposioSocialProvider:
             for i, mu in enumerate(media_urls, 1):
                 u = mu
                 if not _is_publicly_accessible_url(u):
-                    u = await _rehost_media(u, False)
+                    u = await _rehost_media(u, False, post.get("brand_id"))
                     if not u:
                         raise SocialProviderError(
                             f"Não consegui hospedar a imagem {i}/{len(media_urls)} do carrossel em URL pública.",
@@ -325,7 +325,7 @@ class ComposioSocialProvider:
         # Re-hostear imagem em URL pública se necessário (Instagram não busca de URLs internas)
         if not _is_publicly_accessible_url(media_url):
             log.info("[composio/instagram] re-hosteando mídia: %s", media_url)
-            media_url = await _rehost_media(media_url, is_video)
+            media_url = await _rehost_media(media_url, is_video, post.get("brand_id"))
             if not media_url:
                 raise SocialProviderError(
                     "Não foi possível publicar a imagem em URL pública acessível pelo Instagram. "
@@ -426,7 +426,7 @@ class ComposioSocialProvider:
             await asyncio.sleep(5)   # delay p/ o feed ASSENTAR antes de republicar no story (evita corrida)
             cover = (meta.get("story_url") or "").strip() or media_urls[0]   # 9:16 bonito; senão a capa
             if not _is_publicly_accessible_url(cover):
-                cover = await _rehost_media(cover, False)
+                cover = await _rehost_media(cover, False, post.get("brand_id"))
             if not cover:
                 log.warning("[composio/instagram] story-repost: sem URL pública — pulando")
                 return
@@ -517,6 +517,447 @@ class ComposioSocialProvider:
             log.warning("[composio/instagram] não foi possível obter ig_user_id: %s", exc)
 
         return "me"
+
+    async def discover_instagram_business(
+        self,
+        *,
+        handle: str,
+        connection: Dict[str, Any],
+        media_limit: int = 6,
+    ) -> Dict[str, Any]:
+        """Read an eligible public Business/Creator profile through Meta's official API.
+
+        The authorization belongs to the agency's research account, never to the
+        prospect being researched. Business Discovery is not currently exposed as
+        a dedicated Composio Instagram tool, so Proxy Execute is used while
+        Composio continues to inject and refresh the connected account credential.
+        """
+        clean_handle = str(handle or "").strip().lstrip("@").split("?", 1)[0].strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", clean_handle):
+            raise SocialProviderError("Perfil do Instagram inválido para pesquisa.", status_code=422)
+        composio_conn_id = str(connection.get("composio_connection_id") or "").strip()
+        if not composio_conn_id:
+            raise SocialProviderError("A conta de pesquisa do Instagram não está conectada.", status_code=422)
+        user_id = str(connection.get("user_id") or "").strip() or "api"
+        facebook_version = (
+            os.environ.get("COMPOSIO_FACEBOOK_TOOLKIT_VERSION") or "20260721_00"
+        ).strip()
+        managed_response = await self._request(
+            "POST", "/tools/execute/FACEBOOK_LIST_MANAGED_PAGES",
+            json={
+                "connected_account_id": composio_conn_id,
+                "user_id": user_id,
+                "version": facebook_version,
+                "arguments": {
+                    "user_id": "me", "limit": 100,
+                    "fields": (
+                        "id,name,username,link,instagram_business_account"
+                        "{id,username,name,profile_picture_url}"
+                    ),
+                },
+                "allow_tracing": False,
+            },
+        )
+        if managed_response.get("successful") is False:
+            raise SocialProviderError(
+                self._extract_error(managed_response) or "Não foi possível validar a conta Meta de pesquisa.",
+                status_code=502,
+                detail={"reason": "research_connection_unavailable"},
+            )
+        managed_payload = (managed_response.get("data")
+                           if isinstance(managed_response.get("data"), dict) else managed_response)
+        managed_pages = managed_payload.get("data") if isinstance(managed_payload.get("data"), list) else []
+        candidates = []
+        for page in managed_pages:
+            instagram_account = page.get("instagram_business_account") if isinstance(page, dict) else None
+            if isinstance(instagram_account, dict) and instagram_account.get("id"):
+                candidates.append((page, instagram_account))
+        metadata = connection.get("metadata") if isinstance(connection.get("metadata"), dict) else {}
+        expected_page_id = str(
+            metadata.get("facebook_page_id") or metadata.get("research_page_id") or ""
+        ).strip()
+        if expected_page_id:
+            candidates = [item for item in candidates if str(item[0].get("id") or "") == expected_page_id]
+        if len(candidates) != 1:
+            reason = "research_page_selection_required" if candidates else "research_instagram_account_missing"
+            raise SocialProviderError(
+                "Selecione uma única Página da CARIAP com Instagram profissional vinculado para a pesquisa.",
+                status_code=422,
+                detail={"reason": reason, "eligible_pages": len(candidates)},
+            )
+        ig_user_id = str(candidates[0][1]["id"])
+        media_limit = max(1, min(int(media_limit or 6), 12))
+        fields = (
+            f"business_discovery.username({clean_handle})"
+            "{id,username,name,biography,website,profile_picture_url,followers_count,media_count,"
+            f"media.limit({media_limit})"
+            "{id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp}}"
+        )
+        graph_version = (os.environ.get("META_GRAPH_VERSION") or "v23.0").strip().lstrip("/")
+        payload = {
+            "connected_account_id": composio_conn_id,
+            # Business Discovery belongs to the Facebook Login Graph host. A relative
+            # endpoint keeps Composio's same-domain proxy guard intact.
+            "endpoint": f"/{graph_version}/{ig_user_id}",
+            "method": "GET",
+            "parameters": [{"name": "fields", "value": fields, "in": "query"}],
+        }
+        response = await self._request("POST", "/tools/execute/proxy", json=payload)
+        status = int(response.get("status") or 200)
+        raw = response.get("data") if isinstance(response.get("data"), dict) else response
+        if status >= 400:
+            raise SocialProviderError(
+                self._extract_error(raw) or f"Meta retornou HTTP {status} na pesquisa do perfil.",
+                status_code=502,
+                detail={"meta_status": status},
+            )
+        profile = raw.get("business_discovery") if isinstance(raw, dict) else None
+        if not isinstance(profile, dict) or not profile.get("id"):
+            raise SocialProviderError(
+                "A Meta não disponibilizou este perfil para pesquisa oficial. "
+                "Somente contas públicas Business/Creator elegíveis são suportadas.",
+                status_code=422,
+                detail={"reason": "unsupported_or_not_found"},
+            )
+        media = profile.get("media") if isinstance(profile.get("media"), dict) else {}
+        items = media.get("data") if isinstance(media.get("data"), list) else []
+        return {
+            "id": str(profile.get("id")),
+            "username": str(profile.get("username") or clean_handle),
+            "name": str(profile.get("name") or ""),
+            "biography": str(profile.get("biography") or ""),
+            "website": str(profile.get("website") or ""),
+            "profile_picture_url": str(profile.get("profile_picture_url") or ""),
+            "followers_count": profile.get("followers_count"),
+            "media_count": profile.get("media_count"),
+            "media": [item for item in items if isinstance(item, dict)][:media_limit],
+        }
+
+    async def get_owned_instagram_profile_media(
+        self,
+        *,
+        connection: Dict[str, Any],
+        media_limit: int = 6,
+    ) -> Dict[str, Any]:
+        """Read the profile and recent media belonging to a connected brand account."""
+        composio_conn_id = str(connection.get("composio_connection_id") or "").strip()
+        if not composio_conn_id:
+            raise SocialProviderError("A conta do Instagram não está conectada.", status_code=422)
+        user_id = str(connection.get("user_id") or "").strip() or "api"
+        toolkit_version = (
+            os.environ.get("COMPOSIO_INSTAGRAM_TOOLKIT_VERSION") or "20260730_00"
+        ).strip()
+        common = {
+            "connected_account_id": composio_conn_id,
+            "user_id": user_id,
+            "version": toolkit_version,
+            "allow_tracing": False,
+        }
+        profile_response = await self._request(
+            "POST", "/tools/execute/INSTAGRAM_GET_USER_INFO",
+            json={**common, "arguments": {"ig_user_id": "me"}},
+        )
+        if profile_response.get("successful") is False:
+            raise SocialProviderError(
+                self._extract_error(profile_response) or "Não foi possível ler o perfil conectado.",
+                status_code=502,
+            )
+        profile = profile_response.get("data") if isinstance(profile_response.get("data"), dict) else profile_response
+        # Some tools wrap the upstream body one more time.
+        if isinstance(profile.get("data"), dict) and not profile.get("id"):
+            profile = profile["data"]
+        ig_user_id = str(profile.get("id") or profile.get("ig_user_id") or "me")
+        media_limit = max(1, min(int(media_limit or 6), 12))
+        fields = (
+            "id,caption,media_type,media_product_type,media_url,thumbnail_url,"
+            "permalink,timestamp,username,children{media_url,media_type,thumbnail_url}"
+        )
+        media_response = await self._request(
+            "POST", "/tools/execute/INSTAGRAM_GET_IG_USER_MEDIA",
+            json={**common, "arguments": {
+                "ig_user_id": ig_user_id, "limit": media_limit, "fields": fields,
+            }},
+        )
+        if media_response.get("successful") is False:
+            raise SocialProviderError(
+                self._extract_error(media_response) or "Não foi possível ler as mídias da conta conectada.",
+                status_code=502,
+            )
+        media_payload = media_response.get("data") if isinstance(media_response.get("data"), dict) else media_response
+        if isinstance(media_payload.get("data"), dict) and isinstance(media_payload["data"].get("data"), list):
+            media_payload = media_payload["data"]
+        media_items = media_payload.get("data") if isinstance(media_payload.get("data"), list) else []
+        return {
+            "id": ig_user_id,
+            "username": str(profile.get("username") or ""),
+            "name": str(profile.get("name") or ""),
+            "biography": str(profile.get("biography") or ""),
+            "website": str(profile.get("website") or ""),
+            "profile_picture_url": str(profile.get("profile_picture_url") or ""),
+            "followers_count": profile.get("followers_count"),
+            "media_count": profile.get("media_count"),
+            "account_type": profile.get("account_type"),
+            "media": [item for item in media_items if isinstance(item, dict)][:media_limit],
+        }
+
+    async def test_connection(
+        self,
+        *,
+        platform: str,
+        connection: Dict[str, Any],
+        selected_page_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute a harmless official tool instead of trusting OAuth status alone."""
+        platform = str(platform or "").strip().lower()
+        if platform == "instagram":
+            profile = await self.get_owned_instagram_profile_media(
+                connection=connection,
+                media_limit=1,
+            )
+            return {
+                "platform": platform,
+                "tool_tested": True,
+                "account": {
+                    key: profile.get(key)
+                    for key in ("id", "username", "name", "account_type", "media_count")
+                    if profile.get(key) is not None
+                },
+            }
+
+        if platform == "facebook":
+            composio_conn_id = str(connection.get("composio_connection_id") or "").strip()
+            if not composio_conn_id:
+                raise SocialProviderError("A conta Facebook não está conectada.", status_code=422)
+            user_id = str(connection.get("user_id") or "").strip() or "api"
+            version = (os.environ.get("COMPOSIO_FACEBOOK_TOOLKIT_VERSION") or "20260721_00").strip()
+            response = await self._request(
+                "POST", "/tools/execute/FACEBOOK_LIST_MANAGED_PAGES",
+                json={
+                    "connected_account_id": composio_conn_id,
+                    "user_id": user_id,
+                    "version": version,
+                    "arguments": {
+                        "user_id": "me",
+                        "limit": 100,
+                        "fields": (
+                            "id,name,username,link,category,is_published,"
+                            "instagram_business_account{id,username,name}"
+                        ),
+                    },
+                    "allow_tracing": False,
+                },
+            )
+            if response.get("successful") is False:
+                raise SocialProviderError(
+                    self._extract_error(response) or "O Facebook não liberou as Páginas gerenciadas.",
+                    status_code=422,
+                    detail={"reason": "facebook_permission_missing"},
+                )
+            payload = response.get("data") if isinstance(response.get("data"), dict) else response
+            if isinstance(payload.get("data"), dict):
+                payload = payload["data"]
+            raw_pages = payload.get("data") if isinstance(payload.get("data"), list) else []
+            pages = []
+            for raw in raw_pages:
+                if not isinstance(raw, dict) or not raw.get("id"):
+                    continue
+                linked_ig = raw.get("instagram_business_account")
+                pages.append({
+                    "id": str(raw.get("id")),
+                    "name": str(raw.get("name") or ""),
+                    "username": str(raw.get("username") or ""),
+                    "link": str(raw.get("link") or ""),
+                    "category": str(raw.get("category") or ""),
+                    "instagram_business_account": {
+                        key: linked_ig.get(key)
+                        for key in ("id", "username", "name")
+                        if isinstance(linked_ig, dict) and linked_ig.get(key) is not None
+                    },
+                })
+            if not pages:
+                raise SocialProviderError(
+                    "Esta conta Facebook não administra nenhuma Página disponível para a Caripost.",
+                    status_code=422,
+                    detail={"reason": "facebook_managed_page_missing"},
+                )
+            requested = str(selected_page_id or "").strip()
+            if requested and requested not in {page["id"] for page in pages}:
+                raise SocialProviderError(
+                    "A Página selecionada não pertence a esta conexão Facebook.",
+                    status_code=422,
+                    detail={"reason": "facebook_page_not_managed"},
+                )
+            chosen_id = requested or (pages[0]["id"] if len(pages) == 1 else "")
+            chosen = next((page for page in pages if page["id"] == chosen_id), None)
+            return {
+                "platform": platform,
+                "tool_tested": True,
+                "managed_pages": pages,
+                "selected_page": chosen,
+                "selection_required": len(pages) > 1 and not chosen,
+            }
+
+        return {"platform": platform, "tool_tested": False}
+
+    async def discover_facebook_page(
+        self,
+        *,
+        company_name: str,
+        facebook: str,
+        website: str,
+        connection: Dict[str, Any],
+        photo_limit: int = 6,
+    ) -> Dict[str, Any]:
+        """Resolve an eligible public Page with official Facebook tools.
+
+        The connected account belongs to CARIAP. Matching is conservative so a
+        similarly named Page can never silently become the prospect's identity.
+        """
+        from urllib.parse import urlparse
+
+        composio_conn_id = str(connection.get("composio_connection_id") or "").strip()
+        if not composio_conn_id:
+            raise SocialProviderError("A conta Facebook de pesquisa não está conectada.", status_code=422)
+        user_id = str(connection.get("user_id") or "").strip() or "api"
+        version = (os.environ.get("COMPOSIO_FACEBOOK_TOOLKIT_VERSION") or "20260721_00").strip()
+        raw_page = str(facebook or "").strip()
+        parsed_page = urlparse(raw_page if "://" in raw_page else "https://facebook.com/" + raw_page.lstrip("@/"))
+        expected_handle = (parsed_page.path or "").strip("/").split("/", 1)[0].lower()
+        if expected_handle in {"pages", "profile.php", "people"}:
+            expected_handle = ""
+
+        def _key(value: Any) -> str:
+            import unicodedata
+            normalized = unicodedata.normalize("NFKD", str(value or ""))
+            return re.sub(r"[^a-z0-9]+", "", normalized.encode("ascii", "ignore").decode().lower())
+
+        query = str(company_name or expected_handle or "").strip()
+        if not query:
+            raise SocialProviderError("Nome ou URL da Página Facebook ausente.", status_code=422)
+        common = {
+            "connected_account_id": composio_conn_id,
+            "user_id": user_id,
+            "version": version,
+            "allow_tracing": False,
+        }
+        search_response = await self._request(
+            "POST", "/tools/execute/FACEBOOK_SEARCH_PAGES",
+            json={**common, "arguments": {
+                "query": query, "limit": 20,
+                "fields": (
+                    "id,name,category,link,picture,cover,fan_count,is_verified,"
+                    "website,about,description,location"
+                ),
+            }},
+        )
+        if search_response.get("successful") is False:
+            raise SocialProviderError(
+                self._extract_error(search_response) or "A pesquisa oficial de Páginas não está disponível.",
+                status_code=502,
+                detail={"reason": "facebook_search_unavailable"},
+            )
+        search_payload = (search_response.get("data")
+                          if isinstance(search_response.get("data"), dict) else search_response)
+        pages = search_payload.get("data") if isinstance(search_payload.get("data"), list) else []
+        company_key = _key(company_name)
+        website_host = urlparse(
+            website if "://" in str(website or "") else "https://" + str(website or "")
+        ).netloc.lower().removeprefix("www.")
+        ranked = []
+        for page in pages:
+            if not isinstance(page, dict) or not page.get("id"):
+                continue
+            name_key = _key(page.get("name"))
+            link_path = urlparse(str(page.get("link") or "")).path.strip("/").split("/", 1)[0].lower()
+            page_host = urlparse(str(page.get("website") or "")).netloc.lower().removeprefix("www.")
+            score = 0
+            if expected_handle and link_path == expected_handle:
+                score += 120
+            if company_key and name_key == company_key:
+                score += 80
+            elif company_key and (company_key in name_key or name_key in company_key):
+                score += 35
+            if website_host and page_host and (website_host == page_host or website_host.endswith("." + page_host)):
+                score += 70
+            if page.get("is_verified"):
+                score += 5
+            ranked.append((score, page))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        if not ranked or ranked[0][0] < 70:
+            raise SocialProviderError(
+                "Nenhuma Página oficial correspondeu com segurança ao nome, URL ou domínio da empresa.",
+                status_code=422,
+                detail={"reason": "facebook_page_not_found"},
+            )
+        if len(ranked) > 1 and ranked[1][0] == ranked[0][0]:
+            raise SocialProviderError(
+                "Há mais de uma Página compatível; confirme a URL exata antes de importar.",
+                status_code=422,
+                detail={"reason": "facebook_page_ambiguous"},
+            )
+        selected = ranked[0][1]
+        page_id = str(selected["id"])
+        detail_response = await self._request(
+            "POST", "/tools/execute/FACEBOOK_GET_PAGE_DETAILS",
+            json={**common, "arguments": {
+                "page_id": page_id,
+                "fields": (
+                    "id,name,about,category,description,fan_count,followers_count,website,"
+                    "link,username,is_published,emails,phone,location,cover,picture"
+                ),
+            }},
+        )
+        details = (detail_response.get("data")
+                   if isinstance(detail_response.get("data"), dict) else {})
+        if detail_response.get("successful") is False:
+            details = selected
+        photo_limit = max(1, min(int(photo_limit or 6), 12))
+        photos = []
+        try:
+            photos_response = await self._request(
+                "POST", "/tools/execute/FACEBOOK_GET_PAGE_PHOTOS",
+                json={**common, "arguments": {
+                    "page_id": page_id, "type": "uploaded", "limit": photo_limit + 6,
+                    "fields": "id,created_time,name,images,height,width,picture,link,album,from",
+                }},
+            )
+            photos_payload = (photos_response.get("data")
+                              if isinstance(photos_response.get("data"), dict) else {})
+            raw_photos = photos_payload.get("data") if isinstance(photos_payload.get("data"), list) else []
+            for photo in raw_photos:
+                if not isinstance(photo, dict) or not photo.get("id"):
+                    continue
+                author = photo.get("from") if isinstance(photo.get("from"), dict) else {}
+                album = photo.get("album") if isinstance(photo.get("album"), dict) else {}
+                if author.get("id") and str(author.get("id")) != page_id:
+                    continue
+                if _key(album.get("name")) in {"profilepictures", "coverphotos", "fotosdoperfil", "fotosdacapa"}:
+                    continue
+                versions = [v for v in (photo.get("images") or []) if isinstance(v, dict) and v.get("source")]
+                versions.sort(key=lambda v: int(v.get("width") or 0) * int(v.get("height") or 0), reverse=True)
+                image_url = str((versions[0].get("source") if versions else None) or photo.get("picture") or "")
+                if image_url:
+                    photos.append({**photo, "media_url": image_url})
+                if len(photos) >= photo_limit:
+                    break
+        except SocialProviderError:
+            # Public Page photos require extra Meta review in some projects. Page
+            # identity remains useful and the website/upload fallback stays active.
+            photos = []
+
+        picture = details.get("picture") if isinstance(details.get("picture"), dict) else {}
+        picture_data = picture.get("data") if isinstance(picture.get("data"), dict) else picture
+        cover = details.get("cover") if isinstance(details.get("cover"), dict) else {}
+        return {
+            "id": page_id,
+            "name": str(details.get("name") or selected.get("name") or ""),
+            "link": str(details.get("link") or selected.get("link") or raw_page),
+            "website": str(details.get("website") or selected.get("website") or ""),
+            "about": str(details.get("about") or details.get("description") or ""),
+            "profile_picture_url": str(picture_data.get("url") or ""),
+            "cover_url": str(cover.get("source") or ""),
+            "photos": photos,
+        }
 
     async def get_post_status(self, *, post: Dict[str, Any], channel: Dict[str, Any], connection: Dict[str, Any]) -> Dict[str, Any]:
         platform = channel.get("platform") or connection.get("platform")
@@ -693,9 +1134,12 @@ def _is_publicly_accessible_url(url: str) -> bool:
     """
     from urllib.parse import urlparse
     parsed = urlparse(str(url or ""))
-    if parsed.scheme != "https":
-        return False
-    if parsed.query:
+    try:
+        if parsed.scheme != "https" or parsed.username or parsed.password:
+            return False
+        if parsed.query or parsed.fragment or parsed.port not in (None, 443):
+            return False
+    except ValueError:
         return False
     # Domínios conhecidamente acessíveis pelos crawlers do Meta/Instagram
     trusted = (
@@ -708,38 +1152,91 @@ def _is_publicly_accessible_url(url: str) -> bool:
         "fbcdn.net", "cdninstagram.com",
         "twimg.com", "pinterest.com",
     )
-    host = (parsed.netloc or "").lower()
-    return any(host.endswith(t) or host == t for t in trusted)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return any(host == t or host.endswith("." + t) for t in trusted)
 
 
-async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
+async def _rehost_media(local_url: str, is_video: bool,
+                        allowed_company_id: str) -> Optional[str]:
     """Re-hostea mídia em URL pública (tmpfiles.org) para o Instagram poder buscar.
 
     Os crawlers do Meta/Instagram não conseguem buscar de URLs internas/privadas,
     então a imagem é enviada para tmpfiles.org (upload anônimo, sem auth) e a
     URL pública direta é retornada.
     """
-    import asyncio
     import logging
     log = logging.getLogger("caripost.social")
+    allowed_company_id = str(allowed_company_id or "").strip()
+    if not allowed_company_id:
+        log.error("[rehost] empresa proprietária da mídia não informada")
+        return None
 
     # Resolver o caminho local do arquivo a partir da URL
     upload_prefix = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
     media_root = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
     # Handle full URLs like https://domain.com/uploads/...
-    from urllib.parse import urlparse
+    from urllib.parse import unquote, urlparse
     parsed = urlparse(str(local_url or ""))
-    if parsed.scheme in ("http", "https"):
-        local_url = parsed.path
-    if local_url.startswith(upload_prefix):
-        local_path = os.path.join(media_root, local_url[len(upload_prefix):].lstrip("/"))
-    elif local_url.startswith("/"):
-        local_path = os.path.join(media_root, local_url.lstrip("/"))
-    else:
-        local_path = local_url  # já é um caminho
+    if parsed.netloc and not parsed.scheme:
+        log.error("[rehost] URL sem esquema não é aceita")
+        return None
+    if parsed.scheme:
+        if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
+            log.error("[rehost] origem da URL não é aceita")
+            return None
+        public_base = (_setting_value("render.public_base")
+                       or os.environ.get("RENDER_PUBLIC_BASE")
+                       or "https://caripost.cariap.com.br")
+        expected = urlparse(public_base)
+        try:
+            expected_port = expected.port or (443 if expected.scheme == "https" else 80)
+            parsed_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError:
+            return None
+        if (
+            not expected.hostname
+            or parsed.scheme != expected.scheme
+            or (parsed.hostname or "").lower().rstrip(".")
+            != expected.hostname.lower().rstrip(".")
+            or parsed_port != expected_port
+        ):
+            log.error("[rehost] URL externa não pertence ao host público da Caripost")
+            return None
+    if parsed.query or parsed.fragment:
+        log.error("[rehost] URL com query/fragment não é aceita")
+        return None
+    local_url = unquote(parsed.path or "")
+    if "\\" in local_url or "\x00" in local_url:
+        return None
+    if not local_url.startswith(upload_prefix.rstrip("/") + "/"):
+        log.error("[rehost] URL fora do diretório de uploads")
+        return None
+    relative = local_url[len(upload_prefix.rstrip("/")) + 1:]
+    parts = relative.split("/")
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        log.error("[rehost] caminho de upload não canônico")
+        return None
+    if parts[0] != allowed_company_id:
+        log.error("[rehost] mídia pertence a outra empresa")
+        return None
+    root_path = os.path.realpath(media_root)
+    local_path = os.path.realpath(os.path.join(root_path, *parts))
+    try:
+        if os.path.commonpath((root_path, local_path)) != root_path:
+            log.error("[rehost] caminho fora do diretório de uploads")
+            return None
+    except ValueError:
+        return None
 
     if not os.path.exists(local_path):
         log.error("[rehost] arquivo não encontrado: %s", local_path)
+        return None
+    max_source_bytes = 250 * 1024 * 1024 if is_video else 24 * 1024 * 1024
+    try:
+        if not os.path.isfile(local_path) or os.path.getsize(local_path) > max_source_bytes:
+            log.error("[rehost] arquivo excede o limite permitido")
+            return None
+    except OSError:
         return None
 
     # Converter para JPEG se for imagem (Instagram prefere JPEG sem query params)
@@ -747,7 +1244,11 @@ async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
         import io
         if not is_video:
             from PIL import Image
-            img = Image.open(local_path).convert("RGB")
+            with Image.open(local_path) as source:
+                if source.width * source.height > 40_000_000:
+                    log.error("[rehost] imagem excede o limite de pixels")
+                    return None
+                img = source.convert("RGB")
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=95)
             file_data = buf.getvalue()
@@ -780,8 +1281,13 @@ async def _rehost_media(local_url: str, is_video: bool) -> Optional[str]:
                 return None
             # Converter URL de página para URL direta de download:
             # https://tmpfiles.org/xxx/file.jpg -> https://tmpfiles.org/dl/xxx/file.jpg
-            direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)
-            direct_url = direct_url.replace("http://", "https://")
+            returned = urlparse(str(page_url))
+            if (returned.scheme not in ("http", "https")
+                    or (returned.hostname or "").lower().rstrip(".") != "tmpfiles.org"
+                    or returned.username or returned.password or returned.query or returned.fragment):
+                log.error("[rehost] tmpfiles.org retornou uma origem inesperada")
+                return None
+            direct_url = "https://tmpfiles.org/dl/" + returned.path.lstrip("/")
             log.info("[rehost] mídia hospedada em: %s", direct_url)
             return direct_url
     except Exception as exc:

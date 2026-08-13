@@ -1,5 +1,16 @@
 /* Caripost OS — Clientes, Central de Aprovação, Concorrentes */
 
+const COMPANY_STAGE = {
+  prospect: { label: 'Prospecto', kind: 'cy' },
+  managed: { label: 'Cliente gerenciado', kind: 'good' },
+  internal: { label: 'Empresa interna', kind: 'pri' },
+  lost: { label: 'Não convertido', kind: 'warn' },
+};
+function companyStage(company) {
+  const key = (company && company.lifecycle_stage) || 'managed';
+  return { key, ...(COMPANY_STAGE[key] || COMPANY_STAGE.managed) };
+}
+
 /* ── CLIENTES ── */
 function ClientesApp() {
   const [companies, setCompanies] = React.useState([]);
@@ -7,6 +18,7 @@ function ClientesApp() {
   const [creating, setCreating] = React.useState(false);
   const [selectedId, setSelectedId] = React.useState(null);
   const [loadError, setLoadError] = React.useState('');
+  const [stageFilter, setStageFilter] = React.useState('all');
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -17,13 +29,19 @@ function ClientesApp() {
 
   React.useEffect(() => { if (window.mpApi) load(); }, [load]);
 
+  const visibleCompanies = companies.filter(company => stageFilter === 'all' || companyStage(company).key === stageFilter);
   return <div className="app">
-    <AppHead icon="building" title="Clientes" desc="Empresas com comunicação padronizada e pronta para escala."
-      right={<button className="btn sm pri" onClick={() => { setCreating(c => !c); setSelectedId(null); }}><Icon name="plus" />Novo cliente</button>} />
+    <AppHead icon="building" title="Empresas" desc="Prospecte, converta e opere clientes sem duplicar cadastros."
+      right={<button className="btn sm pri" onClick={() => { setCreating(c => !c); setSelectedId(null); }}><Icon name="plus" />Nova empresa</button>} />
     <div className="grid3">
-      <div className="stat"><div className="sv">{companies.length}</div><div className="sl">Empresas</div></div>
-      <div className="stat"><div className="sv">{companies.filter(c => c.active).length}</div><div className="sl">Ativas</div></div>
+      <div className="stat"><div className="sv">{companies.filter(c => companyStage(c).key === 'prospect').length}</div><div className="sl">Prospectos</div></div>
+      <div className="stat"><div className="sv">{companies.filter(c => ['managed', 'internal'].includes(companyStage(c).key)).length}</div><div className="sl">Gerenciadas/internas</div></div>
       <div className="stat"><div className="sv">{companies.reduce((s, c) => s + (c.post_count || 0), 0)}</div><div className="sl">Posts</div></div>
+    </div>
+
+    <div className="tabbar">
+      {[['all', 'Todas'], ['prospect', 'Prospectos'], ['managed', 'Clientes'], ['internal', 'Internas'], ['lost', 'Não convertidos']].map(([key, label]) =>
+        <button key={key} className={'tabx' + (stageFilter === key ? ' on' : '')} onClick={() => setStageFilter(key)}>{label}</button>)}
     </div>
 
     {creating && <CompanyForm onSaved={company => {
@@ -36,13 +54,13 @@ function ClientesApp() {
     <div className="stack">
       {loading && <div className="hint">Carregando empresas…</div>}
       {loadError && <div className="err">Não foi possível atualizar a lista: {loadError} <button className="btn sm ghost" onClick={load}>Tentar novamente</button></div>}
-      {!loading && !companies.length && <div className="hint">Nenhuma empresa cadastrada.</div>}
-      {companies.map(c => <React.Fragment key={c.id}>
+      {!loading && !visibleCompanies.length && <div className="hint">Nenhuma empresa neste estágio.</div>}
+      {visibleCompanies.map(c => <React.Fragment key={c.id}>
         <div className="litem" style={{ padding: 14, cursor: 'pointer', borderColor: selectedId === c.id ? 'var(--cyan)' : undefined }}
           onClick={() => { setSelectedId(id => id === c.id ? null : c.id); setCreating(false); }}>
           <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(140deg,var(--pri),var(--pri2))', flex: 'none', display: 'grid', placeItems: 'center', fontFamily: 'var(--fh)', fontWeight: 700, fontSize: 18, color: '#fff' }}>{(c.name || '?')[0]}</div>
           <div className="li-main"><b style={{ fontSize: 14 }}>{c.name}</b><small>{c.segment || 'Sem segmento'} · {c.post_count || 0} posts</small></div>
-          <Pill kind={c.active ? 'good' : 'warn'} dot>{c.active ? 'Ativo' : 'Inativo'}</Pill>
+          <Pill kind={companyStage(c).kind} dot>{companyStage(c).label}</Pill>
         </div>
         {selectedId === c.id && <CompanyDetail companyId={c.id} onSaved={load} onDeleted={() => { setSelectedId(null); load(); }} />}
       </React.Fragment>)}
@@ -51,6 +69,7 @@ function ClientesApp() {
 }
 
 function CompanyForm({ onSaved, onCancel }) {
+  const [lifecycleStage, setLifecycleStage] = React.useState('prospect');
   const [name, setName] = React.useState('');
   const [website, setWebsite] = React.useState('');
   const [instagram, setInstagram] = React.useState('');
@@ -71,6 +90,7 @@ function CompanyForm({ onSaved, onCancel }) {
         name: name.trim(), segment: segment || null, website: website.trim() || null,
         social_instagram: instagram.trim() || null, social_facebook: facebook.trim() || null,
         city: city || null, state: state || null, phone: phone || null, email: email || null,
+        lifecycle_stage: lifecycleStage,
       });
       onSaved(company);
     } catch (e) { setError(e.message || 'Erro ao criar empresa.'); }
@@ -79,15 +99,26 @@ function CompanyForm({ onSaved, onCancel }) {
 
   return <div className="panel stack">
     <div className="sec cy"><Icon name="plus" />Cadastrar empresa</div>
-    <div className="hint">Informe a empresa e suas fontes oficiais. O Caripost cria o cadastro, localiza logos, extrai a paleta e abre o resultado para revisão.</div>
+    <div className="hint">Prospectos geram propostas sem conexão social. Conexões e publicação só entram para clientes gerenciados ou empresas internas.</div>
+    <Field label="Como esta empresa será usada?">
+      <div className="grid3">
+        {[
+          ['prospect', 'Prospecto', 'Criar proposta sem login do prospect.'],
+          ['managed', 'Cliente gerenciado', 'Conteúdo, aprovação e conexão para publicar.'],
+          ['internal', 'Empresa interna', 'Operação própria, como a CARIAP.'],
+        ].map(([key, label, detail]) => <button type="button" key={key} className={'btn ' + (lifecycleStage === key ? 'pri' : 'ghost')} onClick={() => setLifecycleStage(key)} style={{ minHeight: 70 }}>
+          <span><b>{label}</b><small style={{ display: 'block', marginTop: 4 }}>{detail}</small></span>
+        </button>)}
+      </div>
+    </Field>
     <div className="split">
       <div className="stack">
         <Field label="Nome *"><input className="inp" value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Rio Cable" /></Field>
         <Field label="Website oficial"><input className="inp" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://empresa.com.br" /></Field>
       </div>
       <div className="stack">
-        <Field label="Instagram oficial"><input className="inp" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@empresa ou URL" /></Field>
-        <Field label="Facebook oficial"><input className="inp" value={facebook} onChange={e => setFacebook(e.target.value)} placeholder="URL da página (opcional)" /></Field>
+        <Field label="Instagram público"><input className="inp" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@empresa ou URL — sem pedir login" /></Field>
+        <Field label="Facebook público"><input className="inp" value={facebook} onChange={e => setFacebook(e.target.value)} placeholder="URL da página (opcional)" /></Field>
       </div>
     </div>
     <details>
@@ -181,12 +212,22 @@ function CompanyEnrichmentPanel({ company, onRefresh, onReview }) {
     {status.state === 'done' && <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
       <span className="hint"><b>{status.logos_total || 0}</b> logo(s)</span>
       <span className="hint"><b>{status.colors_found || 0}</b> cor(es)</span>
+      <span className="hint"><b>{status.references_total || 0}</b> referência(s)</span>
       <span className="hint"><b>{status.products_found ?? status.products_added ?? 0}</b> oferta(s) encontrada(s)</span>
       <span className="hint"><b>{status.products_added || 0}</b> nova(s) cadastrada(s)</span>
       {!!status.product_pages_scanned && <span className="hint"><b>{status.product_pages_scanned}</b> página(s) verificada(s)</span>}
       {status.palette_preserved && (detectedPaletteApplied
         ? <Pill kind="good">Paleta detectada aplicada</Pill>
         : <Pill kind="warn">Paleta manual preservada</Pill>)}
+    </div>}
+    {status.state === 'done' && status.sources && <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+      <Pill kind={(status.sources.website || {}).status === 'added' ? 'good' : ''}>Site: {(status.sources.website || {}).status === 'added' ? 'referências importadas' : 'consultado'}</Pill>
+      {(company.socials || {}).instagram && <Pill kind={(status.sources.instagram || {}).status === 'added' ? 'good' : 'warn'}>
+        Instagram: {(status.sources.instagram || {}).status === 'added' ? 'pesquisa oficial usada' : 'site/upload como alternativa'}
+      </Pill>}
+      {(company.socials || {}).facebook && <Pill kind={(status.sources.facebook || {}).status === 'added' ? 'good' : 'warn'}>
+        Facebook: {(status.sources.facebook || {}).status === 'added' ? 'pesquisa oficial usada' : 'site/upload como alternativa'}
+      </Pill>}
     </div>}
     {!!(status.warnings || []).length && <details>
       <summary className="hint" style={{ cursor: 'pointer' }}>{status.warnings.length} aviso(s) da importação</summary>
@@ -255,9 +296,18 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
     <button className="btn sm pri" onClick={() => load()}><Icon name="refresh" />Tentar novamente</button>
   </div>;
 
-  const tabs = [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo'], ['acesso', 'Acesso & Funções']];
+  const stage = companyStage(company);
+  const prospectMode = stage.key === 'prospect' || stage.key === 'lost';
+  const tabs = prospectMode
+    ? [['fluxo', 'Proposta'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['voz', 'Voz & Persona'], ['criacao', 'Criação & Prompts'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']]
+    : [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo'], ['acesso', 'Acesso & Funções']];
 
   return <div className="panel stack">
+    <CompanyLifecycleBanner company={company} onSaved={async () => {
+      const refreshed = await load(true);
+      if (onSaved) await onSaved(true);
+      return refreshed;
+    }} />
     <CompanyEnrichmentPanel company={company} onRefresh={load} onReview={() => setTab('visual')} />
     {refreshError && <div className="err">{refreshError}</div>}
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -266,19 +316,93 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
       </div>
       <button className="btn sm ghost" onClick={delCompany} title="Excluir empresa"><Icon name="trash" />Excluir empresa</button>
     </div>
-    {tab === 'fluxo' && <CompanyFluxo company={company} onSaved={load} />}
-    {tab === 'acesso' && <CompanyAcesso company={company} onSaved={load} />}
+    {tab === 'fluxo' && (prospectMode ? <CompanyProspectFlow company={company} onSaved={load} /> : <CompanyFluxo company={company} onSaved={load} />)}
+    {tab === 'acesso' && !prospectMode && <CompanyAcesso company={company} onSaved={load} />}
     {tab === 'geral' && <CompanyGeral company={company} onSaved={load} />}
     {tab === 'visual' && <CompanyVisual company={company} onSaved={load} />}
     {tab === 'produtos' && <CompanyProdutos company={company} />}
-    {tab === 'influencers' && <CompanyInfluencers company={company} />}
-    {tab === 'events' && <CompanyEvents company={company} />}
+    {tab === 'influencers' && !prospectMode && <CompanyInfluencers company={company} />}
+    {tab === 'events' && !prospectMode && <CompanyEvents company={company} />}
     {tab === 'voz' && <CompanyVoz company={company} onSaved={load} />}
-    {tab === 'video' && <CompanyVideo company={company} />}
+    {tab === 'video' && !prospectMode && <CompanyVideo company={company} />}
     {tab === 'criacao' && <CompanyCriacao company={company} />}
-    {tab === 'conexoes' && <CompanyConexoes company={company} />}
+    {tab === 'conexoes' && !prospectMode && <CompanyConexoes company={company} />}
     {tab === 'concorrentes' && <CompanyConcorrentes company={company} onSaved={load} />}
     {tab === 'gerar' && <CompanyGerar company={company} />}
+  </div>;
+}
+
+function openContentForCompany(company) {
+  window.mpCtx = window.mpCtx || {};
+  window.mpCtx.contentCompanyId = company.id;
+  window.__mpOpen && window.__mpOpen('conteudo');
+}
+
+function CompanyLifecycleBanner({ company, onSaved }) {
+  const stage = companyStage(company);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  async function convert() {
+    if (!window.confirm(`Confirmar que ${company.name} fechou e liberar conexão/publicação?`)) return;
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.convertCompanyToManaged(company.id);
+      setMsg('Cliente convertido sem perder identidade, propostas ou histórico.');
+      await onSaved(true);
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+  async function setStage(next) {
+    setBusy(true); setMsg('');
+    try { await window.mpApi.updateCompany(company.id, { lifecycle_stage: next }); await onSaved(true); }
+    catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="panel stack" style={{ borderColor: stage.key === 'prospect' ? 'var(--cyan)' : undefined }}>
+    <div className="row" style={{ justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div>
+        <div className="row" style={{ gap: 8 }}><Pill kind={stage.kind} dot>{stage.label}</Pill><b>{company.name}</b></div>
+        <div className="hint" style={{ marginTop: 5 }}>
+          {stage.key === 'prospect' ? 'Gera e compartilha propostas sem login da empresa. Redes sociais não são exigidas.' :
+            stage.key === 'lost' ? 'Histórico preservado; nenhuma conexão ou publicação é permitida.' :
+              stage.key === 'internal' ? 'Operação própria: catálogo, conexões e publicação disponíveis.' :
+                'Cliente fechado: conexão e publicação podem ser configuradas quando fizerem parte do contrato.'}
+        </div>
+      </div>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {stage.key === 'prospect' && <button className="btn sm pri" disabled={busy} onClick={convert}><Icon name="check" />Fechou — tornar cliente</button>}
+        {stage.key === 'prospect' && <button className="btn sm ghost" disabled={busy} onClick={() => setStage('lost')}>Marcar não convertido</button>}
+        {stage.key === 'lost' && <button className="btn sm pri" disabled={busy} onClick={() => setStage('prospect')}>Retomar prospecção</button>}
+        {stage.key === 'managed' && <button className="btn sm ghost" disabled={busy} onClick={() => setStage('internal')}>Marcar como interna</button>}
+        {stage.key === 'internal' && <button className="btn sm ghost" disabled={busy} onClick={() => setStage('managed')}>Marcar como cliente</button>}
+      </div>
+    </div>
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+  </div>;
+}
+
+function CompanyProspectFlow({ company }) {
+  const bk = company.brand_kit || {};
+  const references = company.references || [];
+  const approvedReferences = references.filter(ref => {
+    const status = (ref.meta || {}).review_status;
+    return status === 'approved' || (!status && ref.source === 'UPLOADED');
+  });
+  const ready = [
+    ['Identidade da marca-alvo', !!bk.logo_url || Object.keys(bk.colors || {}).length > 0],
+    ['Direção visual aprovada', approvedReferences.length > 0 || !!bk.visual_prompt_base],
+    ['Catálogo da proposta', 'Escolha a empresa vendedora e a oferta no briefing'],
+  ];
+  return <div className="stack">
+    <div className="panel stack" style={{ borderColor: 'var(--cyan)' }}>
+      <div className="sec cy"><Icon name="sparkles" />Proposta comercial</div>
+      <div className="hint">A peça usa <b>{company.name}</b> como marca-alvo e permite escolher, no briefing, a empresa vendedora e o produto do catálogo. Nada será publicado nas redes deste prospecto.</div>
+      {ready.map(([label, ok]) => <div key={label} className="litem" style={{ padding: 9 }}>
+        <div className="li-main"><b>{label}</b></div><Pill kind={ok === true ? 'good' : ok ? 'cy' : 'warn'} dot>{ok === true ? 'disponível' : ok || 'revisar'}</Pill>
+      </div>)}
+      <button className="btn pri" onClick={() => openContentForCompany(company)}><Icon name="image" />Criar arte para impressionar</button>
+    </div>
+    <div className="hint">Depois do fechamento, use “Fechou — tornar cliente”. O mesmo cadastro ganha Conexões, Agenda e Publicação; todas as propostas e referências permanecem.</div>
   </div>;
 }
 
@@ -710,17 +834,19 @@ function ProductCard({ company, product, onChanged }) {
     finally { setBusy(false); }
   }
   async function enrich() {
-    if (!website && !instagram) { setMsg('Informe o site ou o Instagram primeiro.'); return; }
-    setBusy(true); setMsg('Lendo site/Instagram e preenchendo o perfil…');
+    if (!website && !logos.length) { setMsg('Informe o site oficial ou envie uma logo do produto primeiro.'); return; }
+    setBusy(true); setMsg('Lendo evidências do site e da logo…');
     try {
       const r = await window.mpApi.enrichProduct(company.id, product.id, { website, instagram });
       const d = r.extracted || {};
       if (d.description) setDescription(d.description);
       if (d.objective) setObjective(d.objective);
       if (d.functions && d.functions.length) setFunctions(d.functions.join('\n'));
-      const cols = (d.colors && Object.values(d.colors).filter(Boolean).length) ? ' + cores do logo' : '';
-      const note = d.site_text_used ? '' : ' (site não acessível — inferido do nome/IG)';
-      setMsg('✓ Perfil preenchido' + cols + note + '. Revise, tire o que não quiser e salve.');
+      const cols = (d.colors && Object.values(d.colors).filter(Boolean).length) ? ' + cores da logo' : '';
+      setMsg(d.site_text_used
+        ? `✓ Perfil preenchido com o site${cols}. Revise e salve.`
+        : (cols ? '✓ Cores extraídas da logo. Os campos textuais ficaram intactos porque não houve evidência no site.'
+          : 'Nenhum fato verificável foi encontrado; preencha os campos manualmente.'));
       onChanged();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setBusy(false); }
@@ -784,8 +910,8 @@ function ProductCard({ company, product, onChanged }) {
     </div>
     <Field label="Instagram"><input className="inp" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@produto" /></Field>
     <div className="row">
-      <button className="btn sm" disabled={busy} onClick={enrich}><Icon name="sparkles" />{busy ? 'Puxando…' : 'Puxar do site/Instagram'}</button>
-      <small className="hint" style={{ alignSelf: 'center' }}>Preenche descrição, objetivo, funções, cores e à la carte — sem preços.</small>
+      <button className="btn sm" disabled={busy} onClick={enrich}><Icon name="sparkles" />{busy ? 'Puxando…' : 'Puxar do site e logo'}</button>
+      <small className="hint" style={{ alignSelf: 'center' }}>Só preenche fatos encontrados no site e cores reais da logo; campos sem evidência ficam vazios.</small>
     </div>
     <Field label="Descrição (fonte do briefing)"><textarea className="inp" rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="O que é, diferenciais, público, claims…" style={{ resize: 'vertical' }} /></Field>
     <Field label="Objetivo / posicionamento (como a IA deve vender esta oferta)"><textarea className="inp" rows={2} value={objective} onChange={e => setObjective(e.target.value)} placeholder="Ex.: procedimento premium com resultado natural; público que busca autoestima e confiança." style={{ resize: 'vertical' }} /></Field>
@@ -797,7 +923,7 @@ function ProductCard({ company, product, onChanged }) {
         {kbChars > 0 && <button className="btn sm ghost" disabled={kbBusy} onClick={clearKb}>Limpar base</button>}
       </div>
       {kbMsg && <div className="hint">{kbMsg}</div>}
-      <div className="hint">Pode subir vários arquivos (vão se somando). A IA usa isto + o site + a internet pra montar o conteúdo.</div>
+      <div className="hint">Pode subir vários arquivos (vão se somando). A IA usa esta base, o site validado e as ofertas explicitamente selecionadas.</div>
     </Field>
 
     <div className="sec mut" style={{ marginTop: 4 }}>Logos do produto</div>
@@ -888,6 +1014,19 @@ function CompanyConexoes({ company }) {
     finally { setBusy(''); }
   }
 
+  async function testAccount(account, pageId = '') {
+    if (!account) { setMsg('Conecte a conta antes de testar.'); return; }
+    setBusy('test-' + account.id); setMsg('Validando a conta no provedor…');
+    try {
+      const result = await window.mpApi.socialTestAccount(account.id, pageId ? { page_id: pageId } : {});
+      setMsg(result.selection_required
+        ? 'Conexão validada. Agora escolha abaixo a Página da CARIAP.'
+        : result.ok ? 'Conexão e permissões validadas com uma chamada real.' : 'A conexão precisa ser refeita.');
+      load();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(''); }
+  }
+
   return <div className="stack">
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     {config && config.composio_configured === false && <div className="err">
@@ -899,6 +1038,9 @@ function CompanyConexoes({ company }) {
         const acc = accountFor(p);
         const ok = isOk(acc);
         const expires = acc && (acc.expires_at || (acc.metadata || {}).expires_at);
+        const managedPages = p === 'facebook' && acc && Array.isArray((acc.metadata || {}).managed_pages)
+          ? acc.metadata.managed_pages : [];
+        const selectedPageId = acc && (acc.metadata || {}).facebook_page_id || '';
         return <div key={p} className="panel stack">
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
@@ -909,11 +1051,18 @@ function CompanyConexoes({ company }) {
           </div>
           {acc && <small className="hint">{acc.external_account_name || acc.external_account_id || 'Composio'}</small>}
           {expires && <small className="hint">Expira: {new Date(expires).toLocaleString('pt-BR')}</small>}
+          {managedPages.length > 1 && <label className="field">
+            <span>Página usada por {company.name}</span>
+            <select className="inp" value={selectedPageId} disabled={!!busy} onChange={e => testAccount(acc, e.target.value)}>
+              <option value="">Selecione a Página correta</option>
+              {managedPages.map(page => <option key={page.id} value={page.id}>{page.name || page.username || page.id}</option>)}
+            </select>
+          </label>}
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button className="btn sm pri" disabled={busy === p} onClick={() => connect(p)}>
               <Icon name="link" />{acc ? 'Reconectar' : 'Conectar'}
             </button>
-            <button className="btn sm ghost" disabled={!!busy} onClick={load}><Icon name="refs" />Testar</button>
+            <button className="btn sm ghost" disabled={!!busy || !acc} onClick={() => testAccount(acc)}><Icon name="refs" />Testar de verdade</button>
             {acc && <button className="btn sm" disabled={busy === acc.id} onClick={() => disconnect(acc.id)}><Icon name="trash" />Desconectar</button>}
           </div>
         </div>;
@@ -1251,13 +1400,14 @@ function CompanyLogos({ company, onSaved, onLogosLoaded }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12 }}>
       {logos.map(l => {
         const meta = l.meta || {};
-        return <div key={l.id} className="panel" data-testid="logo-card" style={{ position: 'relative', padding: 8, borderColor: meta.is_primary ? 'var(--green)' : undefined }}>
+        const candidate = meta.review_status === 'candidate_needs_review';
+        return <div key={l.id} className="panel" data-testid="logo-card" style={{ position: 'relative', padding: 8, borderColor: meta.is_primary ? 'var(--green)' : (candidate ? 'var(--yellow)' : undefined) }}>
         <div style={{ height: 92, padding: 10, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'linear-gradient(135deg,#1f2937 0 50%,#f8fafc 50%)' }}>
           <img loading="lazy" decoding="async" src={l.url} style={{ maxWidth: '100%', width: '100%', height: 72, objectFit: 'contain' }} />
         </div>
         <div className="row" style={{ justifyContent: 'space-between', marginTop: 7, gap: 6 }}>
-          <div className="hint" style={{ fontSize: 10 }}>{meta.variant || (l.source === 'WEB' ? 'site' : 'manual')}</div>
-          {meta.is_primary ? <Pill kind="good">★ Principal</Pill> : <button className="btn sm ghost" data-testid="logo-primary" disabled={busy} onClick={() => makePrimary(l.id)}>☆ Usar</button>}
+          <div className="hint" style={{ fontSize: 10 }}>{meta.variant || meta.from || (l.source === 'WEB' ? 'site' : 'manual')}</div>
+          {meta.is_primary ? <Pill kind="good">★ Principal</Pill> : <button className={'btn sm ' + (candidate ? 'pri' : 'ghost')} data-testid="logo-primary" disabled={busy} onClick={() => makePrimary(l.id)}>{candidate ? 'Aprovar e usar' : '☆ Usar'}</button>}
           <button className="btn sm ghost" data-testid="logo-delete" disabled={busy} title="Excluir logo" onClick={() => remove(l.id)}><Icon name="trash" /></button>
         </div>
       </div>;})}
@@ -1279,6 +1429,7 @@ function CompanyVisual({ company, onSaved }) {
   const [msg, setMsg] = React.useState('');
   const [igHandle, setIgHandle] = React.useState('');
   const [igBusy, setIgBusy] = React.useState(false);
+  const [refBusy, setRefBusy] = React.useState('');
   const identityRunning = ['queued', 'running'].includes(bk.extras?.enrichment?.state);
   React.useEffect(() => {
     const next = paletteTools.fromColors(colors);
@@ -1290,12 +1441,16 @@ function CompanyVisual({ company, onSaved }) {
     setIgBusy(true); setMsg('');
     try {
       const r = await window.mpApi.importInstagram(company.id, { handle: igHandle, kind: 'reference', count: 4 });
-      setMsg(`✓ Importado de @${r.handle}: ${r.refs} referência(s).`); onSaved();
+      setMsg(`✓ ${r.refs} referência(s) encontrada(s) em @${r.handle}. Aprove abaixo as que devem orientar a IA.`); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setIgBusy(false); }
   }
   const refs = company.references || [];
-  const sampleAssets = [...logoAssets, ...refs].filter((asset, index, all) =>
+  const isApprovedRef = ref => {
+    const status = (ref?.meta || {}).review_status;
+    return status === 'approved' || (!status && ref?.source === 'UPLOADED');
+  };
+  const sampleAssets = [...logoAssets, ...refs.filter(isApprovedRef)].filter((asset, index, all) =>
     asset?.url && all.findIndex(item => item?.url === asset.url) === index);
   const setPalAt = (i, patch) => setPal(p => p.map((c, j) => j === i ? { ...c, ...patch } : c));
 
@@ -1396,6 +1551,19 @@ function CompanyVisual({ company, onSaved }) {
     try { await window.mpApi.deleteReference(company.id, assetId); onSaved(); } catch (e) { setMsg('Erro: ' + e.message); }
   }
 
+  async function reviewRef(assetId, status) {
+    setRefBusy(assetId); setMsg('');
+    try {
+      await window.mpApi.reviewReference(company.id, assetId, status);
+      setMsg(status === 'approved'
+        ? '✓ Referência aprovada. Ela agora pode orientar composição e estilo.'
+        : 'Referência ignorada. Ela não será enviada ao motor criativo.');
+      onSaved();
+      setTimeout(onSaved, 12000);
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setRefBusy(''); }
+  }
+
   return <div className="stack">
     <CompanyLogos key={company.id} company={company} onSaved={onSaved} onLogosLoaded={setLogoAssets} />
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -1455,7 +1623,7 @@ function CompanyVisual({ company, onSaved }) {
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <button className="btn sm pri" data-testid="palette-save" disabled={identityRunning || !pal.length || primaryIndex < 0} onClick={saveColors}>Salvar paleta</button>
     <div className="sec">Artes de referência (o Estúdio IA segue este estilo)</div>
-    <div className="hint">Suba artes que representem o estilo desejado (suas, do manual, ou de um perfil que o cliente admira). O motor usa as mais recentes como <b>família visual</b> em toda geração.</div>
+    <div className="hint">Suba artes autorizadas ou importe candidatas do site/perfil público. <b>Só referências aprovadas</b> entram no motor criativo; as demais ficam fora da geração até sua decisão.</div>
     {bk.extras && bk.extras.reference_profile && <div className="card" style={{ padding: 12 }}>
       <div style={{ fontWeight: 700 }}>Perfil extraído das referências</div>
       <div className="hint">
@@ -1470,15 +1638,32 @@ function CompanyVisual({ company, onSaved }) {
     </div>}
     <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
       <input className="inp" style={{ maxWidth: 240 }} placeholder="@perfil de referência" value={igHandle} onChange={e => setIgHandle(e.target.value)} />
-      <span className="hint">Somente inspiração visual; o Instagram oficial da empresa entra na importação única.</span>
+      <span className="hint">Pesquisa oficial da Meta quando disponível, sem login do prospecto. O site e o upload continuam como fallback.</span>
       <button className="btn sm pri" disabled={igBusy || !igHandle.trim()} onClick={importIg}>{igBusy ? 'Importando…' : 'Importar referências'}</button>
     </div>
     <input type="file" accept="image/*" onChange={e => e.target.files[0] && doUploadRef(e.target.files[0])} />
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 12 }}>
-      {refs.map(r => <div key={r.id} style={{ position: 'relative' }}>
-        <img loading="lazy" decoding="async" src={r.url} style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--line)' }} />
-        <button onClick={() => doDeleteRef(r.id)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,.7)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 6px', cursor: 'pointer', fontSize: 12 }}>✕</button>
-      </div>)}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12 }}>
+      {refs.map(r => {
+        const meta = r.meta || {};
+        const status = meta.review_status || (r.source === 'UPLOADED' ? 'approved' : 'candidate_needs_review');
+        const approved = status === 'approved';
+        const rejected = status === 'rejected';
+        return <div key={r.id} className="card stack" style={{ position: 'relative', padding: 8, gap: 7, borderColor: approved ? 'var(--green)' : (rejected ? 'var(--line)' : 'var(--yellow)') }}>
+          <img loading="lazy" decoding="async" src={r.url} style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, opacity: rejected ? .45 : 1 }} />
+          <div className="row" style={{ justifyContent: 'space-between', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Pill kind={approved ? 'good' : (rejected ? 'cy' : 'warn')}>
+              {approved ? 'Aprovada' : (rejected ? 'Ignorada' : 'Revisar')}
+            </Pill>
+            <span className="hint" style={{ fontSize: 10 }}>{meta.from || (r.source === 'UPLOADED' ? 'upload' : 'fonte pública')}</span>
+          </div>
+          <div className="row" style={{ gap: 5, flexWrap: 'wrap' }}>
+            {!approved && <button className="btn sm pri" disabled={refBusy === r.id} onClick={() => reviewRef(r.id, 'approved')}>Aprovar</button>}
+            {!rejected && <button className="btn sm ghost" disabled={refBusy === r.id} onClick={() => reviewRef(r.id, 'rejected')}>Ignorar</button>}
+            <button className="btn sm ghost" disabled={refBusy === r.id} onClick={() => doDeleteRef(r.id)} title="Excluir referência"><Icon name="trash" /></button>
+          </div>
+        </div>;
+      })}
+      {!refs.length && <div className="hint">Nenhuma arte de referência cadastrada.</div>}
     </div>
   </div>;
 }

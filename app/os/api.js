@@ -830,6 +830,11 @@
     async socialDisconnect(id) {
       return mpFetch('/api/social/accounts/' + _enc(id), { method: 'DELETE' });
     },
+    async socialTestAccount(id, payload = {}) {
+      return mpFetch('/api/social/accounts/' + _enc(id) + '/test', {
+        method: 'POST', body: JSON.stringify(payload || {}),
+      });
+    },
     async socialCreatePost(payload) {
       return mpFetch('/api/social/posts', { method: 'POST', body: JSON.stringify(payload) });
     },
@@ -1027,6 +1032,10 @@
       const r = await mpFetch('/api/companies/' + _enc(id), { method: 'PUT', body: JSON.stringify(payload) });
       return r.company;
     },
+    async convertCompanyToManaged(id) {
+      const r = await mpFetch('/api/companies/' + _enc(id) + '/convert-to-managed', { method: 'POST' });
+      return r.company;
+    },
     async deleteCompany(id) {
       return mpFetch('/api/companies/' + _enc(id), { method: 'DELETE' });
     },
@@ -1043,6 +1052,11 @@
       const fd = new FormData();
       fd.append('file', file);
       return mpFetch('/api/companies/' + _enc(id) + '/references', { method: 'POST', body: fd, headers: {} });
+    },
+    async reviewReference(companyId, assetId, status) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/references/' + _enc(assetId) + '/review', {
+        method: 'POST', body: JSON.stringify({ status }),
+      });
     },
     async deleteReference(id, assetId) {
       return mpFetch('/api/companies/' + _enc(id) + '/references/' + _enc(assetId), { method: 'DELETE' });
@@ -1291,6 +1305,10 @@
     async generateBriefing(payload) {
       return mpFetch('/api/posts/generate-briefing', { method: 'POST', body: JSON.stringify(payload) });
     },
+    async offerCatalog(companyId) {
+      const r = await mpFetch('/api/posts/offer-catalog?company_id=' + _enc(companyId || ''));
+      return r.catalogs || [];
+    },
     async renderCarousel(payload) {
       return mpFetch('/api/posts/render-carousel', { method: 'POST', body: JSON.stringify(payload) });
     },
@@ -1343,8 +1361,8 @@
     async videoStatus(jobsCsv, companyId) {
       return mpFetch('/api/posts/video-status?jobs=' + _enc(jobsCsv) + '&company_id=' + _enc(companyId || ''));
     },
-    async videoPreflight(companyId, theme, seconds, style, storyboard, sceneDescs, model) {
-      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, theme: theme || '', seconds: seconds || 0, style: style || '', storyboard: storyboard || [], scene_descs: sceneDescs || [], model: model || '' }) }).catch(() => ({ configured: false }));
+    async videoPreflight(companyId, theme, seconds, style, storyboard, sceneDescs, model, offerRefs) {
+      return mpFetch('/api/posts/video-preflight', { method: 'POST', body: JSON.stringify({ company_id: companyId, theme: theme || '', seconds: seconds || 0, style: style || '', storyboard: storyboard || [], scene_descs: sceneDescs || [], model: model || '', offer_refs: offerRefs || [] }) }).catch(() => ({ configured: false }));
     },
     async videoStyles(companyId) {
       const r = await mpFetch('/api/posts/video-styles', { method: 'POST', body: JSON.stringify({ company_id: companyId || '' }) }).catch(() => ({ styles: [] }));

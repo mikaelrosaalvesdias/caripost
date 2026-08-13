@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 
 from ..db_companies import (
     company_list, company_get, company_create, company_update, company_delete,
+    company_convert_to_managed, company_lifecycle_stage_validate,
     brand_kit_get, brand_kit_upsert, brand_kit_extras_patch, brand_kit_apply_auto,
     normalize_brand_colors,
     competitor_list, competitor_create, competitor_delete,
@@ -29,6 +30,7 @@ from ..db_companies import (
     solution_list, solution_get, solution_create, solution_update, solution_delete,
 )
 from ..db import settings_get
+from ..main_utils import company_access_denied as _company_access_denied
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 
@@ -38,12 +40,17 @@ def _api_key_required(request: Request):
     return require_api_key(request)
 
 
+def _company_scope_required(request: Request, company_id: str):
+    return _company_access_denied(request, company_id)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 _ENRICHMENT_RUNNING: set[str] = set()
 _ENRICHMENT_GUARD = threading.Lock()
+_REFERENCE_ANALYSIS_GUARD = threading.Lock()
 
 
 def _enrichment_status(company_id: str) -> Dict[str, Any]:
@@ -116,6 +123,9 @@ def get_company(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -136,6 +146,10 @@ async def create_company(request: Request):
     body = await request.json()
     if not body.get("name"):
         return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
+    try:
+        lifecycle_stage = company_lifecycle_stage_validate(body.get("lifecycle_stage", "prospect"))
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
     # parse socials
     socials: Dict[str, str] = dict(body.get("socials") or {})
     for key in ("instagram", "facebook", "tiktok"):
@@ -155,6 +169,7 @@ async def create_company(request: Request):
         "socials": socials,
         "notes": body.get("notes"),
         "competitors": competitors,
+        "lifecycle_stage": lifecycle_stage,
     }
     from ..main_utils import _session_of
     sess = _session_of(request) or {}
@@ -243,7 +258,15 @@ async def update_company(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     body = await request.json()
+    if "lifecycle_stage" in body:
+        try:
+            body["lifecycle_stage"] = company_lifecycle_stage_validate(body["lifecycle_stage"])
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
     existing = company_get(company_id)
     if not existing:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -282,11 +305,29 @@ async def update_company(company_id: str, request: Request):
     return {"company": company}
 
 
+@router.post("/{company_id}/convert-to-managed")
+def convert_company_to_managed(company_id: str, request: Request):
+    """Idempotently promote a prospect while preserving its ID and accumulated data."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    company = company_convert_to_managed(company_id)
+    if not company:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    return {"company": company}
+
+
 @router.delete("/{company_id}")
 def delete_company(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     ok = company_delete(company_id)
     if not ok:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -336,6 +377,9 @@ def get_brand_kit(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     bk = brand_kit_get(company_id)
     return {"brand_kit": bk}
 
@@ -345,6 +389,9 @@ async def save_brand_kit(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     body = await request.json()
     existing = company_get(company_id)
     if not existing:
@@ -399,6 +446,9 @@ def get_creative_config(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     co = company_get(company_id)
     if not co:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -415,6 +465,9 @@ async def save_creative_config(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     co = company_get(company_id)
     if not co:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -1420,115 +1473,519 @@ def _auto_extract_products(company_id: str, website: str) -> Dict[str, Any]:
 
 
 def _ig_fetch_brand(company_id: str, instagram: str) -> Dict[str, int]:
-    """Puxa do INSTAGRAM público: foto do perfil (vira LOGO se não houver) + thumbnails de posts (viram ARTES
-    DE REFERÊNCIA p/ o Estúdio IA). IG pode bloquear IP de datacenter — melhor esforço, retorna contagens."""
-    import re
-    import io as _io
-    import uuid as _uuid
-    import httpx as _hx
-    from PIL import Image as _Img
-    out = {"logo": 0, "refs": 0}
-    handle = _instagram_handle(instagram)
-    if not handle:
-        return out
-    try:
-        r = _hx.get(f"https://www.instagram.com/{handle}/", timeout=20.0, follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-                                           "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"})
-        html = r.text or ""
-    except Exception:
-        return out
-    def _save(url, sub, kind, role, meta):
-        try:
-            ir = _hx.get(url.replace("&amp;", "&"), timeout=20.0, follow_redirects=True)
-            if ir.status_code >= 400 or not ir.content:
-                return False
-            im = _Img.open(_io.BytesIO(ir.content))
-            subdir = os.path.join(UPLOAD_DIR, company_id, sub)
-            os.makedirs(subdir, exist_ok=True)
-            fn = f"{_uuid.uuid4().hex}.png"
-            im.convert("RGBA").save(os.path.join(subdir, fn), "PNG")
-            u = f"{UPLOAD_URL_PREFIX}/{company_id}/{sub}/{fn}"
-            saved_meta = dict(meta, role=role)
-            if role == "logo":
-                saved_meta.update({"identity_scope": "company", "confidence": 0.95, "is_primary": False})
-            asset = asset_create(company_id, {"kind": kind, "source": "INSTAGRAM", "url": u, "meta": saved_meta})
-            if role == "logo":
-                asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
-            return True
-        except Exception:
-            return False
-    # Foto de perfil é uma variante institucional válida mesmo quando o site já forneceu outra logo.
-    # Evita duplicar a mesma origem em re-enriches.
-    has_ig_profile = any((a.get("meta") or {}).get("from") == "instagram_profile"
-                         for a in (asset_list_logos(company_id) or []))
-    if not has_ig_profile:
-        m = re.search(r'property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
-        if m and _save(m.group(1), "logo", "IMAGE", "logo",
-                       {"is_primary": not bool(asset_list_logos(company_id)), "from": "instagram_profile"}):
-            out["logo"] = 1
-    # thumbnails de posts → artes de referência (display_url no JSON embutido)
-    urls = re.findall(r'"display_url":"([^"]+)"', html)[:4]
-    for u in urls:
-        if _save(u.encode().decode("unicode_escape"), "references", "IMAGE", "brand_reference", {"from": "instagram_post"}):
-            out["refs"] += 1
-    return out
+    """Deprecated anonymous scraper kept as a no-op for extension compatibility."""
+    return {"logo": 0, "refs": 0, "status": "disabled"}
 
 
 def _facebook_fetch_logo(company_id: str, facebook: str) -> int:
-    """Importa a foto pública somente quando título do perfil confirma empresa/handle."""
-    import io as _io
-    import uuid as _uuid
-    import httpx as _hx
-    from PIL import Image as _Img
-    raw = (facebook or "").strip()
-    if not raw:
-        return 0
-    page_url = raw if raw.startswith(("http://", "https://")) else "https://www.facebook.com/" + raw.lstrip("@/")
-    if any((a.get("meta") or {}).get("from") == "facebook_profile"
-           for a in (asset_list_logos(company_id) or [])):
-        return 0
+    """Legacy compatibility: Facebook login pages are never scraped for identity.
+
+    Official Page import belongs to the managed/connected-account path. Prospect
+    enrichment relies on the official company website and reviewable uploads.
+    """
+    return 0
+
+
+def _research_social_connection(platform: str) -> Optional[Dict[str, Any]]:
+    """Resolve a house-owned research connection without borrowing a prospect's auth."""
+    configured_connection = ""
     try:
-        response = _hx.get(
-            page_url, timeout=_hx.Timeout(20.0, connect=10.0), follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                                   "AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1"},
+        configured_connection = str(
+            (settings_get(key=f"social.research.{platform}_connection_id") or {}).get("value") or ""
+        ).strip()
+    except Exception:
+        configured_connection = ""
+    try:
+        from ..db_agency import social_connection_get, social_connection_list
+        if configured_connection:
+            selected = social_connection_get(configured_connection)
+            if (selected and str(selected.get("status") or "").lower() in ("active", "connected")
+                    and selected.get("composio_connection_id")):
+                return selected
+        connections = [
+            row for row in social_connection_list(platform=platform, include_revoked=False)
+            if str(row.get("status") or "").lower() in ("active", "connected")
+            and row.get("composio_connection_id")
+        ]
+    except Exception:
+        return None
+    configured_brand = ""
+    for key in (f"social.research.{platform}_brand_id", "social.research.brand_id"):
+        try:
+            configured_brand = str((settings_get(key=key) or {}).get("value") or "").strip()
+        except Exception:
+            configured_brand = ""
+        if configured_brand:
+            break
+
+    ranked: List[tuple[int, Dict[str, Any]]] = []
+    for connection in connections:
+        brand_id = str(connection.get("brand_id") or "")
+        company = company_get(brand_id) or {}
+        stage = str(company.get("lifecycle_stage") or "").lower()
+        name_key = _identity_key(company.get("name") or "")
+        score = 0
+        if configured_brand and brand_id == configured_brand:
+            score += 100
+        if stage == "internal":
+            score += 60
+        if "cariap" in name_key:
+            score += 40
+        if score:
+            ranked.append((score, connection))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked[0][1]
+
+
+def _owned_social_connection(company_id: str, platform: str) -> Optional[Dict[str, Any]]:
+    try:
+        from ..db_agency import social_connection_list
+        return next((
+            row for row in social_connection_list(brand_id=company_id, platform=platform, include_revoked=False)
+            if str(row.get("status") or "").lower() in ("active", "connected")
+            and row.get("composio_connection_id")
+        ), None)
+    except Exception:
+        return None
+
+
+def _download_public_image(url: str, *, max_bytes: int = 12 * 1024 * 1024) -> Optional[bytes]:
+    """Download a public image with redirect/size/type guards for enrichment jobs."""
+    import httpx
+    target = str(url or "").replace("&amp;", "").strip()
+    if not _catalog_public_url(target):
+        return None
+    try:
+        with httpx.Client(timeout=httpx.Timeout(22.0, connect=8.0), follow_redirects=False,
+                          headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostResearch/1.0)"}) as client:
+            response = None
+            for _ in range(4):
+                if not _catalog_public_url(target):
+                    return None
+                with client.stream("GET", target) as streamed:
+                    if streamed.status_code in (301, 302, 303, 307, 308):
+                        target = urljoin(target, streamed.headers.get("location") or "")
+                        continue
+                    length = str(streamed.headers.get("content-length") or "")
+                    if length.isdigit() and int(length) > max_bytes:
+                        return None
+                    body = bytearray()
+                    for chunk in streamed.iter_bytes():
+                        body.extend(chunk)
+                        if len(body) > max_bytes:
+                            return None
+                    response = _CatalogResponse(
+                        status_code=streamed.status_code,
+                        url=str(streamed.url),
+                        headers={str(k).lower(): str(v) for k, v in streamed.headers.items()},
+                        body=bytes(body),
+                    )
+                    response.content = bytes(body)
+                    break
+        if response is None or response.status_code >= 400:
+            return None
+        content_type = str(response.headers.get("content-type") or "").lower()
+        if content_type and not content_type.startswith("image/"):
+            return None
+        content = response.content
+        if not content or len(content) > max_bytes:
+            return None
+        return content
+    except Exception:
+        return None
+
+
+def _save_reference_image(
+    company_id: str,
+    content: bytes,
+    *,
+    source: str,
+    source_url: str,
+    source_key: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Validate, deduplicate and persist a candidate used as visual inspiration."""
+    import hashlib
+    import io
+    from PIL import Image
+    if not content or len(content) > 12 * 1024 * 1024:
+        return None
+    try:
+        image = Image.open(io.BytesIO(content))
+        if image.width < 240 or image.height < 140 or image.width * image.height > 36_000_000:
+            return None
+        image.load()
+        normalized = image.convert("RGB")
+        output = io.BytesIO()
+        normalized.save(output, "PNG", optimize=True)
+        normalized_bytes = output.getvalue()
+    except Exception:
+        return None
+    digest = hashlib.sha256(normalized_bytes).hexdigest()
+    existing = asset_list(company_id, role="brand_reference") or []
+    if any(
+        (item.get("meta") or {}).get("source_key") == source_key
+        or (item.get("meta") or {}).get("sha256") == digest
+        for item in existing
+    ):
+        return None
+    subdir = os.path.join(UPLOAD_DIR, company_id, "references")
+    os.makedirs(subdir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.png"
+    filepath = os.path.join(subdir, filename)
+    temporary = filepath + ".tmp"
+    try:
+        with open(temporary, "wb") as stream:
+            stream.write(normalized_bytes)
+        os.replace(temporary, filepath)
+    except Exception:
+        try:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+        except Exception:
+            pass
+        return None
+    parsed = urlparse(source_url or "")
+    clean_source_url = parsed._replace(query="", fragment="").geturl()[:500]
+    meta = {
+        "role": "brand_reference",
+        "source_key": source_key[:500],
+        "source_url": clean_source_url,
+        "sha256": digest,
+        "owner_scope": "prospect_or_client",
+        "rights_basis": "public_brand_research",
+        "allowed_use": "analysis_only",
+        "review_status": "candidate_needs_review",
+        **(metadata or {}),
+    }
+    url = f"{UPLOAD_URL_PREFIX}/{company_id}/references/{filename}"
+    return asset_create(company_id, {"kind": "IMAGE", "source": source, "url": url, "meta": meta})
+
+
+def _save_logo_candidate(
+    company_id: str,
+    content: bytes,
+    *,
+    source: str,
+    source_url: str,
+    source_key: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Persist a social avatar as a reviewable logo candidate, never as primary."""
+    import hashlib
+    import io
+    from PIL import Image
+    if not content or len(content) > 12 * 1024 * 1024:
+        return None
+    try:
+        image = Image.open(io.BytesIO(content))
+        if image.width < 64 or image.height < 64 or image.width * image.height > 36_000_000:
+            return None
+        image.load()
+        normalized = image.convert("RGBA")
+        output = io.BytesIO(); normalized.save(output, "PNG", optimize=True)
+        normalized_bytes = output.getvalue()
+    except Exception:
+        return None
+    digest = hashlib.sha256(normalized_bytes).hexdigest()
+    existing = asset_list_logos(company_id) or []
+    if any(
+        (item.get("meta") or {}).get("source_key") == source_key
+        or (item.get("meta") or {}).get("sha256") == digest
+        for item in existing
+    ):
+        return None
+    subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
+    os.makedirs(subdir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.png"
+    filepath = os.path.join(subdir, filename)
+    temporary = filepath + ".tmp"
+    try:
+        with open(temporary, "wb") as stream:
+            stream.write(normalized_bytes)
+        os.replace(temporary, filepath)
+    except Exception:
+        try:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+        except Exception:
+            pass
+        return None
+    parsed = urlparse(source_url or "")
+    meta = {
+        "role": "logo", "is_primary": False, "identity_scope": "company",
+        "source_key": source_key[:500], "source_url": parsed._replace(query="", fragment="").geturl()[:500],
+        "sha256": digest, "review_status": "candidate_needs_review",
+        **(metadata or {}),
+    }
+    url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
+    return asset_create(company_id, {"kind": "IMAGE", "source": source, "url": url, "meta": meta})
+
+
+def _auto_fetch_site_references(company_id: str, website: str, limit: int = 3) -> Dict[str, Any]:
+    """Collect public campaign/hero imagery from the official site, never from Meta scraping."""
+    import httpx
+    company = company_get(company_id) or {}
+    base = website if str(website or "").startswith(("http://", "https://")) else "https://" + str(website or "").strip()
+    if not base or not _catalog_public_url(base):
+        return {"status": "not_available", "added": 0, "reason": "invalid_website"}
+    try:
+        response = _catalog_http_get(
+            httpx, base, timeout=22.0,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostResearch/1.0)"},
         )
-        html = response.text or ""
+        if response.status_code >= 400 or not _catalog_public_url(str(response.url)):
+            return {"status": "not_available", "added": 0, "reason": "website_unavailable"}
     except Exception:
-        return 0
-    title_match = re.search(
-        r'<meta[^>]+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I,
-    )
-    image_match = re.search(
-        r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I,
-    )
-    company_key = _identity_key((company_get(company_id) or {}).get("name") or "")
-    handle_key = _identity_key(urlparse(page_url).path.strip("/").split("/")[0])
-    title_key = _identity_key(title_match.group(1) if title_match else "")
-    identity_keys = [key for key in (company_key, handle_key) if len(key) >= 3]
-    if not image_match or not title_key or not any(key in title_key or title_key in key for key in identity_keys):
-        return 0
+        return {"status": "temporarily_unavailable", "added": 0, "reason": "website_unavailable"}
+    parser = _ImageCandidateParser()
     try:
-        image_url = image_match.group(1).replace("&amp;", "&")
-        image_response = _hx.get(image_url, timeout=20.0, follow_redirects=True)
-        image = _Img.open(_io.BytesIO(image_response.content))
-        if image.width < 64 and image.height < 64:
-            return 0
-        subdir = os.path.join(UPLOAD_DIR, company_id, "logo")
-        os.makedirs(subdir, exist_ok=True)
-        filename = f"{_uuid.uuid4().hex}.png"
-        image.convert("RGBA").save(os.path.join(subdir, filename), "PNG")
-        url = f"{UPLOAD_URL_PREFIX}/{company_id}/logo/{filename}"
-        asset = asset_create(company_id, {
-            "kind": "IMAGE", "source": "FACEBOOK", "url": url,
-            "meta": {"role": "logo", "is_primary": False, "from": "facebook_profile",
-                     "source_url": page_url[:200], "identity_scope": "company", "confidence": 0.9},
-        })
-        asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
-        return 1
+        parser.feed(response.text or "")
     except Exception:
-        return 0
+        pass
+    if len(parser.images) < 3 or _catalog_should_render(
+        _catalog_visible_text(response.text or ""), response.text or "",
+    ):
+        try:
+            rendered = _render_site(str(response.url)) or {}
+            if rendered.get("html"):
+                parser.feed(rendered["html"])
+        except Exception:
+            pass
+    company_key = _identity_key(company.get("name") or "")
+    ranked: List[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(parser.images):
+        kind = item.get("kind") or "img"
+        absolute = urljoin(str(response.url), item.get("src") or "")
+        if absolute in seen or not _catalog_public_url(absolute):
+            continue
+        seen.add(absolute)
+        hay = _catalog_fold(" ".join((item.get("attrs") or "", urlparse(absolute).path, kind)))
+        if kind in ("site-icon", "og:logo") or "logo" in hay:
+            continue
+        if any(term in hay for term in ("avatar", "icon", "sprite", "payment", "parceiro", "partner")):
+            continue
+        score = max(0, 20 - index)
+        if kind in ("og:image", "twitter:image", "twitter:image:src"):
+            score += 80
+        if any(term in hay for term in ("hero", "banner", "campaign", "campanha", "offer", "oferta", "promo", "planos")):
+            score += 55
+        if company_key and company_key in _identity_key(hay):
+            score += 15
+        ranked.append((score, absolute, kind))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    added = 0
+    for score, image_url, kind in ranked:
+        if added >= max(1, min(int(limit or 3), 5)):
+            break
+        if score < 35:
+            continue
+        content = _download_public_image(image_url)
+        if content and _save_reference_image(
+            company_id, content, source="WEB", source_url=image_url,
+            source_key="website:" + urlparse(image_url)._replace(query="", fragment="").geturl(),
+            metadata={"from": "official_site", "kind": kind, "confidence": min(1.0, score / 100.0)},
+        ):
+            added += 1
+    return {"status": "added" if added else "not_available", "added": added,
+            "reason": "" if added else "no_campaign_images"}
+
+
+def _instagram_research_import(
+    company_id: str, handle: str, kind: str = "reference", count: int = 4,
+) -> Dict[str, Any]:
+    """Import through a CARIAP-owned official Meta connection; the target never logs in."""
+    import asyncio
+    handle = _instagram_handle(handle)
+    if not handle:
+        return {"status": "action_required", "reason": "invalid_handle", "logo": 0, "refs": 0}
+    company = company_get(company_id) or {}
+    lifecycle = str(company.get("lifecycle_stage") or "managed").lower()
+    own_connection = (
+        _owned_social_connection(company_id, "instagram")
+        if kind == "own" and lifecycle in ("managed", "internal") else None
+    )
+    # Public Business Discovery requires Facebook Login. The authorization is
+    # the CARIAP research Page, never an Instagram login from the prospect.
+    connection = own_connection or _research_social_connection("facebook")
+    if not connection:
+        return {
+            "status": "action_required", "reason": "research_connection_missing",
+            "detail": "Conecte uma Página Facebook da CARIAP, com Instagram profissional vinculado, para pesquisa oficial.",
+            "handle": handle, "logo": 0, "refs": 0,
+        }
+    try:
+        from ..social.composio_provider import ComposioSocialProvider
+        provider = ComposioSocialProvider()
+        if own_connection:
+            profile = asyncio.run(provider.get_owned_instagram_profile_media(
+                connection=connection, media_limit=count,
+            ))
+            connected_handle = _instagram_handle(profile.get("username") or "")
+            if connected_handle and connected_handle.lower() != handle.lower():
+                return {
+                    "status": "action_required", "reason": "connected_account_mismatch",
+                    "detail": f"A conta conectada é @{connected_handle}, mas a empresa informa @{handle}.",
+                    "handle": handle, "logo": 0, "refs": 0,
+                }
+        else:
+            profile = asyncio.run(provider.discover_instagram_business(
+                handle=handle, connection=connection, media_limit=count,
+            ))
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or {}
+        return {
+            "status": "not_available",
+            "reason": detail.get("reason") or "official_discovery_unavailable",
+            "detail": str(getattr(exc, "message", exc))[:240],
+            "handle": handle, "logo": 0, "refs": 0,
+        }
+    rights_basis = "owned_connected_account" if own_connection else "official_meta_api"
+    owner_scope = "own" if own_connection else "prospect"
+    allowed_use = "production" if own_connection else "analysis_only"
+    result = {
+        "status": "already_current", "reason": "", "handle": handle, "logo": 0, "refs": 0,
+        "mode": "owned" if own_connection else "business_discovery",
+    }
+    account_id = str(profile.get("id") or handle)
+    if kind == "own" and profile.get("profile_picture_url"):
+        content = _download_public_image(profile["profile_picture_url"])
+        if content and _save_logo_candidate(
+            company_id, content, source="INSTAGRAM",
+            source_url=f"https://instagram.com/{handle}/",
+            source_key=f"instagram:{account_id}:profile",
+            metadata={
+                "from": f"instagram:@{handle}", "external_id": account_id,
+                "confidence": 0.9, "rights_basis": rights_basis,
+                "owner_scope": owner_scope, "allowed_use": allowed_use,
+            },
+        ):
+            result["logo"] = 1
+    for item in profile.get("media") or []:
+        media_url = item.get("media_url") if item.get("media_type") == "IMAGE" else item.get("thumbnail_url")
+        media_id = str(item.get("id") or "")
+        if not media_url or not media_id:
+            continue
+        content = _download_public_image(media_url)
+        if content and _save_reference_image(
+            company_id, content, source="INSTAGRAM", source_url=item.get("permalink") or media_url,
+            source_key=f"instagram:{account_id}:{media_id}",
+            metadata={
+                "from": f"instagram:@{handle}", "kind": kind, "external_id": media_id,
+                "permalink": str(item.get("permalink") or "")[:500], "confidence": 1.0,
+                "rights_basis": rights_basis, "review_status": "candidate_needs_review",
+                "owner_scope": owner_scope, "allowed_use": allowed_use,
+            },
+        ):
+            result["refs"] += 1
+    if result["logo"] or result["refs"]:
+        result["status"] = "added"
+    return result
+
+
+def _facebook_research_import(
+    company_id: str, facebook: str, count: int = 4,
+) -> Dict[str, Any]:
+    """Import a Page through official Facebook tools using a house-owned connection."""
+    import asyncio
+    company = company_get(company_id) or {}
+    lifecycle = str(company.get("lifecycle_stage") or "managed").lower()
+    own_connection = (_owned_social_connection(company_id, "facebook")
+                      if lifecycle in ("managed", "internal") else None)
+    connection = own_connection or _research_social_connection("facebook")
+    if not connection:
+        return {
+            "status": "action_required", "reason": "research_connection_missing",
+            "detail": "Conecte a Página Facebook da CARIAP para pesquisar Páginas oficiais sem login do prospecto.",
+            "logo": 0, "refs": 0,
+        }
+    provider = None
+    try:
+        from ..social.composio_provider import ComposioSocialProvider
+        provider = ComposioSocialProvider()
+        profile = asyncio.run(provider.discover_facebook_page(
+            company_name=company.get("name") or "", facebook=facebook,
+            website=company.get("website") or "", connection=connection,
+            photo_limit=count,
+        ))
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or {}
+        return {
+            "status": "not_available",
+            "reason": detail.get("reason") or "official_page_unavailable",
+            "detail": str(getattr(exc, "message", exc))[:240],
+            "logo": 0, "refs": 0,
+        }
+    page_id = str(profile.get("id") or "")
+    ownership_verified = False
+    if own_connection and page_id and provider is not None:
+        try:
+            probe = asyncio.run(provider.test_connection(
+                platform="facebook", connection=own_connection, selected_page_id=page_id,
+            ))
+            selected_page = probe.get("selected_page") if isinstance(probe, dict) else None
+            ownership_verified = bool(
+                isinstance(selected_page, dict)
+                and str(selected_page.get("id") or "") == page_id
+            )
+        except Exception:
+            # A conexão do cliente pode pesquisar páginas públicas, mas isso não
+            # prova que a página encontrada é administrada por ele. Nesse caso a
+            # importação continua apenas como candidata de pesquisa/revisão.
+            ownership_verified = False
+    rights_basis = "owned_connected_account" if ownership_verified else "official_meta_api"
+    owner_scope = "own" if ownership_verified else "prospect"
+    allowed_use = "production" if ownership_verified else "analysis_only"
+    result = {
+        "status": "already_current", "reason": "", "page_id": page_id,
+        "logo": 0, "refs": 0, "mode": "owned" if ownership_verified else "page_discovery",
+        "ownership_verified": ownership_verified,
+    }
+    picture_url = str(profile.get("profile_picture_url") or "")
+    picture = _download_public_image(picture_url) if picture_url else None
+    if picture and _save_logo_candidate(
+        company_id, picture, source="FACEBOOK",
+        source_url=profile.get("link") or facebook,
+        source_key=f"facebook:{page_id}:profile",
+        metadata={
+            "from": "facebook_page", "external_id": page_id, "confidence": 0.9,
+            "rights_basis": rights_basis, "owner_scope": owner_scope, "allowed_use": allowed_use,
+            "managed_page_verified": ownership_verified,
+        },
+    ):
+        result["logo"] = 1
+    candidates = []
+    if profile.get("cover_url"):
+        candidates.append({
+            "id": "cover", "media_url": profile["cover_url"],
+            "link": profile.get("link") or facebook, "kind": "cover",
+        })
+    candidates.extend(profile.get("photos") or [])
+    for item in candidates[:max(1, min(int(count or 4), 8))]:
+        media_id = str(item.get("id") or "")
+        media_url = str(item.get("media_url") or "")
+        if not media_id or not media_url:
+            continue
+        content = _download_public_image(media_url)
+        if content and _save_reference_image(
+            company_id, content, source="FACEBOOK",
+            source_url=item.get("link") or profile.get("link") or facebook,
+            source_key=f"facebook:{page_id}:{media_id}",
+            metadata={
+                "from": "facebook_page", "kind": item.get("kind") or "photo",
+                "external_id": media_id, "confidence": 1.0,
+                "rights_basis": rights_basis, "review_status": "candidate_needs_review",
+                "owner_scope": owner_scope, "allowed_use": allowed_use,
+                "managed_page_verified": ownership_verified,
+            },
+        ):
+            result["refs"] += 1
+    if result["logo"] or result["refs"]:
+        result["status"] = "added"
+    return result
 
 
 def _canonical_logo_source(url: str) -> str:
@@ -1574,8 +2031,11 @@ def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
         return None
     base = website if website.startswith("http") else "https://" + website
     try:
-        r = _hx.get(base, timeout=_hx.Timeout(20.0, connect=10.0), follow_redirects=True,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"})
+        with _hx.Client() as client:
+            r = _catalog_http_get(
+                client, base, timeout=20.0,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"},
+            )
         html = r.text or ""
     except Exception:
         return None
@@ -1707,13 +2167,11 @@ def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
         if len(saved_urls) >= 5 or urlparse(candidate["url"]).path.lower().endswith(".svg"):
             continue
         try:
-            response = _hx.get(candidate["url"], timeout=_hx.Timeout(20.0, connect=10.0),
-                               follow_redirects=True,
-                               headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"})
-            if response.status_code >= 400:
+            content = _download_public_image(candidate["url"], max_bytes=10 * 1024 * 1024)
+            if not content:
                 continue
             variant = "site_icon" if candidate.get("kind") == "site-icon" else "site_logo"
-            _save_image(response.content, origin=candidate["url"], variant=variant,
+            _save_image(content, origin=candidate["url"], variant=variant,
                         confidence=min(1.0, candidate["score"] / 100.0),
                         evidence=candidate.get("reasons") or [])
         except Exception:
@@ -1745,80 +2203,9 @@ def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
 
 
 
-def _ig_headers():
-    """Sessão do Instagram (1 conta da casa): setting ig.session_cookie (cole o cookie 'sessionid' UMA vez)."""
-    from ..services.ai import get_setting
-    ck = (get_setting("ig.session_cookie") or os.environ.get("IG_SESSION_COOKIE") or "").strip()
-    H = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-         "x-ig-app-id": "936619743392459"}
-    if ck:
-        H["Cookie"] = ck if "=" in ck.split(";")[0] else f"sessionid={ck}"
-    return H, bool(ck)
-
-
 def _ig_import(company_id: str, handle: str, kind: str = "reference", count: int = 4) -> Dict[str, Any]:
-    """Importa do Instagram: 'own' = identidade do cliente (foto de perfil vira LOGO se faltar + posts viram
-    referências); 'reference' = perfil que o cliente admira/concorrente (posts viram ARTES DE REFERÊNCIA do
-    Estúdio). Precisa de sessão (ig.session_cookie) — IG bloqueia acesso anônimo de servidor."""
-    import io as _io
-    import uuid as _uuid
-    import httpx as _hx
-    from PIL import Image as _Img
-    handle = _instagram_handle(handle)
-    if not handle:
-        return {"error": "informe o @ do perfil"}
-    H, has_sess = _ig_headers()
-    try:
-        r = _hx.get(f"https://i.instagram.com/api/v1/users/web_profile_info/?username={handle}",
-                    headers=H, timeout=25.0, follow_redirects=True)
-    except Exception as e:
-        return {"error": f"falha de rede no Instagram: {str(e)[:80]}"}
-    if r.status_code == 429 or r.status_code == 403 or (r.status_code >= 400 and not has_sess):
-        return {"error": "O Instagram exige sessão para importar. Configure o cookie em ig.session_cookie "
-                         "(Instagram logado no navegador → DevTools → Cookies → copie o valor de 'sessionid')."}
-    try:
-        u = ((r.json() or {}).get("data") or {}).get("user") or {}
-    except Exception:
-        u = {}
-    if not u:
-        return {"error": f"perfil @{handle} não encontrado (ou sessão expirada)."}
-
-    def _save_img(url, sub, role, meta):
-        try:
-            ir = _hx.get(url, timeout=25.0, follow_redirects=True, headers={"User-Agent": H["User-Agent"]})
-            if ir.status_code >= 400 or not ir.content:
-                return None
-            im = _Img.open(_io.BytesIO(ir.content))
-            subdir = os.path.join(UPLOAD_DIR, company_id, sub)
-            os.makedirs(subdir, exist_ok=True)
-            fn = f"{_uuid.uuid4().hex}.png"
-            im.convert("RGBA" if role == "logo" else "RGB").save(os.path.join(subdir, fn), "PNG")
-            url2 = f"{UPLOAD_URL_PREFIX}/{company_id}/{sub}/{fn}"
-            saved_meta = dict(meta, role=role)
-            if role == "logo":
-                saved_meta.update({"identity_scope": "company", "confidence": 0.95, "is_primary": False})
-            asset = asset_create(company_id, {"kind": "IMAGE", "source": "INSTAGRAM", "url": url2, "meta": saved_meta})
-            if role == "logo":
-                asset_claim_primary_logo_if_empty(company_id, asset["id"], "AUTO")
-            return url2
-        except Exception:
-            return None
-
-    out = {"logo": 0, "refs": 0, "handle": handle}
-    profile_origin = f"instagram:@{handle}"
-    has_profile_logo = any((logo.get("meta") or {}).get("from") == profile_origin
-                           for logo in (asset_list_logos(company_id) or []))
-    if kind == "own" and not has_profile_logo:
-        pic = u.get("profile_pic_url_hd") or u.get("profile_pic_url")
-        if pic and _save_img(pic, "logo", "logo", {"from": profile_origin}):
-            out["logo"] = 1
-    edges = ((u.get("edge_owner_to_timeline_media") or {}).get("edges")) or []
-    for e in edges[:max(1, min(8, int(count or 4)))]:
-        node = (e or {}).get("node") or {}
-        du = node.get("display_url")
-        if du and _save_img(du, "references", "brand_reference", {"from": f"instagram:@{handle}", "kind": kind}):
-            out["refs"] += 1
-    return out
+    """Compatibility wrapper for the official, house-authorized research path."""
+    return _instagram_research_import(company_id, _instagram_handle(handle), kind, count)
 
 
 @router.post("/{company_id}/import-instagram")
@@ -1828,6 +2215,9 @@ async def import_instagram(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     try:
@@ -1838,8 +2228,14 @@ async def import_instagram(company_id: str, request: Request):
     kind = (body.get("kind") or "reference").strip()
     import asyncio as _aio
     res = await _aio.to_thread(_ig_import, company_id, handle, kind, int(body.get("count") or 4))
-    if res.get("error"):
-        return JSONResponse({"detail": res["error"]}, status_code=422)
+    if res.get("status") in ("action_required", "not_available"):
+        return JSONResponse({
+            "detail": res.get("detail") or "Este perfil não está disponível pela pesquisa oficial da Meta.",
+            "reason": res.get("reason") or "not_available",
+            "fallbacks": ["site_official", "upload_manual"],
+        }, status_code=422)
+    if res.get("refs"):
+        _spawn_reference_analysis(company_id)
     return res
 
 
@@ -1899,26 +2295,54 @@ def _run_company_enrichment(
         except Exception as exc:
             warnings.append("Site/logos: " + str(exc)[:180])
 
-    instagram_stats = {"logo": 0, "refs": 0}
+    source_results: Dict[str, Any] = {
+        "website": {"status": "not_applicable", "references_added": 0},
+        "instagram": {"status": "not_applicable", "logo": 0, "refs": 0},
+        "facebook": {"status": "not_applicable", "logo": 0, "refs": 0},
+    }
+    references_added = 0
+    if website:
+        try:
+            site_references = _auto_fetch_site_references(company_id, website, 3)
+            references_added += int(site_references.get("added") or 0)
+            source_results["website"] = {
+                "status": site_references.get("status") or "not_available",
+                "references_added": int(site_references.get("added") or 0),
+                "reason": site_references.get("reason") or "",
+            }
+        except Exception as exc:
+            source_results["website"] = {
+                "status": "temporarily_unavailable", "references_added": 0,
+                "reason": "reference_import_failed", "detail": str(exc)[:160],
+            }
+
+    instagram_stats: Dict[str, Any] = {"status": "not_applicable", "logo": 0, "refs": 0}
     if instagram:
         try:
             instagram_stats = _ig_import(company_id, instagram, "own", 4)
-            instagram_error = instagram_stats.pop("error", "")
-            if instagram_error:
-                instagram_stats = _ig_fetch_brand(company_id, instagram)
-            if not instagram_stats.get("logo") and not instagram_stats.get("refs"):
-                detail = (": " + instagram_error[:140]) if instagram_error else ""
-                warnings.append("Instagram não liberou imagens deste perfil" + detail)
+            references_added += int(instagram_stats.get("refs") or 0)
+            source_results["instagram"] = dict(instagram_stats)
         except Exception as exc:
-            warnings.append("Instagram: " + str(exc)[:180])
-    facebook_logo = 0
+            instagram_stats = {
+                "status": "temporarily_unavailable", "reason": "official_discovery_failed",
+                "detail": str(exc)[:180], "logo": 0, "refs": 0,
+            }
+            source_results["instagram"] = dict(instagram_stats)
+    facebook_stats: Dict[str, Any] = {"status": "not_applicable", "logo": 0, "refs": 0}
     if facebook:
         try:
-            facebook_logo = _facebook_fetch_logo(company_id, facebook)
-            if not facebook_logo:
-                warnings.append("Facebook não liberou a foto pública desta página.")
+            facebook_stats = _facebook_research_import(company_id, facebook, 4)
+            references_added += int(facebook_stats.get("refs") or 0)
+            source_results["facebook"] = dict(facebook_stats)
         except Exception as exc:
-            warnings.append("Facebook: " + str(exc)[:180])
+            facebook_stats = {
+                "status": "temporarily_unavailable", "reason": "official_page_discovery_failed",
+                "detail": str(exc)[:180], "logo": 0, "refs": 0,
+            }
+            source_results["facebook"] = dict(facebook_stats)
+    facebook_logo = int(facebook_stats.get("logo") or 0)
+    if references_added:
+        _spawn_reference_analysis(company_id)
 
     after_logos = list(asset_list_logos(company_id) or [])
     logo_ids = {logo.get("id") for logo in after_logos}
@@ -2000,6 +2424,10 @@ def _run_company_enrichment(
     brand_kit_extras_patch(company_id, extra_patch)
 
     final_colors = (brand_kit_get(company_id) or {}).get("colors") or {}
+    reference_assets = asset_list(company_id, role="brand_reference") or []
+    if not isinstance(reference_assets, (list, tuple)):
+        reference_assets = []
+    references_total = len(reference_assets)
     final_status = _store_enrichment_status(
         company_id, run_id=run_id,
         state="done",
@@ -2012,6 +2440,8 @@ def _run_company_enrichment(
         products_added=products_added,
         products_found=products_found,
         product_pages_scanned=product_pages_scanned,
+        references_total=references_total,
+        sources=source_results,
         palette_preserved=bool(palette_is_manual and not replace_manual),
         warnings=warnings,
         error="",
@@ -2022,6 +2452,8 @@ def _run_company_enrichment(
         "product_pages_scanned": product_pages_scanned, "instagram": instagram_stats,
         "facebook_logo": facebook_logo, "logos_added": logos_added,
         "logos_total": len(after_logos), "colors": final_colors,
+        "references_total": references_total,
+        "sources": source_results,
         "warnings": warnings, "enrichment": final_status,
     }
 
@@ -2032,6 +2464,9 @@ async def enrich_company(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     try:
         body = await request.json()
     except Exception:
@@ -2079,6 +2514,9 @@ async def start_company_enrichment(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -2104,6 +2542,9 @@ def get_company_enrichment_status(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     return {"enrichment": _enrichment_status(company_id)}
@@ -2114,6 +2555,9 @@ async def upload_logo(company_id: str, request: Request, file: UploadFile = File
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     existing = company_get(company_id)
     if not existing:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
@@ -2139,11 +2583,30 @@ async def upload_logo(company_id: str, request: Request, file: UploadFile = File
 # ─────────────────────────────────────────────────────────────────────────────
 # Influencers (por empresa) — cadastro + banco de imagem (fotos reais p/ compor na arte + collab @)
 # ─────────────────────────────────────────────────────────────────────────────
+def _record_belongs_to_company(record: Optional[Dict[str, Any]], company_id: str) -> bool:
+    return bool(record and str(record.get("company_id") or "") == str(company_id or ""))
+
+
+def _asset_belongs_to_entity(
+    asset: Optional[Dict[str, Any]], company_id: str, *, kind: str, meta_key: str, entity_id: str,
+) -> bool:
+    meta = (asset or {}).get("meta") or {}
+    return bool(
+        asset
+        and str(asset.get("company_id") or "") == str(company_id or "")
+        and str(asset.get("kind") or "") == kind
+        and str(meta.get(meta_key) or "") == str(entity_id or "")
+    )
+
+
 @router.get("/{company_id}/influencer-companies")
 def list_infcompanies(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     from ..db_companies import infcompany_list
     return {"companies": infcompany_list(company_id)}
 
@@ -2153,6 +2616,9 @@ async def create_infcompany(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     body = await request.json()
@@ -2167,8 +2633,14 @@ async def update_infcompany(company_id: str, infco_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import infcompany_get, infcompany_update
+    current = infcompany_get(infco_id)
+    if not _record_belongs_to_company(current, company_id):
+        return JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
     body = await request.json()
-    from ..db_companies import infcompany_update
     o = infcompany_update(infco_id, body)
     return o or JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
 
@@ -2178,7 +2650,12 @@ def delete_infcompany(company_id: str, infco_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
-    from ..db_companies import infcompany_delete
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import infcompany_delete, infcompany_get
+    if not _record_belongs_to_company(infcompany_get(infco_id), company_id):
+        return JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
     return {"ok": infcompany_delete(infco_id)}
 
 
@@ -2187,8 +2664,12 @@ async def upload_infcompany_logo(company_id: str, infco_id: str, request: Reques
     err = _api_key_required(request)
     if err:
         return err
-    if not company_get(company_id):
-        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import infcompany_get
+    if not _record_belongs_to_company(infcompany_get(infco_id), company_id):
+        return JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
     import uuid as _uuid
     ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "inf_companies", infco_id)
@@ -2206,6 +2687,17 @@ def delete_infcompany_logo(company_id: str, infco_id: str, asset_id: str, reques
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import infcompany_get
+    if not _record_belongs_to_company(infcompany_get(infco_id), company_id):
+        return JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
+    asset = asset_get(asset_id)
+    if not _asset_belongs_to_entity(
+        asset, company_id, kind="INFCOMPANY_LOGO", meta_key="infcompany_id", entity_id=infco_id,
+    ):
+        return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     from ..db_companies import asset_delete
     return {"ok": asset_delete(asset_id)}
 
@@ -2215,6 +2707,9 @@ def list_influencers(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     from ..db_companies import influencer_list
     return {"influencers": influencer_list(company_id)}
 
@@ -2224,12 +2719,18 @@ async def create_influencer(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     body = await request.json()
     if not (body.get("name") or "").strip():
         return JSONResponse({"detail": "Nome do influencer é obrigatório"}, status_code=422)
-    from ..db_companies import influencer_create
+    from ..db_companies import infcompany_get, influencer_create
+    infcompany_id = str(body.get("infcompany_id") or "").strip()
+    if infcompany_id and not _record_belongs_to_company(infcompany_get(infcompany_id), company_id):
+        return JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
     return influencer_create(company_id, body)
 
 
@@ -2238,8 +2739,17 @@ async def update_influencer(company_id: str, inf_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import infcompany_get, influencer_get, influencer_update
+    current = influencer_get(inf_id)
+    if not _record_belongs_to_company(current, company_id):
+        return JSONResponse({"detail": "Influencer não encontrado"}, status_code=404)
     body = await request.json()
-    from ..db_companies import influencer_update
+    infcompany_id = str(body.get("infcompany_id") or "").strip()
+    if infcompany_id and not _record_belongs_to_company(infcompany_get(infcompany_id), company_id):
+        return JSONResponse({"detail": "Empresa influencer não encontrada"}, status_code=404)
     inf = influencer_update(inf_id, body)
     return inf or JSONResponse({"detail": "Influencer não encontrado"}, status_code=404)
 
@@ -2249,7 +2759,12 @@ def delete_influencer(company_id: str, inf_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
-    from ..db_companies import influencer_delete
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import influencer_delete, influencer_get
+    if not _record_belongs_to_company(influencer_get(inf_id), company_id):
+        return JSONResponse({"detail": "Influencer não encontrado"}, status_code=404)
     return {"ok": influencer_delete(inf_id)}
 
 
@@ -2258,8 +2773,12 @@ async def upload_influencer_photo(company_id: str, inf_id: str, request: Request
     err = _api_key_required(request)
     if err:
         return err
-    if not company_get(company_id):
-        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import influencer_get
+    if not _record_belongs_to_company(influencer_get(inf_id), company_id):
+        return JSONResponse({"detail": "Influencer não encontrado"}, status_code=404)
     import uuid as _uuid
     ext = os.path.splitext(file.filename or "foto.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "influencers", inf_id)
@@ -2277,6 +2796,17 @@ def delete_influencer_photo(company_id: str, inf_id: str, asset_id: str, request
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import influencer_get
+    if not _record_belongs_to_company(influencer_get(inf_id), company_id):
+        return JSONResponse({"detail": "Influencer não encontrado"}, status_code=404)
+    asset = asset_get(asset_id)
+    if not _asset_belongs_to_entity(
+        asset, company_id, kind="INFLUENCER_PHOTO", meta_key="influencer_id", entity_id=inf_id,
+    ):
+        return JSONResponse({"detail": "Foto não encontrada"}, status_code=404)
     from ..db_companies import asset_delete
     return {"ok": asset_delete(asset_id)}
 
@@ -2290,6 +2820,9 @@ def list_organizers(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     from ..db_companies import organizer_list
     return {"organizers": organizer_list(company_id)}
 
@@ -2299,6 +2832,9 @@ async def create_organizer(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     body = await request.json()
@@ -2313,8 +2849,14 @@ async def update_organizer(company_id: str, org_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import organizer_get, organizer_update
+    current = organizer_get(org_id)
+    if not _record_belongs_to_company(current, company_id):
+        return JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
     body = await request.json()
-    from ..db_companies import organizer_update
     o = organizer_update(org_id, body)
     return o or JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
 
@@ -2324,7 +2866,12 @@ def delete_organizer(company_id: str, org_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
-    from ..db_companies import organizer_delete
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import organizer_delete, organizer_get
+    if not _record_belongs_to_company(organizer_get(org_id), company_id):
+        return JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
     return {"ok": organizer_delete(org_id)}
 
 
@@ -2333,8 +2880,12 @@ async def upload_organizer_logo(company_id: str, org_id: str, request: Request, 
     err = _api_key_required(request)
     if err:
         return err
-    if not company_get(company_id):
-        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import organizer_get
+    if not _record_belongs_to_company(organizer_get(org_id), company_id):
+        return JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
     import uuid as _uuid
     ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "event_orgs", org_id)
@@ -2352,6 +2903,17 @@ def delete_organizer_logo(company_id: str, org_id: str, asset_id: str, request: 
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import organizer_get
+    if not _record_belongs_to_company(organizer_get(org_id), company_id):
+        return JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
+    asset = asset_get(asset_id)
+    if not _asset_belongs_to_entity(
+        asset, company_id, kind="ORGANIZER_LOGO", meta_key="organizer_id", entity_id=org_id,
+    ):
+        return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     from ..db_companies import asset_delete
     return {"ok": asset_delete(asset_id)}
 
@@ -2365,6 +2927,9 @@ def list_events(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     from ..db_companies import event_list
     return {"events": event_list(company_id)}
 
@@ -2374,12 +2939,18 @@ async def create_event(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     body = await request.json()
     if not (body.get("name") or "").strip():
         return JSONResponse({"detail": "Nome do evento é obrigatório"}, status_code=422)
-    from ..db_companies import event_create
+    from ..db_companies import event_create, organizer_get
+    organizer_id = str(body.get("organizer_id") or "").strip()
+    if organizer_id and not _record_belongs_to_company(organizer_get(organizer_id), company_id):
+        return JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
     return event_create(company_id, body)
 
 
@@ -2388,8 +2959,17 @@ async def update_event(company_id: str, event_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import event_get, event_update, organizer_get
+    current = event_get(event_id)
+    if not _record_belongs_to_company(current, company_id):
+        return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
     body = await request.json()
-    from ..db_companies import event_update
+    organizer_id = str(body.get("organizer_id") or "").strip()
+    if organizer_id and not _record_belongs_to_company(organizer_get(organizer_id), company_id):
+        return JSONResponse({"detail": "Organizador não encontrado"}, status_code=404)
     ev = event_update(event_id, body)
     return ev or JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
 
@@ -2399,7 +2979,12 @@ def delete_event(company_id: str, event_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
-    from ..db_companies import event_delete
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import event_delete, event_get
+    if not _record_belongs_to_company(event_get(event_id), company_id):
+        return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
     return {"ok": event_delete(event_id)}
 
 
@@ -2408,8 +2993,12 @@ async def upload_event_logo(company_id: str, event_id: str, request: Request, fi
     err = _api_key_required(request)
     if err:
         return err
-    if not company_get(company_id):
-        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import event_get
+    if not _record_belongs_to_company(event_get(event_id), company_id):
+        return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
     import uuid as _uuid
     ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "events", event_id)
@@ -2427,6 +3016,17 @@ def delete_event_logo(company_id: str, event_id: str, asset_id: str, request: Re
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import event_get
+    if not _record_belongs_to_company(event_get(event_id), company_id):
+        return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
+    asset = asset_get(asset_id)
+    if not _asset_belongs_to_entity(
+        asset, company_id, kind="EVENT_LOGO", meta_key="event_id", entity_id=event_id,
+    ):
+        return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     from ..db_companies import asset_delete
     return {"ok": asset_delete(asset_id)}
 
@@ -2436,8 +3036,12 @@ async def upload_event_image(company_id: str, event_id: str, request: Request, f
     err = _api_key_required(request)
     if err:
         return err
-    if not company_get(company_id):
-        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import event_get
+    if not _record_belongs_to_company(event_get(event_id), company_id):
+        return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
     import uuid as _uuid
     ext = os.path.splitext(file.filename or "img.png")[1] or ".png"
     subdir = os.path.join(UPLOAD_DIR, company_id, "events", event_id, "img")
@@ -2455,6 +3059,17 @@ def delete_event_image(company_id: str, event_id: str, asset_id: str, request: R
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import event_get
+    if not _record_belongs_to_company(event_get(event_id), company_id):
+        return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
+    asset = asset_get(asset_id)
+    if not _asset_belongs_to_entity(
+        asset, company_id, kind="EVENT_IMAGE", meta_key="event_id", entity_id=event_id,
+    ):
+        return JSONResponse({"detail": "Imagem não encontrada"}, status_code=404)
     from ..db_companies import asset_delete
     return {"ok": asset_delete(asset_id)}
 
@@ -2463,15 +3078,121 @@ def delete_event_image(company_id: str, event_id: str, asset_id: str, request: R
 # Reference images (mood board)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _refresh_reference_profile(company_id: str) -> None:
+def _approved_references(company_id: str) -> List[Dict[str, Any]]:
+    refs = asset_list(company_id, role="brand_reference") or []
+    return [
+        ref for ref in refs
+        if (ref.get("meta") or {}).get("review_status") == "approved"
+        or (
+            not (ref.get("meta") or {}).get("review_status")
+            and ref.get("source") == "UPLOADED"
+        )
+    ]
+
+
+def _reference_analysis_state(
+    company_id: str,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any], str]:
+    """Return the exact approved-reference snapshot consumed by one analysis run."""
+    import hashlib
+    import json
+
+    approved = _approved_references(company_id)
+    selected = approved[:8]
+    snapshot = {
+        "reference_count": len(approved),
+        "items": [
+            {
+                "id": str(ref.get("id") or ""),
+                "url": str(ref.get("url") or ""),
+                "sha256": str((ref.get("meta") or {}).get("sha256") or ""),
+                "source_key": str((ref.get("meta") or {}).get("source_key") or ""),
+            }
+            for ref in selected
+        ],
+    }
+    snapshot_key = hashlib.sha256(
+        json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return selected, snapshot, snapshot_key
+
+
+def _reference_profile_is_current(company_id: str, run_id: str, revision: int) -> bool:
+    profile = (((brand_kit_get(company_id) or {}).get("extras") or {}).get("reference_profile") or {})
+    try:
+        current_revision = int(profile.get("revision") or 0)
+    except (TypeError, ValueError):
+        current_revision = 0
+    return str(profile.get("run_id") or "") == str(run_id or "") and current_revision == int(revision or 0)
+
+
+def _store_reference_profile_if_current(
+    company_id: str, run_id: str, revision: int, profile: Dict[str, Any],
+) -> bool:
+    """Cross-process compare-and-set: a stale visual analysis can never win."""
+    import json
+
+    try:
+        from ..db import get_conn
+        with get_conn() as conn:
+            current = conn.execute(
+                "SELECT 1 FROM brand_kits WHERE company_id = ?",
+                (company_id,),
+            ).fetchone()
+            if current:
+                cursor = conn.execute(
+                    """
+                    UPDATE brand_kits
+                    SET extras = json_set(
+                            CASE WHEN json_valid(extras) THEN extras ELSE '{}' END,
+                            '$.reference_profile', json(?)
+                        ),
+                        updated_at = ?
+                    WHERE company_id = ?
+                      AND COALESCE(json_extract(extras, '$.reference_profile.run_id'), '') = ?
+                      AND COALESCE(CAST(json_extract(
+                            extras, '$.reference_profile.revision'
+                          ) AS INTEGER), 0) = ?
+                    """,
+                    (json.dumps(profile), _now(), company_id, run_id, int(revision or 0)),
+                )
+                return cursor.rowcount > 0
+    except Exception:
+        # Unit-test adapters and old extension hosts may not expose get_conn. The
+        # in-process guard still preserves the same compare-and-set semantics.
+        pass
+
+    with _REFERENCE_ANALYSIS_GUARD:
+        if not _reference_profile_is_current(company_id, run_id, revision):
+            return False
+        brand_kit_extras_patch(company_id, {"reference_profile": profile})
+        return True
+
+
+def _refresh_reference_profile(
+    company_id: str,
+    *,
+    run_id: str = "",
+    revision: int = 0,
+    snapshot: Optional[Dict[str, Any]] = None,
+    snapshot_key: str = "",
+    refs: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
     """Turn reference art into reusable visual direction without replacing official brand identity."""
-    refs = asset_list(company_id, role="brand_reference")[:5]
-    existing = brand_kit_get(company_id) or {}
-    extras = dict(existing.get("extras") or {})
+    if refs is None or snapshot is None or not snapshot_key:
+        refs, snapshot, snapshot_key = _reference_analysis_state(company_id)
+    refs = list(refs or [])[:8]
+    snapshot = dict(snapshot or {})
+    if run_id and not _reference_profile_is_current(company_id, run_id, revision):
+        return False
     profile: Dict[str, Any] = {
         "status": "ready",
         "analyzed_at": _now(),
-        "reference_count": len(refs),
+        "reference_count": int(snapshot.get("reference_count") or len(refs)),
+        "run_id": run_id,
+        "revision": int(revision or 0),
+        "snapshot": snapshot,
+        "snapshot_key": snapshot_key,
         "palette": [],
         "logo_position": "unknown",
         "layout_direction": "",
@@ -2540,20 +3261,86 @@ def _refresh_reference_profile(company_id: str) -> None:
                 profile["confidence"] = parsed_confidence if parsed else 0.0
         except Exception as exc:
             profile["analysis_note"] = ("análise visual indisponível: " + str(exc))[:300]
+    if run_id:
+        return _store_reference_profile_if_current(company_id, run_id, revision, profile)
     brand_kit_extras_patch(company_id, {"reference_profile": profile})
+    return True
 
 
-def _spawn_reference_analysis(company_id: str) -> None:
-    import threading
-    current = brand_kit_get(company_id) or {}
-    extras = dict(current.get("extras") or {})
-    reference_profile = {
-        **(extras.get("reference_profile") or {}),
-        "status": "analyzing",
-        "reference_count": len(asset_list(company_id, role="brand_reference")),
-    }
-    brand_kit_extras_patch(company_id, {"reference_profile": reference_profile})
-    threading.Thread(target=_refresh_reference_profile, args=(company_id,), daemon=True).start()
+def _reference_analysis_worker(
+    company_id: str,
+    run_id: str,
+    revision: int,
+    snapshot: Dict[str, Any],
+    snapshot_key: str,
+    refs: List[Dict[str, Any]],
+) -> None:
+    try:
+        _refresh_reference_profile(
+            company_id, run_id=run_id, revision=revision,
+            snapshot=snapshot, snapshot_key=snapshot_key, refs=refs,
+        )
+    except Exception as exc:
+        failed = {
+            "status": "failed", "failed_at": _now(),
+            "reference_count": int(snapshot.get("reference_count") or len(refs)),
+            "run_id": run_id, "revision": revision,
+            "snapshot": snapshot, "snapshot_key": snapshot_key,
+            "analysis_note": ("análise visual indisponível: " + str(exc))[:300],
+        }
+        _store_reference_profile_if_current(company_id, run_id, revision, failed)
+
+
+def _spawn_reference_analysis(company_id: str) -> Dict[str, Any]:
+    refs, snapshot, snapshot_key = _reference_analysis_state(company_id)
+    with _REFERENCE_ANALYSIS_GUARD:
+        current = brand_kit_get(company_id) or {}
+        extras = dict(current.get("extras") or {})
+        previous = dict(extras.get("reference_profile") or {})
+        same_snapshot = previous.get("snapshot_key") == snapshot_key
+        if same_snapshot and previous.get("status") == "ready":
+            return previous
+        if same_snapshot and previous.get("status") == "analyzing":
+            try:
+                started = datetime.fromisoformat(str(previous.get("started_at") or "").replace("Z", "+00:00"))
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - started < timedelta(minutes=15):
+                    return previous
+            except Exception:
+                pass
+        try:
+            revision = int(previous.get("revision") or 0) + 1
+        except (TypeError, ValueError):
+            revision = 1
+        run_id = uuid.uuid4().hex
+        reference_profile = {
+            **previous,
+            "status": "analyzing",
+            "started_at": _now(),
+            "run_id": run_id,
+            "revision": revision,
+            "reference_count": int(snapshot.get("reference_count") or len(refs)),
+            "snapshot": snapshot,
+            "snapshot_key": snapshot_key,
+        }
+        brand_kit_extras_patch(company_id, {"reference_profile": reference_profile})
+
+    try:
+        threading.Thread(
+            target=_reference_analysis_worker,
+            args=(company_id, run_id, revision, snapshot, snapshot_key, refs),
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        failed = {
+            **reference_profile,
+            "status": "failed", "failed_at": _now(),
+            "analysis_note": ("não foi possível iniciar a análise: " + str(exc))[:300],
+        }
+        _store_reference_profile_if_current(company_id, run_id, revision, failed)
+        return failed
+    return reference_profile
 
 
 @router.get("/{company_id}/references")
@@ -2561,6 +3348,9 @@ def list_references(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     refs = asset_list(company_id, role="brand_reference")
     return {"references": refs}
 
@@ -2570,22 +3360,64 @@ async def upload_reference(company_id: str, request: Request, file: UploadFile =
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     existing = company_get(company_id)
     if not existing:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
-    import uuid as _uuid
-    ext = os.path.splitext(file.filename or "ref.png")[1] or ".png"
-    subdir = os.path.join(UPLOAD_DIR, company_id, "references")
-    os.makedirs(subdir, exist_ok=True)
-    filename = f"{_uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(subdir, filename)
-    content = await file.read()
-    with open(filepath, "wb") as f:
-        f.write(content)
-    url = f"{UPLOAD_URL_PREFIX}/{company_id}/references/{filename}"
-    asset = asset_create(company_id, {"kind": "IMAGE", "source": "UPLOADED", "url": url, "meta": {"role": "brand_reference"}})
-    _spawn_reference_analysis(company_id)
-    return {"reference": asset, "analysis_status": "analyzing"}
+    import hashlib
+    content = await file.read(12 * 1024 * 1024 + 1)
+    if len(content) > 12 * 1024 * 1024:
+        return JSONResponse({"detail": "A referência excede o limite de 12 MB."}, status_code=422)
+    source_key = "upload:" + hashlib.sha256(content).hexdigest()
+    asset = _save_reference_image(
+        company_id, content, source="UPLOADED", source_url="", source_key=source_key,
+        metadata={
+            "filename": os.path.basename(file.filename or "referencia"),
+            "owner_scope": "user_provided", "rights_basis": "user_provided",
+            "allowed_use": "visual_reference", "review_status": "approved", "confidence": 1.0,
+        },
+    )
+    if not asset:
+        return JSONResponse({
+            "detail": "Arquivo inválido, pequeno demais, corrompido ou já cadastrado. Use PNG, JPEG ou WebP.",
+        }, status_code=422)
+    analysis = _spawn_reference_analysis(company_id)
+    return {"reference": asset, "analysis_status": analysis.get("status") or "analyzing"}
+
+
+@router.post("/{company_id}/references/{asset_id}/review")
+async def review_reference(company_id: str, asset_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    status = str(body.get("status") or "").strip().lower()
+    if status not in ("approved", "rejected"):
+        return JSONResponse({"detail": "status deve ser approved ou rejected"}, status_code=422)
+    asset = asset_get(asset_id)
+    if (not asset or asset.get("company_id") != company_id
+            or (asset.get("meta") or {}).get("role") != "brand_reference"):
+        return JSONResponse({"detail": "Referência não encontrada"}, status_code=404)
+    meta = dict(asset.get("meta") or {})
+    if str(meta.get("review_status") or "").strip().lower() == status:
+        updated = asset
+    else:
+        meta.update({
+            "review_status": status,
+            "reviewed_at": _now(),
+            "allowed_use": "visual_reference" if status == "approved" else "none",
+        })
+        updated = asset_update_meta(asset_id, meta)
+    analysis = _spawn_reference_analysis(company_id)
+    return {"reference": updated, "analysis_status": analysis.get("status") or "analyzing"}
 
 
 @router.delete("/{company_id}/references/{asset_id}")
@@ -2593,17 +3425,21 @@ def delete_reference(company_id: str, asset_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     # get asset to find file path
     refs = asset_list(company_id, role="brand_reference")
     ref = next((r for r in refs if r["id"] == asset_id), None)
-    if ref:
-        # try to delete file
-        url = ref.get("url", "")
-        if url.startswith(UPLOAD_URL_PREFIX):
-            rel_path = url[len(UPLOAD_URL_PREFIX):].lstrip("/")
-            abs_path = os.path.join(UPLOAD_DIR, rel_path)
-            if os.path.exists(abs_path):
-                os.remove(abs_path)
+    if not ref:
+        return JSONResponse({"detail": "Referência não encontrada"}, status_code=404)
+    # try to delete file
+    url = ref.get("url", "")
+    if url.startswith(UPLOAD_URL_PREFIX):
+        rel_path = url[len(UPLOAD_URL_PREFIX):].lstrip("/")
+        abs_path = os.path.join(UPLOAD_DIR, rel_path)
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
     ok = asset_delete(asset_id)
     if not ok:
         return JSONResponse({"detail": "Referência não encontrada"}, status_code=404)
@@ -2620,6 +3456,9 @@ def list_competitors(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     comps = competitor_list(company_id)
     return {"competitors": comps}
 
@@ -2629,6 +3468,9 @@ async def add_competitor(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     body = await request.json()
     if not body.get("name"):
         return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
@@ -2649,6 +3491,11 @@ def remove_competitor(company_id: str, competitor_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not any(str(item.get("id")) == str(competitor_id) for item in competitor_list(company_id)):
+        return JSONResponse({"detail": "Concorrente não encontrado"}, status_code=404)
     ok = competitor_delete(competitor_id)
     if not ok:
         return JSONResponse({"detail": "Concorrente não encontrado"}, status_code=404)
@@ -2665,6 +3512,10 @@ def list_all_competitors(request: Request):
     if err:
         return err
     comps = competitor_list()
+    from ..main_utils import scoped_company_ids
+    allowed = scoped_company_ids(request)
+    if allowed is not None:
+        comps = [item for item in comps if str(item.get("company_id") or "") in allowed]
     return {"competitors": comps}
 
 
@@ -2677,6 +3528,9 @@ def list_products(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     products = product_list(company_id)
     for p in products:
         p["solutions"] = solution_list(p["id"])
@@ -2690,6 +3544,9 @@ async def create_product(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     try:
@@ -2708,6 +3565,9 @@ def product_copy_sources(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     from ..main_utils import scoped_company_ids
     scoped = scoped_company_ids(request)                       # None = super-admin (vê todas)
     out = []
@@ -2733,6 +3593,9 @@ async def copy_products(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     try:
@@ -2764,6 +3627,12 @@ async def update_product(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    existing_product = product_get(product_id)
+    if not existing_product or str(existing_product.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     try:
         data = await request.json()
     except Exception:
@@ -2859,6 +3728,9 @@ async def upload_product_kb(company_id: str, product_id: str, request: Request, 
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     prod = product_get(product_id)
     if not prod or prod.get("company_id") != company_id:
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
@@ -2926,6 +3798,9 @@ def get_product_kb(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     prod = product_get(product_id)
     if not prod or prod.get("company_id") != company_id:
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
@@ -2938,6 +3813,9 @@ def clear_product_kb(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     prod = product_get(product_id)
     if not prod or prod.get("company_id") != company_id:
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
@@ -3078,6 +3956,12 @@ def _company_logo_colors(company_id: str, max_colors: int = 8) -> Dict[str, str]
             if not _trusted_company_logo(logo, company_name):
                 continue
             meta = logo.get("meta") or {}
+            # Avatares descobertos externamente são apenas candidatos. Até a
+            # aprovação explícita eles não alteram a paleta oficial da marca.
+            if str(meta.get("review_status") or "").strip().lower() in {
+                "candidate_needs_review", "rejected",
+            }:
+                continue
             # A screenshot with the site's background is a useful logo variant, but its background
             # must not contaminate the official palette when transparent assets are available.
             has_chromatic = any(_hex_hsv(color)[1] >= 0.16 for color in palette)
@@ -3134,8 +4018,11 @@ async def enrich_product(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     prod = product_get(product_id)
-    if not prod:
+    if not prod or str(prod.get("company_id") or "") != str(company_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     try:
         body = await request.json()
@@ -3186,6 +4073,12 @@ def delete_product(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    prod = product_get(product_id)
+    if not prod or str(prod.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     if not product_delete(product_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     return {"deleted": True}
@@ -3196,7 +4089,11 @@ async def upload_product_logo(company_id: str, product_id: str, request: Request
     err = _api_key_required(request)
     if err:
         return err
-    if not product_get(product_id):
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    prod = product_get(product_id)
+    if not prod or str(prod.get("company_id") or "") != str(company_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     import uuid as _uuid
     ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
@@ -3221,8 +4118,11 @@ async def upload_product_photo(company_id: str, product_id: str, request: Reques
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     prod = product_get(product_id)
-    if not prod:
+    if not prod or str(prod.get("company_id") or "") != str(company_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     import uuid as _uuid
     raw = await file.read()
@@ -3255,6 +4155,13 @@ def delete_product_photo(company_id: str, product_id: str, asset_id: str, reques
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    asset = asset_get(asset_id)
+    if (not asset or str(asset.get("company_id") or "") != str(company_id)
+            or str(asset.get("product_id") or "") != str(product_id)):
+        return JSONResponse({"detail": "Foto não encontrada"}, status_code=404)
     return {"deleted": asset_delete(asset_id)}
 
 
@@ -3263,6 +4170,12 @@ def list_solutions(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    prod = product_get(product_id)
+    if not prod or str(prod.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     return {"solutions": solution_list(product_id)}
 
 
@@ -3271,6 +4184,12 @@ async def create_solution(company_id: str, product_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    prod = product_get(product_id)
+    if not prod or str(prod.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     try:
         data = await request.json()
     except Exception:
@@ -3288,6 +4207,12 @@ async def update_solution(company_id: str, solution_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    existing_solution = solution_get(solution_id)
+    if not existing_solution or str(existing_solution.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
     try:
         data = await request.json()
     except Exception:
@@ -3303,6 +4228,12 @@ def delete_solution(company_id: str, solution_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    existing_solution = solution_get(solution_id)
+    if not existing_solution or str(existing_solution.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
     if not solution_delete(solution_id):
         return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
     return {"deleted": True}
@@ -3330,12 +4261,24 @@ def _ensure_logo_primary_consistency(
     logos = list(logos if logos is not None else (asset_list_logos(company_id) or []))
     if not logos:
         return logos
-    primary = [logo for logo in logos if (logo.get("meta") or {}).get("is_primary")]
+    eligible = [
+        logo for logo in logos
+        if str((logo.get("meta") or {}).get("review_status") or "").strip().lower()
+        not in {"candidate_needs_review", "rejected"}
+    ]
+    primary = [logo for logo in eligible if (logo.get("meta") or {}).get("is_primary")]
     kit_url = (brand_kit_get(company_id) or {}).get("logo_url") or ""
-    matching = next((logo for logo in logos if logo.get("url") == kit_url), None)
+    matching = next((logo for logo in eligible if logo.get("url") == kit_url), None)
     if len(primary) == 1 and (not matching or primary[0].get("id") == matching.get("id")):
         return logos
-    chosen = matching or min(logos, key=_logo_promotion_rank)
+    if not eligible:
+        # A descoberta social nunca pode se autopromover por ser a única imagem.
+        if any((logo.get("meta") or {}).get("is_primary") for logo in logos):
+            asset_clear_primary(company_id)
+        if kit_url and any(logo.get("url") == kit_url for logo in logos):
+            brand_kit_upsert(company_id, {"logo_url": None})
+        return list(asset_list_logos(company_id) or logos)
+    chosen = matching or min(eligible, key=_logo_promotion_rank)
     source = None if matching else ("MANUAL" if chosen.get("source") == "UPLOADED" else "AUTO")
     asset_set_primary_logo(company_id, chosen["id"], source)
     return list(asset_list_logos(company_id) or logos)
@@ -3345,6 +4288,9 @@ def list_logos(company_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     return {"logos": _ensure_logo_primary_consistency(company_id)}
 
 
@@ -3359,6 +4305,9 @@ async def upload_logo_variant(
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     import uuid as _uuid
@@ -3389,6 +4338,9 @@ def set_primary_logo(company_id: str, asset_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     asset = asset_get(asset_id)
     meta = (asset or {}).get("meta") or {}
     if (not asset or asset.get("company_id") != company_id or asset.get("product_id") is not None
@@ -3397,6 +4349,10 @@ def set_primary_logo(company_id: str, asset_id: str, request: Request):
     asset = asset_set_primary_logo(company_id, asset_id, "MANUAL")
     if not asset:
         return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
+    approved_meta = dict(asset.get("meta") or {})
+    approved_meta.update({"review_status": "approved", "reviewed_at": _now()})
+    asset_update_meta(asset_id, approved_meta)
+    asset = asset_get(asset_id) or asset
     return {"logo": asset}
 
 
@@ -3405,6 +4361,9 @@ def delete_logo(company_id: str, asset_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
     asset = asset_get(asset_id)
     meta = (asset or {}).get("meta") or {}
     if (not asset or asset.get("company_id") != company_id or asset.get("product_id") is not None
@@ -3420,9 +4379,15 @@ def delete_logo(company_id: str, asset_id: str, request: Request):
     kit = brand_kit_get(company_id) or {}
     if meta.get("is_primary") or kit.get("logo_url") == asset.get("url"):
         remaining = list(asset_list_logos(company_id) or [])
-        if remaining:
-            chosen = min(remaining, key=_logo_promotion_rank)
+        eligible = [
+            logo for logo in remaining
+            if str((logo.get("meta") or {}).get("review_status") or "").strip().lower()
+            not in {"candidate_needs_review", "rejected"}
+        ]
+        if eligible:
+            chosen = min(eligible, key=_logo_promotion_rank)
             chosen = asset_set_primary_logo(company_id, chosen["id"], "MANUAL") or chosen
         else:
+            asset_clear_primary(company_id)
             brand_kit_upsert(company_id, {"logo_url": None})
     return {"deleted": True, "logos": asset_list_logos(company_id)}

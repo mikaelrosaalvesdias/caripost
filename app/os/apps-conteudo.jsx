@@ -10,6 +10,22 @@ function addRunPosts(cid, ids) {   // registra os posts criados NESTE run/projet
   const cur = (ContState.get(cid).runPostIds) || [];
   ContState.set(cid, { runPostIds: Array.from(new Set([...cur, ...(ids || []).filter(Boolean)])) });
 }
+async function copyContentText(value) {
+  const text = String(value || '');
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.setAttribute('readonly', '');
+    el.style.position = 'fixed'; el.style.opacity = '0';
+    document.body.appendChild(el); el.select();
+    try { return document.execCommand('copy'); }
+    finally { document.body.removeChild(el); }
+  }
+}
 function imgGroups(list) {
   const g = {}; (list || []).forEach(m => { const p = m.provider || 'outros'; (g[p] = g[p] || []).push(m); });
   return Object.keys(g).map(p => ({ provider: p, label: IMG_PROV_LABELS[p] || p, models: g[p] }));
@@ -64,6 +80,7 @@ function _videoCostText(s, brl) {
 
 function VideoCreator({ company }) {
   const st = ContState.get(company.id);
+  const offerRefs = Array.isArray(st.offer_refs) ? st.offer_refs : [];
   const theme = ((st.briefing || '').trim() || (st.assunto || '').trim());
   const [dur, setDur] = React.useState(st.videoSeconds || 0);
   const [vmodels, setVmodels] = React.useState([]);
@@ -96,7 +113,7 @@ function VideoCreator({ company }) {
     setPlanning(true);
     // REUSA o roteiro do BRIEFING (determinístico, sem re-gerar e sem custo). "↻ Regerar roteiro" (nonce>0) força nova geração.
     const _seed = (nonce === 0) ? ((ContState.get(company.id) || {}).videoStoryboard || []) : [];
-    window.mpApi.videoPreflight(company.id, theme, dur, style, _seed, [], model).then(p => { setPf(p); setScenes((p && p.scene_descs) || []); }).catch(() => {}).finally(() => setPlanning(false));
+    window.mpApi.videoPreflight(company.id, theme, dur, style, _seed, [], model, offerRefs).then(p => { setPf(p); setScenes((p && p.scene_descs) || []); }).catch(() => {}).finally(() => setPlanning(false));
   }, [model, dur, nonce, style]);   // custo AUTOMÁTICO · nonce = ↻ regerar roteiro · style = estilo viral
   async function selectModel(id) { setModel(id); setPf(null); try { await window.mpApi.setAiModel({ video_model: id }); } catch (e) {} }
   function setDuration(d) { setDur(d); ContState.set(company.id, { videoSeconds: d }); }
@@ -132,7 +149,8 @@ function VideoCreator({ company }) {
         target_seconds: targetSeconds,
         seconds: targetSeconds,
         scene_seconds: sceneSeconds,
-        cta: currentState.cta || ''
+        cta: currentState.cta || '',
+        offer_refs: offerRefs,
       });
       if (!r || !r.job) { setProc({ open: true, phase: 'error', detail: ((r && r.detail) || 'não consegui iniciar') }); setBusy(false); return; }
       const tot = r.scenes || pf.scenes || 1;
@@ -316,6 +334,7 @@ function VideoApp() {
 
 function TemplateVideoCreator({ company, onUseGenerative }) {
   const st = ContState.get(company.id);
+  const offerRefs = Array.isArray(st.offer_refs) ? st.offer_refs : [];
   const baseSubject = (st.assuntoTema || st.assunto || (st.briefing || '').split('\n').find(Boolean) || '').trim();
   const [templates, setTemplates] = React.useState([]);
   const [templateId, setTemplateId] = React.useState('brand_pulse_15s');
@@ -379,7 +398,7 @@ function TemplateVideoCreator({ company, onUseGenerative }) {
     try {
       const r = await window.mpApi.suggestTemplateVideo({
         company_id: company.id, subject, template_id: templateId, format,
-        objective: st.objetivo || 'engajar', cta: cta || st.cta || ''
+        objective: st.objetivo || 'engajar', cta: cta || st.cta || '', offer_refs: offerRefs
       });
       applySuggestion(r.suggestion);
       setMsg((r.source === 'ai_text' ? 'Sugestao criativa pronta.' : 'Sugestao base pronta.') + (r.warning ? ' Aviso: ' + r.warning : ''));
@@ -407,6 +426,7 @@ function TemplateVideoCreator({ company, onUseGenerative }) {
       right_label: rightLabel,
       right_text: rightText,
       punchline: punchline || title || subject,
+      offer_refs: offerRefs,
     };
   }
 
@@ -449,6 +469,7 @@ function TemplateVideoCreator({ company, onUseGenerative }) {
           preview_url: result.preview_url,
           manifest_url: result.manifest_url,
           token_cost: result.token_cost,
+          offer_refs: offerRefs,
         },
       });
       if (post && post.id) { addRunPosts(company.id, [post.id]); await window.mpApi.transitionPost(post.id, 'REVIEW'); }
@@ -505,7 +526,7 @@ function TemplateVideoCreator({ company, onUseGenerative }) {
 }
 
 const CONT_STEPS = [
-  { k: 'cliente', ic: 'users', t: 'Cliente' },
+  { k: 'cliente', ic: 'users', t: 'Marca-alvo' },
   { k: 'briefing', ic: 'sparkles', t: 'Briefing' },
   { k: 'criacao', ic: 'image', t: 'Criação' },
   { k: 'aprovacao', ic: 'shield', t: 'Aprovação' },
@@ -515,22 +536,34 @@ const CONT_STEPS = [
 const CONT_NETS = ['instagram', 'facebook'];
 
 function ConteudoApp() {
+  const initialCompanyId = (window.mpCtx && window.mpCtx.contentCompanyId) || '';
   const [i, setI] = React.useState(0);
-  const [companyId, setCompanyId] = React.useState('');
+  const [companyId, setCompanyId] = React.useState(initialCompanyId);
   const [company, setCompany] = React.useState(null);
+  const [initialLoadError, setInitialLoadError] = React.useState('');
   const [pjKey, setPjKey] = React.useState(0);   // muda ao abrir/criar projeto → remonta Briefing/Criação (lê o projeto ativo)
 
+  React.useEffect(() => {
+    if (!initialCompanyId || !window.mpApi) return;
+    window.mpApi.getCompany(initialCompanyId).then(c => {
+      if (!c) return;
+      setCompany(c); setCompanyId(initialCompanyId); ContState.novo(initialCompanyId);
+      if (window.mpCtx) delete window.mpCtx.contentCompanyId;
+    }).catch(e => { setCompanyId(''); setInitialLoadError(e.message || 'Não foi possível abrir a empresa selecionada.'); });
+  }, []);
+
   const canNext = (() => {
-    if (i === 0) return !!companyId;
+    if (i === 0) return !!companyId && !!company;
     return true;
   })();
 
   function Steps() {
+    const prospectMode = company && ['prospect', 'lost'].includes(company.lifecycle_stage || 'managed');
     return <div className="wiz-steps">
       {CONT_STEPS.map((s, idx) => <React.Fragment key={s.k}>
         <button className={'wstep' + (idx < i ? ' done' : idx === i ? ' on' : '')}
           onClick={() => { if (idx === 0 || companyId) setI(idx); }}>
-          <span className="wd">{idx < i ? <Icon name="check" style={{ width: 12, height: 12 }} /> : idx + 1}</span>{s.t}
+          <span className="wd">{idx < i ? <Icon name="check" style={{ width: 12, height: 12 }} /> : idx + 1}</span>{prospectMode && s.k === 'agenda' ? 'Entrega' : s.t}
         </button>
         {idx < CONT_STEPS.length - 1 && <span className={'wsep' + (idx < i ? ' done' : '')} />}
       </React.Fragment>)}
@@ -549,8 +582,10 @@ function ConteudoApp() {
 
     <Steps />
 
+    {initialLoadError && <div className="err">{initialLoadError}</div>}
+
     <div className="panel stack" style={{ minHeight: 320 }}>
-      {i === 0 && <StepCliente companyId={companyId}
+      {i === 0 && <StepCliente companyId={companyId} company={company}
         onPick={(id, c) => { setCompanyId(id); setCompany(c); ContState.novo(id); /* entra LIMPO */ }}
         onContinue={() => { setPjKey(k => k + 1); setI(1); }} />}
       {i === 1 && company && <StepBriefing key={companyId + ':' + pjKey} company={company} />}
@@ -572,7 +607,7 @@ function ConteudoApp() {
 }
 
 /* ── Passo 0: Cliente ── */
-function StepCliente({ companyId, onPick, onContinue }) {
+function StepCliente({ companyId, company, onPick, onContinue }) {
   const [companies, setCompanies] = React.useState([]);
   const [q, setQ] = React.useState('');
   const [accounts, setAccounts] = React.useState([]);
@@ -592,6 +627,7 @@ function StepCliente({ companyId, onPick, onContinue }) {
       carouselResults: [{ model: m.model || 'Estúdio IA', slides: (urls || []).map(u => ({ url: u })), cost: 0, post_id: p.id }],
       telas: [], assunto: p.title || '', assuntoTema: p.title || '', briefing: '',
       formato: m.content_type === 'carousel' ? 'carrossel' : (m.content_type || 'post'), copy: p.copy, hashtags: p.hashtags,
+      ...(Object.prototype.hasOwnProperty.call(m, 'offer_refs') ? { offer_refs: m.offer_refs || [] } : {}),
     });
     onContinue && onContinue();
   }
@@ -603,6 +639,7 @@ function StepCliente({ companyId, onPick, onContinue }) {
       ts: p.created_at ? (Date.parse(p.created_at) || 0) : 0, thumb: urls[0] } : null;
   }).filter(x => x && !_lsIds.has(x._post.id));
   const caixas = [...projetos.map(p => ({ ...p, thumb: ((((p.carouselResults || [])[0] || {}).slides || [])[0] || {}).url })), ..._db].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const prospectMode = company && ['prospect', 'lost'].includes(company.lifecycle_stage || 'managed');
 
   React.useEffect(() => {
     if (!window.mpApi) return;
@@ -626,32 +663,39 @@ function StepCliente({ companyId, onPick, onContinue }) {
 
   return <div className="split">
     <div className="stack">
-      <Field label="Buscar cliente"><input className="inp" value={q} onChange={e => setQ(e.target.value)} placeholder="Nome do cliente…" /></Field>
+      <Field label="Buscar marca-alvo"><input className="inp" value={q} onChange={e => setQ(e.target.value)} placeholder="Nome do prospect, cliente ou marca interna…" /></Field>
       {loading && <div className="hint">Carregando clientes…</div>}
       <div className="stack" style={{ maxHeight: 320, overflow: 'auto' }}>
         {filtered.map(c => {
           const id = c.id || c.company_id;
+          const stage = c.lifecycle_stage || 'managed';
+          const stageMeta = stage === 'lost' ? ['warn', 'inativo'] : stage === 'prospect' ? ['cy', 'prospecto'] : stage === 'internal' ? ['good', 'interno'] : ['good', 'cliente'];
           return <div key={id} className={'litem' + (id === companyId ? ' on' : '')} style={{ padding: 10, cursor: 'pointer', borderColor: id === companyId ? 'var(--pri)' : undefined }} onClick={() => pick(c)}>
             <span className="li-ic"><Icon name="users" /></span>
             <div className="li-main"><b>{c.name || c.n}</b><small>{c.segment || ''}</small></div>
+            <Pill kind={stageMeta[0]}>{stageMeta[1]}</Pill>
             {id === companyId && <Pill kind="good" dot>selecionado</Pill>}
           </div>;
         })}
-        {!loading && !filtered.length && <div className="hint">Nenhum cliente. Cadastre em Clientes.</div>}
+        {!loading && !filtered.length && <div className="hint">Nenhuma marca. Cadastre o prospect ou cliente em Clientes.</div>}
       </div>
     </div>
     <div className="stack">
-      <div className="sec mut">Conexões</div>
+      <div className="sec mut">{prospectMode ? 'Modo da produção' : 'Conexões'}</div>
       {!companyId && <div className="hint">Selecione um cliente.</div>}
-      {companyId && CONT_NETS.map(p => {
+      {companyId && prospectMode && <div className="panel stack" style={{ borderColor: 'var(--cyan)' }}>
+        <Pill kind={company.lifecycle_stage === 'lost' ? 'warn' : 'cy'} dot>{company.lifecycle_stage === 'lost' ? 'Cadastro inativo' : 'Proposta comercial'}</Pill>
+        <div className="hint">Criação, download e link de apresentação liberados. Nenhum login ou publicação nas redes desta marca.</div>
+      </div>}
+      {companyId && !prospectMode && CONT_NETS.map(p => {
         const acc = accounts.find(a => a.platform === p);
         const ok = acc && (acc.status === 'connected' || acc.status === 'active');
         return <div key={p} className="litem" style={{ padding: 8 }}>
           <div className="li-main"><b style={{ textTransform: 'capitalize' }}>{p}</b></div>
-          <Pill kind={ok ? 'good' : acc ? 'warn' : ''} dot>{acc ? acc.status : 'não conectado'}</Pill>
+          <Pill kind={ok ? 'good' : acc ? 'warn' : ''} dot>{acc ? (acc.status === 'inactive' ? 'inativo' : acc.status) : 'não conectado'}</Pill>
         </div>;
       })}
-      {companyId && <button className="btn sm ghost" onClick={() => window.__mpOpen && window.__mpOpen('clientes')}><Icon name="pen" />Editar cliente/produtos</button>}
+      {companyId && <button className="btn sm ghost" onClick={() => window.__mpOpen && window.__mpOpen('clientes')}><Icon name="pen" />Editar empresa/identidade</button>}
       {companyId && <>
         <div className="sec mut" style={{ marginTop: 8 }}>Continuar de onde parou?</div>
         <div className="hint">Marque um trabalho salvo pra continuar (briefing + artes prontos), ou comece do zero.</div>
@@ -678,7 +722,9 @@ function StepBriefing({ company }) {
   const [tom, setTom] = React.useState(st.tom || (company.brand_kit || {}).voice || '');
   const [cta, setCta] = React.useState(st.cta || '');
   const [networks, setNetworks] = React.useState(st.networks || ['instagram']);
-  const [products, setProducts] = React.useState([]);
+  const [catalogs, setCatalogs] = React.useState([]);
+  const [catalogCompanyId, setCatalogCompanyId] = React.useState(st.offerCatalogCompanyId || ((st.offer_refs || [])[0] || {}).source_company_id || '');
+  const [offerRefs, setOfferRefs] = React.useState(Array.isArray(st.offer_refs) ? st.offer_refs : []);
   const [sources, setSources] = React.useState(st.sources || {});
   const [ideasCount, setIdeasCount] = React.useState(st.ideasCount || 5);
   const [assunto, setAssunto] = React.useState(st.assunto || '');
@@ -691,18 +737,78 @@ function StepBriefing({ company }) {
   const INTENTS = [['produtos', 'Produtos / institucional'], ['evento', 'Divulgar evento'], ['criativo', 'Criativo livre (meme/data)']];
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
+  const [catalogError, setCatalogError] = React.useState('');
   const assuntoList = (((company.brand_kit || {}).assuntos) || '').split('\n').map(s => s.trim()).filter(Boolean);
   const FORMATOS = [['carrossel', 'Carrossel'], ['post', 'Post fixo'], ['story', 'Story'], ['video', 'Vídeo']];
   const fmtLabel = { carrossel: 'plano de telas', video: 'roteiro', post: 'pauta', story: 'arte de story' }[formato] || 'plano';
 
   React.useEffect(() => {
-    window.mpApi.listProducts(company.id).then(p => {
-      setProducts(p || []);
-      if (!st.sources) { const all = {}; (p || []).forEach(x => all[x.id] = true); setSources(all); }
-    }).catch(() => {});
+    let cancelled = false;
+    window.mpApi.offerCatalog(company.id).then(list => {
+      if (cancelled) return;
+      const cats = list || [];
+      setCatalogs(cats);
+      setCatalogError('');
+      const hasSavedRefs = Object.prototype.hasOwnProperty.call(st, 'offer_refs');
+      const savedRefs = Array.isArray(st.offer_refs) ? st.offer_refs : [];
+      const validRefs = savedRefs.filter(ref => {
+        const cat = cats.find(c => c.company_id === ref.source_company_id);
+        return !!(cat && (cat.products || []).some(p => p.id === ref.product_id));
+      });
+      const savedSource = (validRefs[0] || {}).source_company_id;
+      const target = cats.find(c => c.company_id === company.id);
+      const external = cats.find(c => c.company_id !== company.id && c.lifecycle_stage === 'internal')
+        || cats.find(c => c.company_id !== company.id && /cariap/i.test(c.company_name || ''))
+        || cats.find(c => c.company_id !== company.id);
+      const stage = company.lifecycle_stage || 'managed';
+      const automatic = ['prospect', 'lost'].includes(stage) ? (external || target) : (target || external);
+      const preferred = cats.find(c => c.company_id === (savedSource || st.offerCatalogCompanyId)) || automatic || cats[0];
+      const preferredId = (preferred && preferred.company_id) || '';
+      setCatalogCompanyId(preferredId);
+      if (!hasSavedRefs) {
+        const target = cats.find(c => c.company_id === company.id);
+        const legacySources = (st.sources && typeof st.sources === 'object') ? st.sources : {};
+        const migrated = (target ? target.products : []).filter(p => !!legacySources[p.id])
+          .map(p => ({ source_company_id: company.id, product_id: p.id }));
+        const sourceMap = {}; migrated.forEach(ref => { sourceMap[ref.product_id] = true; });
+        setOfferRefs(migrated); setSources(sourceMap);
+        ContState.set(company.id, { offer_refs: migrated, offerCatalogCompanyId: preferredId, sources: sourceMap });
+      } else {
+        const sourceMap = {}; validRefs.forEach(ref => { sourceMap[ref.product_id] = true; });
+        setOfferRefs(validRefs); setSources(sourceMap);
+        if (validRefs.length !== savedRefs.length) {
+          ContState.set(company.id, { offer_refs: validRefs, offerCatalogCompanyId: preferredId, sources: sourceMap });
+        }
+      }
+    }).catch(e => { if (!cancelled) setCatalogError(e.message || 'Não foi possível carregar os catálogos.'); });
+    return () => { cancelled = true; };
   }, [company.id]);
 
-  function persist(patch) { ContState.set(company.id, { briefingMode: mode, briefing, objetivo, tom, cta, networks, sources, assunto, formato, intent, eventId, videoSeconds: vsec, ...patch }); }
+  function persist(patch) { ContState.set(company.id, { briefingMode: mode, briefing, objetivo, tom, cta, networks, sources, offer_refs: offerRefs, offerCatalogCompanyId: catalogCompanyId, assunto, formato, intent, eventId, videoSeconds: vsec, ...patch }); }
+
+  const activeCatalog = catalogs.find(c => c.company_id === catalogCompanyId);
+  const selectedProducts = [];
+  (catalogs || []).forEach(cat => (cat.products || []).forEach(product => {
+    if (offerRefs.some(ref => ref.source_company_id === cat.company_id && ref.product_id === product.id)) {
+      selectedProducts.push({ ...product, source_company_id: cat.company_id, source_company_name: cat.company_name });
+    }
+  }));
+
+  function chooseCatalog(sourceCompanyId) {
+    setCatalogCompanyId(sourceCompanyId);
+    setOfferRefs([]); setSources({});
+    persist({ offerCatalogCompanyId: sourceCompanyId, offer_refs: [], sources: {} });
+  }
+
+  function toggleOffer(product, checked) {
+    const ref = { source_company_id: catalogCompanyId, product_id: product.id };
+    const next = checked
+      ? [...offerRefs.filter(x => x.product_id !== product.id || x.source_company_id !== catalogCompanyId), ref]
+      : offerRefs.filter(x => x.product_id !== product.id || x.source_company_id !== catalogCompanyId);
+    const nextSources = {}; next.forEach(x => { nextSources[x.product_id] = true; });
+    setOfferRefs(next); setSources(nextSources);
+    persist({ offer_refs: next, sources: nextSources });
+  }
 
   function pushBlock(blocks, g, label) {
     const idea = (g.headline || g.title || '').trim() || label;
@@ -718,16 +824,16 @@ function StepBriefing({ company }) {
   async function gen1(brief, net) {
     let g = null;
     for (let attempt = 0; attempt < 2 && !g; attempt++) {
-      try { g = await window.mpApi.generatePostAI({ company_id: company.id, briefing: brief, networks: [net] }); }
+      try { g = await window.mpApi.generatePostAI({ company_id: company.id, briefing: brief, networks: [net], offer_refs: offerRefs }); }
       catch (_) { /* tenta de novo */ }
     }
     return g;
   }
 
   async function gerarAuto() {
-    const selProds = products.filter(p => sources[p.id]);
+    const selProds = selectedProducts;
     const seed = (assunto || '').trim();
-    if (!selProds.length && !seed) { setMsg('Marque um app em "Fontes" OU escreva/escolha um assunto.'); return; }
+    if (!selProds.length && !seed) { setMsg('Selecione uma oferta do catálogo OU escreva/escolha um assunto institucional.'); return; }
     if (intent === 'evento' && !eventId) { setMsg('Modo "Divulgar evento" precisa de um evento cadastrado selecionado (senão a IA inventaria datas). Escolha o evento ou troque o modo.'); return; }
     setBusy(true);
     try {
@@ -737,7 +843,7 @@ function StepBriefing({ company }) {
         // post/story = 1 arte RICA (capa pela máquina do carrossel, no backend); carrossel = plano completo.
         const isSingle = formato === 'post' || formato === 'story';
         const _vsecEff = (formato === 'video') ? (Number(vsec) || Number((ContState.get(company.id) || {}).videoSeconds) || 0) : 0;
-        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name), seconds: _vsecEff });
+        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name), offer_refs: offerRefs, seconds: _vsecEff });
         const text = ((r && r.briefing) || '').trim();
         if (!text) { setMsg('Não consegui gerar agora. Tente de novo.'); return; }
         let tl = (r && r.telas) || [];
@@ -751,7 +857,7 @@ function StepBriefing({ company }) {
         setMsg(`Briefing (${fmtLabel}) pronto — revise e vá para Criação${formato === 'carrossel' ? ' (modo Carrossel com ' + tl.length + ' telas)' : ' (1 arte ' + (formato === 'story' ? '9:16' : '4:5') + ')'}.`);
         return;
       }
-      // sem assunto → pautas pelos apps marcados
+      // sem assunto → pautas pelas ofertas vinculadas
       const net = networks[0] || 'instagram';
       const blocks = [];
       const recipe = 'Crie uma PAUTA FORTE e CRIATIVA: um gancho marcante (headline), o ângulo (pra quem fala), '
@@ -765,7 +871,7 @@ function StepBriefing({ company }) {
         if (g) pushBlock(blocks, g, p.name);
       }
       if (!blocks.length) { setMsg('Não consegui gerar agora. Tente de novo ou escreva o briefing manual.'); return; }
-      const text = 'Pautas (apps selecionados):\n\n' + blocks.join('\n\n');
+      const text = 'Pautas (ofertas selecionadas):\n\n' + blocks.join('\n\n');
       setBriefing(text); persist({ briefing: text });
       setMsg(`${blocks.length} pauta(s) rica(s) gerada(s). Revise e siga para Criação.`);
     } catch (e) { setMsg('Erro: ' + (e.message || e)); }
@@ -805,7 +911,7 @@ function StepBriefing({ company }) {
         </div>}
         <small className="hint">Carrossel → plano de telas · Post fixo → pauta · Vídeo → roteiro em cenas (trave a duração aqui).</small>
       </Field>}
-      {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto' + (formato === 'video' ? ' · ' + (vsec ? vsec + 's' : 'livre') : '')) : 'Gerar briefing com IA (apps marcados)')}</button>}
+      {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto' + (formato === 'video' ? ' · ' + (vsec ? vsec + 's' : 'livre') : '')) : 'Gerar briefing com IA (ofertas selecionadas)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
       <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>
       {mode === 'auto' && formato === 'video' && <small className="hint">Vídeo: <b>trave a duração acima</b>, gere o roteiro, depois <b>Próximo</b> pra escolher o modelo e gerar (a duração já vai travada, com o custo na tela).</small>}
@@ -823,12 +929,28 @@ function StepBriefing({ company }) {
           {CONT_NETS.map(n => <button key={n} className={'btn sm' + (networks.includes(n) ? ' pri' : ' ghost')} onClick={() => { const ns = networks.includes(n) ? networks.filter(x => x !== n) : [...networks, n]; setNetworks(ns); persist({ networks: ns }); }}>{n}</button>)}
         </div>
       </Field>
-      <div className="sec mut">Apps que viram ideias (marque os que entram no briefing)</div>
-      {products.map(p => <label key={p.id} className="litem" style={{ padding: 8, cursor: 'pointer' }}>
-        <input type="checkbox" checked={!!sources[p.id]} onChange={e => { const s = { ...sources, [p.id]: e.target.checked }; setSources(s); persist({ sources: s }); }} />
-        <div className="li-main" style={{ marginLeft: 8 }}><b>{p.name}</b><small>{(p.solutions || []).length} solução(ões)</small></div>
-      </label>)}
-      {!products.length && <div className="hint">Sem produtos cadastrados (fonte do briefing). Cadastre em Clientes → Produtos.</div>}
+      <div className="panel stack" style={{ gap: 8 }}>
+        <div className="sec mut">Marca-alvo + oferta</div>
+        <div className="hint">A identidade da arte é sempre <b>{company.name}</b>. A oferta pode vir do catálogo de outra empresa, sem copiar produto e sem login do prospect.</div>
+        {catalogError && <div className="err">{catalogError} Reabra esta etapa para tentar novamente.</div>}
+        <Field label="Empresa dona do catálogo">
+          <select className="inp" value={catalogCompanyId} onChange={e => chooseCatalog(e.target.value)}>
+            {!catalogs.length && <option value="">Nenhum catálogo disponível</option>}
+            {catalogs.map(cat => <option key={cat.company_id} value={cat.company_id}>{cat.company_name}{cat.is_target ? ' · marca-alvo' : ''}</option>)}
+          </select>
+        </Field>
+        <div className="sec mut">Produtos/serviços desta proposta</div>
+        {(activeCatalog && activeCatalog.products || []).map(p => {
+          const checked = offerRefs.some(ref => ref.source_company_id === catalogCompanyId && ref.product_id === p.id);
+          return <label key={p.id} className="litem" style={{ padding: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={checked} onChange={e => toggleOffer(p, e.target.checked)} />
+            <div className="li-main" style={{ marginLeft: 8 }}><b>{p.name}</b><small>{p.category || 'oferta'}{p.has_logo ? ' · logo' : ''}{p.has_photo ? ' · foto real' : ''}{p.has_knowledge ? ' · base de conhecimento' : ''}</small></div>
+          </label>;
+        })}
+        {activeCatalog && !activeCatalog.products.length && <div className="hint">Esta empresa ainda não possui ofertas cadastradas.</div>}
+        {!activeCatalog && <div className="hint">Cadastre produtos em uma empresa para usá-los na proposta.</div>}
+        <div className="hint"><b>{selectedProducts.length}</b> oferta(s) vinculada(s) a este conteúdo.</div>
+      </div>
     </div>
   </div>;
 }
@@ -870,6 +992,9 @@ function PerfilSaver({ company, type, current, onSaved }) {
 /* ── Carrossel: cria a partir do PLANO de telas (do Briefing) ── */
 function CarrosselCreator({ company, format }) {
   const st = ContState.get(company.id);
+  const hasOfferRefs = Object.prototype.hasOwnProperty.call(st, 'offer_refs');
+  const offerRefs = Array.isArray(st.offer_refs) ? st.offer_refs : [];
+  const offerPayload = hasOfferRefs ? { offer_refs: offerRefs } : {};   // projetos antigos seguem no modo legado
   const fmt = format || 'carrossel';
   const allTelas = st.telas || [];
   const telas = fmt === 'carrossel' ? allTelas : allTelas.slice(0, 1);   // post/story = 1 arte; carrossel = N telas
@@ -962,8 +1087,8 @@ function CarrosselCreator({ company, format }) {
             : `Gerando a arte na Kie e validando o texto…` }));
           setMsg(`Renderizando versão ${i + 1}/${versions.length}…`);
           try {
-            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined });
-            out[i] = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
+            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined, ...offerPayload });
+            out[i] = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
             const ready = out.filter(Boolean);
             setResults(ready); ContState.set(company.id, { carouselResults: ready });
           } catch (error) {
@@ -1004,8 +1129,8 @@ function CarrosselCreator({ company, format }) {
     setBusy(true); setMsg('');
     try {
       await _runWithProc(aiSlow ? 300000 : 60000, `Regerando a arte da versão ${vi + 1}${(rv.base_urls || []).some(Boolean) && !useStudio ? ' (reusando as fotos)' : ''}…`, async () => {
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined });
-        const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined, ...offerPayload });
+        const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
         setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
         setMsg(`Arte da versão ${vi + 1} regerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
         return `Arte pronta · Custo: R$ ${(r.cost || 0).toFixed(2)}`;
@@ -1021,8 +1146,8 @@ function CarrosselCreator({ company, format }) {
       await _runWithProc(aiSlow ? 300000 : 60000, `Regerando ${fmt === 'carrossel' ? 'a tela ' + (si + 1) : 'a arte'} (paga só ela)…`, async () => {
         const bases = (rv.base_urls && rv.base_urls.length ? rv.base_urls.slice() : telas.map(() => null));
         bases[si] = null;   // zera SÓ esta → regenera (paga 1 slide); as outras reusam a foto salva (grátis)
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: useStudio ? 'reference_full' : undefined });
-        const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [] };
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: useStudio ? 'reference_full' : undefined, ...offerPayload });
+        const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
         setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
         setMsg(`${fmt === 'carrossel' ? 'Tela ' + (si + 1) : 'Arte'} regenerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
         return `Pronto · Custo: R$ ${(r.cost || 0).toFixed(2)}`;
@@ -1044,7 +1169,7 @@ function CarrosselCreator({ company, format }) {
           company_id: company.id, title: st.assuntoTema || 'Carrossel',
           copy: (st.briefing || '').split('\n')[0] || (telas[0] && telas[0].title) || '',
           networks: ['instagram'], media_url: urls[0], intent: 'review',
-          meta: { content_type: 'carousel', carousel_urls: urls, model: rv.model, telas_count: telas.length },
+          meta: { content_type: 'carousel', carousel_urls: urls, model: rv.model, telas_count: telas.length, ...(hasOfferRefs ? { offer_refs: offerRefs } : {}) },
         });
         if (np && np.id) addRunPosts(company.id, [np.id]);
       }
@@ -1062,7 +1187,7 @@ function CarrosselCreator({ company, format }) {
 
   return <div className="stack">
     {proc.open && <ProcessModal open={proc.open} title={'Gerando ' + fmtGer} detail={proc.detail} pct={proc.pct} phase={proc.phase} hideEta={proc.hideEta} onClose={() => setProc({ open: false })} />}
-    <div className="sec mut">{fmtName} · <b>{telas.length} {telas.length === 1 ? 'arte' : 'telas'}</b> {fmt === 'carrossel' ? 'do plano' : (fmt === 'story' ? '(vertical 9:16)' : '(4:5)')} (vindas do Briefing). Sem selecionar app — só escolha o modelo.</div>
+    <div className="sec mut">{fmtName} · <b>{telas.length} {telas.length === 1 ? 'arte' : 'telas'}</b> {fmt === 'carrossel' ? 'do plano' : (fmt === 'story' ? '(vertical 9:16)' : '(4:5)')} (vindas do Briefing). {hasOfferRefs ? `${offerRefs.length} oferta(s) vinculada(s) por ID` : 'Projeto legado'} — escolha o modelo.</div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 6 }}>
       {telas.map((t, i) => <div key={i} className="card" style={{ padding: 8 }}>
         <small className="mut">{i + 1}. {({ cover: 'capa', cta: 'CTA' }[t.type]) || 'conteúdo'}</small>
@@ -1386,8 +1511,8 @@ function StepCriacaoPost({ company }) {
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="row" style={{ gap: 6 }}>
             <Pill kind="cy" dot>{d.network}</Pill>
-            {(d.label || d.product) ? <Pill kind="gd">{d.label || d.product}{d.variant ? ' · v' + d.variant : ''}</Pill> : null}
-            <Pill kind={d.media_type === 'video' ? 'gd' : ''}>sugerido: {d.media_type === 'video' ? 'vídeo' : 'imagem'}</Pill>
+            {(d.label || d.product) ? <Pill kind="good">{d.label || d.product}{d.variant ? ' · v' + d.variant : ''}</Pill> : null}
+            <Pill kind={d.media_type === 'video' ? 'good' : ''}>sugerido: {d.media_type === 'video' ? 'vídeo' : 'imagem'}</Pill>
             {d.model ? <Pill>{String(d.model).split('/').pop()}</Pill> : null}
             {d.cost ? <Pill>R$ {Number(d.cost).toFixed(2)}</Pill> : null}
           </div>
@@ -1422,7 +1547,7 @@ function StepAprovacao({ company }) {
   const [msg, setMsg] = React.useState('');
   const [channel, setChannel] = React.useState('whatsapp');
   const [recipient, setRecipient] = React.useState('');
-  const [linkUrl, setLinkUrl] = React.useState('');
+  const [linkUrl, setLinkUrl] = React.useState(st.approvalUrl || '');
   const [sending, setSending] = React.useState(false);
 
   const load = React.useCallback(() => {
@@ -1449,7 +1574,9 @@ function StepAprovacao({ company }) {
       const reviewIds = (all.posts || []).filter(p => p.company_id === company.id && p.status === 'REVIEW' && _rl.has(p.id)).map(p => p.id);
       if (!reviewIds.length) { setMsg('Nenhuma peça gerada para enviar. Gere na Criação.'); setSending(false); return; }
       const r = await window.mpApi.createApprovalLink({ company_id: company.id, post_ids: reviewIds, stage: 'client' });
-      setLinkUrl(r.url || '');
+      const approvalUrl = r.url || '';
+      setLinkUrl(approvalUrl);
+      ContState.set(company.id, { approvalUrl });
       if (recipient.trim()) {
         const text = `Olá! Tem conteúdo novo da ${company.name} para aprovar: ${r.url}`;
         const sent = await window.mpApi.notifyTest({ company_id: company.id, channel, to: recipient.trim(), message: text });
@@ -1580,6 +1707,7 @@ function StepAprovacao({ company }) {
       </div>
       {linkUrl && <div className="row" style={{ gap: 8, alignItems: 'center' }}>
         <input className="inp" readOnly value={linkUrl} style={{ flex: 1 }} onFocus={e => e.target.select()} />
+        <button className="btn sm ghost" onClick={async () => { const ok = await copyContentText(linkUrl); setMsg(ok ? 'Link copiado.' : 'Não foi possível copiar o link.'); }}><Icon name="copy" />Copiar</button>
         <a className="btn sm ghost" href={linkUrl} target="_blank" rel="noopener noreferrer"><Icon name="globe" />Abrir</a>
       </div>}
       <div className="hint">Configure WhatsApp (Evolution) e SMTP no app <b>Notificações</b>.</div>
@@ -1619,7 +1747,7 @@ function StepAprovacao({ company }) {
         </div>
         {preview.review_comment && <div style={{ background: '#3a2f10', color: '#ffd479', borderRadius: 8, padding: '8px 12px' }}>Devolutiva do cliente: {preview.review_comment}</div>}
         <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{preview.copy}</div>
-        {preview.hashtags && preview.hashtags.length ? <div className="hint" style={{ color: 'var(--accent)' }}>{(preview.hashtags || []).join(' ')}</div> : null}
+        {preview.hashtags && preview.hashtags.length ? <div className="hint" style={{ color: 'var(--pri2)' }}>{(preview.hashtags || []).join(' ')}</div> : null}
       </div>
     </div>}
   </div>;
@@ -1627,6 +1755,8 @@ function StepAprovacao({ company }) {
 
 /* ── Passo 4: Agendamento ── */
 function StepAgenda({ company }) {
+  const publishEnabled = !['prospect', 'lost'].includes(company.lifecycle_stage || 'managed');
+  const deliveryState = ContState.get(company.id) || {};
   const [posts, setPosts] = React.useState([]);
   const [accounts, setAccounts] = React.useState([]);
   const [when, setWhen] = React.useState({});
@@ -1638,18 +1768,64 @@ function StepAgenda({ company }) {
   const [influencers, setInfluencers] = React.useState([]);   // cadastrados (pra adicionar rápido)
   const [orgs, setOrgs] = React.useState([]);                 // empresas de evento (pra marcar o @ do evento)
   const [infcos, setInfcos] = React.useState([]);             // empresas influencer (ex.: loucosdatelecom) — @ marcável
-  React.useEffect(() => { window.mpApi.listInfluencers(company.id).then(l => setInfluencers(l || [])).catch(() => {}); }, [company.id]);
-  React.useEffect(() => { window.mpApi.listOrganizers(company.id).then(l => setOrgs(l || [])).catch(() => {}); }, [company.id]);
-  React.useEffect(() => { window.mpApi.listInfCompanies(company.id).then(l => setInfcos(l || [])).catch(() => {}); }, [company.id]);
+  React.useEffect(() => { if (publishEnabled) window.mpApi.listInfluencers(company.id).then(l => setInfluencers(l || [])).catch(() => {}); }, [company.id, publishEnabled]);
+  React.useEffect(() => { if (publishEnabled) window.mpApi.listOrganizers(company.id).then(l => setOrgs(l || [])).catch(() => {}); }, [company.id, publishEnabled]);
+  React.useEffect(() => { if (publishEnabled) window.mpApi.listInfCompanies(company.id).then(l => setInfcos(l || [])).catch(() => {}); }, [company.id, publishEnabled]);
   function curCollabs(p) { return collabs[p.id] || []; }   // VAZIO por padrão — collab é opção MANUAL por post (nunca automático)
   function addCollab(p, h) { h = (h || '').trim().replace(/^@/, ''); if (!h) return; const cur = curCollabs(p); if (cur.includes(h) || cur.length >= 3) return; setCollabs(s => ({ ...s, [p.id]: [...cur, h] })); setCollabIn(s => ({ ...s, [p.id]: '' })); }
   function rmCollab(p, h) { setCollabs(s => ({ ...s, [p.id]: curCollabs(p).filter(x => x !== h) })); }
 
   const load = React.useCallback(() => {
     window.mpApi.listPosts().then(r => setPosts((r.posts || []).filter(p => p.company_id === company.id && ['REVIEW', 'DRAFT', 'APPROVED', 'SCHEDULED'].includes(p.status)))).catch(() => {});
-    window.mpApi.socialAccounts(company.id).then(a => setAccounts(a || [])).catch(() => {});
-  }, [company.id]);
+    if (publishEnabled) window.mpApi.socialAccounts(company.id).then(a => setAccounts(a || [])).catch(() => {});
+  }, [company.id, publishEnabled]);
   React.useEffect(() => { load(); }, [load]);
+
+  if (!publishEnabled) {
+    const approvalUrl = deliveryState.approvalUrl || '';
+    const runIds = new Set([
+      ...((deliveryState.carouselResults || []).map(v => v && v.post_id)),
+      ...(deliveryState.runPostIds || []),
+    ].filter(Boolean));
+    const scopedPosts = runIds.size ? posts.filter(p => runIds.has(p.id)) : posts;
+    const pieces = [];
+    const seenUrls = new Set();
+    const addPiece = (url, label, id, part) => {
+      if (!url || seenUrls.has(url)) return;
+      seenUrls.add(url);
+      pieces.push({ url, label: label || 'Peça', id: id || url, part: part || 0 });
+    };
+    scopedPosts.forEach(p => {
+      const urls = (p.meta && Array.isArray(p.meta.carousel_urls) && p.meta.carousel_urls.length) ? p.meta.carousel_urls : [p.media_url];
+      urls.forEach((url, index) => addPiece(url, p.title || 'Peça', p.id, urls.length > 1 ? index + 1 : 0));
+    });
+    (deliveryState.drafts || []).forEach(d => addPiece(d.media_url, d.title || d.label || d.product || 'Peça', d.uid));
+
+    return <div className="stack">
+      <div className="panel stack" style={{ borderColor: 'var(--cyan)' }}>
+        <div className="sec cy"><Icon name="send" />Proposta pronta para entrega</div>
+        <div className="hint">Baixe as peças ou compartilhe o link de aprovação. Nenhuma rede social desta marca será conectada ou publicada.</div>
+        {approvalUrl ? <div className="stack" style={{ gap: 8 }}>
+          <b>Link de aprovação</b>
+          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input className="inp" readOnly value={approvalUrl} onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220 }} />
+            <button className="btn sm ghost" onClick={async () => { const ok = await copyContentText(approvalUrl); setMsg(ok ? 'Link copiado.' : 'Não foi possível copiar o link.'); }}><Icon name="copy" />Copiar</button>
+            <a className="btn sm pri" href={approvalUrl} target="_blank" rel="noopener noreferrer"><Icon name="globe" />Abrir</a>
+          </div>
+        </div> : <div className="hint">O link ainda não foi criado. Volte à etapa <b>Aprovação</b> e use “Gerar link + notificar”.</div>}
+        {msg && <div className={msg.startsWith('Não') ? 'err' : 'ok'}>{msg}</div>}
+      </div>
+
+      <div className="sec mut">Peças para entrega ({pieces.length})</div>
+      {pieces.map(piece => <div key={piece.id + ':' + piece.part + ':' + piece.url} className="litem" style={{ padding: 10, gap: 10 }}>
+        <div className="li-main"><b>{piece.label}{piece.part ? ` · tela ${piece.part}` : ''}</b><small>Arquivo pronto para apresentação</small></div>
+        <a className="btn sm ghost" href={piece.url} target="_blank" rel="noopener noreferrer"><Icon name="globe" />Abrir</a>
+        <a className="btn sm" href={piece.url} download><Icon name="download" />Baixar</a>
+      </div>)}
+      {!pieces.length && <div className="hint">Nenhuma mídia pronta neste trabalho. Volte à Criação para gerar as peças.</div>}
+      <button className="btn ghost" onClick={() => window.__mpOpen && window.__mpOpen('clientes')}><Icon name="building" />Abrir cadastro da marca</button>
+    </div>;
+  }
 
   const connected = accounts.filter(a => a.status === 'connected' || a.status === 'active');
   function channelsFor(p) {
@@ -2001,7 +2177,7 @@ function AcervoApp() {
           {dt(sel) && <Pill>{dt(sel)}</Pill>}
         </div>
         <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{sel.copy}</div>
-        {sel.hashtags && sel.hashtags.length ? <div className="hint" style={{ color: 'var(--accent)' }}>{(sel.hashtags || []).join(' ')}</div> : null}
+        {sel.hashtags && sel.hashtags.length ? <div className="hint" style={{ color: 'var(--pri2)' }}>{(sel.hashtags || []).join(' ')}</div> : null}
       </div>
     </div>}
   </div>;

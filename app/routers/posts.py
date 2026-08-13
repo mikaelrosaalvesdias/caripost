@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse
 from ..db_companies import (
     post_list, post_get, post_create, post_transition, post_update, post_delete,
     post_stats, POST_STATUSES, POST_TRANSITIONS, POST_LABELS,
-    company_get, report_get_latest, report_create, asset_list_logos, asset_list, product_list,
+    company_get, report_get_latest, report_create, asset_list_logos, asset_list,
+    asset_list_photos, product_list, product_get, solution_list,
 )
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
@@ -27,9 +28,109 @@ from ..services.ai import (
 
 import os
 import uuid as _uuid
+from urllib.parse import unquote, urlparse
 
 UPLOAD_DIR = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
 UPLOAD_URL_PREFIX = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
+
+
+def _resolve_upload_path(url: str, allowed_company_ids=None) -> Optional[str]:
+    """Resolve only Caripost-owned upload URLs, contained below ``UPLOAD_DIR``.
+
+    A URL supplied by the browser must never be reinterpreted as an arbitrary
+    local path.  When a tenant list is supplied, the first directory below the
+    upload prefix must also be one of those companies.
+    """
+    try:
+        raw = str(url or "").strip()
+        if not raw:
+            return None
+        parsed = urlparse(raw)
+        if parsed.netloc and not parsed.scheme:
+            return None
+        if parsed.scheme:
+            if parsed.scheme not in ("http", "https"):
+                return None
+            if parsed.username or parsed.password:
+                return None
+            configured = urlparse(
+                (get_setting("render.public_base") or "https://caripost.cariap.com.br").rstrip("/")
+            )
+            parsed_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            configured_port = configured.port or (443 if configured.scheme == "https" else 80)
+            if (
+                parsed.scheme != configured.scheme
+                or (parsed.hostname or "").lower().rstrip(".")
+                != (configured.hostname or "").lower().rstrip(".")
+                or parsed_port != configured_port
+            ):
+                return None
+        path = unquote(parsed.path or "")
+        if "\\" in path or "\x00" in path:
+            return None
+        prefix = "/" + UPLOAD_URL_PREFIX.strip("/")
+        if not path.startswith(prefix + "/"):
+            return None
+        rel = path[len(prefix) + 1:]
+        parts = rel.split("/")
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            return None
+        if allowed_company_ids is not None:
+            values = [allowed_company_ids] if isinstance(allowed_company_ids, str) else allowed_company_ids
+            allowed = {str(value) for value in values if str(value)}
+            if parts[0] not in allowed:
+                return None
+        root = os.path.realpath(UPLOAD_DIR)
+        candidate = os.path.realpath(os.path.join(root, *parts))
+        if os.path.commonpath((root, candidate)) != root:
+            return None
+        return candidate
+    except (OSError, ValueError):
+        return None
+
+
+def _owned_local_assets(assets, company_id: str) -> List[Dict[str, Any]]:
+    """Keep only nested assets whose row and local path belong to the company."""
+    company_id = str(company_id or "")
+    return [
+        dict(asset) for asset in (assets or [])
+        if isinstance(asset, dict)
+        and str(asset.get("company_id") or "") == company_id
+        and _resolve_upload_path(asset.get("url") or "", {company_id})
+    ]
+
+
+def _sanitize_owned_influencer(record: Optional[Dict[str, Any]], company_id: str):
+    if not record or str(record.get("company_id") or "") != str(company_id or ""):
+        return None
+    result = dict(record)
+    result["photos"] = _owned_local_assets(record.get("photos"), company_id)
+    return result
+
+
+def _load_owned_influencer(influencer_id: str, company_id: str):
+    from ..db_companies import influencer_get
+    return _sanitize_owned_influencer(influencer_get(influencer_id), company_id)
+
+
+def _load_owned_event(event_id: str, company_id: str):
+    """Load an event and its organizer only when the complete nested graph is owned."""
+    from ..db_companies import event_get, organizer_get
+    event = event_get(event_id)
+    if not event or str(event.get("company_id") or "") != str(company_id or ""):
+        return None, None
+    result = dict(event)
+    result["logos"] = _owned_local_assets(event.get("logos"), company_id)
+    result["images"] = _owned_local_assets(event.get("images"), company_id)
+    organizer = None
+    if event.get("organizer_id"):
+        raw_organizer = organizer_get(event["organizer_id"])
+        if (not raw_organizer
+                or str(raw_organizer.get("company_id") or "") != str(company_id or "")):
+            return None, None
+        organizer = dict(raw_organizer)
+        organizer["logos"] = _owned_local_assets(raw_organizer.get("logos"), company_id)
+    return result, organizer
 
 
 def _first_raster_logo(assets) -> Optional[str]:
@@ -38,8 +139,8 @@ def _first_raster_logo(assets) -> Optional[str]:
         u = a.get("url") or ""
         if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
             continue
-        p = os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/"))
-        if os.path.exists(p):
+        p = _resolve_upload_path(u)
+        if p and os.path.exists(p):
             return p
     return None
 
@@ -68,13 +169,16 @@ def _all_raster_logos(assets) -> List[str]:
     escolher a de melhor contraste por fundo. Primária primeiro. SANEADO: se houver variante com
     recorte (fundo transparente), usa SÓ essas; descarta as de fundo assado (que virariam caixa)."""
     out: List[str] = []
-    ordered = sorted(assets or [], key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1)
+    ordered = sorted(
+        [asset for asset in (assets or []) if _logo_is_approved(asset)],
+        key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1,
+    )
     for a in ordered:
         u = a.get("url") or ""
         if u.lower().endswith(".svg") or not u.startswith(UPLOAD_URL_PREFIX):
             continue
-        p = os.path.join(UPLOAD_DIR, u[len(UPLOAD_URL_PREFIX):].lstrip("/"))
-        if os.path.exists(p) and p not in out:
+        p = _resolve_upload_path(u)
+        if p and os.path.exists(p) and p not in out:
             out.append(p)
     clean = [p for p in out if _logo_is_clean(p)]
     return clean or out                               # tem recorte? usa só elas. senão degrada com o que há.
@@ -92,6 +196,19 @@ def _png_ref(path: str) -> Optional[bytes]:
         return out.getvalue()
     except Exception:
         return None
+
+
+def _reference_is_approved(asset: Dict[str, Any]) -> bool:
+    """Only user-approved visual references may influence a generated design."""
+    meta = asset.get("meta") or {}
+    status = str(meta.get("review_status") or "").lower()
+    return status == "approved" or (not status and asset.get("source") == "UPLOADED")
+
+
+def _logo_is_approved(asset: Dict[str, Any]) -> bool:
+    """Website/manual logos are trusted; imported social avatars require review."""
+    status = str((asset.get("meta") or {}).get("review_status") or "").lower()
+    return status not in {"candidate_needs_review", "rejected"}
 
 
 def _logo_cutout(logo):
@@ -200,6 +317,148 @@ def _overlay_logo(image_bytes: bytes, logo_path: str, position: str = "top-right
 router = APIRouter(prefix="/api/posts", tags=["posts"])
 
 
+def _resolve_offer_refs(request: Request, body: Dict[str, Any], target_company_id: str):
+    """Valida e materializa as ofertas escolhidas explicitamente no briefing.
+
+    ``company_id`` continua sendo a marca-alvo. Cada item de ``offer_refs`` aponta
+    para o catálogo que fornece a oferta, sem copiar o produto para o prospect.
+    A ausência da chave mantém o comportamento legado; uma lista vazia é uma
+    escolha explícita de conteúdo institucional/sem produto.
+    """
+    explicit = "offer_refs" in body
+    if not explicit:
+        return False, [], None
+    raw_refs = body.get("offer_refs")
+    if raw_refs is None:
+        raw_refs = []
+    if not isinstance(raw_refs, list):
+        return True, [], JSONResponse(
+            {"detail": "offer_refs deve ser uma lista de ofertas."}, status_code=422,
+        )
+    if len(raw_refs) > 20:
+        return True, [], JSONResponse(
+            {"detail": "Selecione no máximo 20 ofertas por conteúdo."}, status_code=422,
+        )
+
+    resolved, seen = [], set()
+    for raw in raw_refs:
+        if not isinstance(raw, dict):
+            return True, [], JSONResponse(
+                {"detail": "Cada oferta deve informar source_company_id e product_id."}, status_code=422,
+            )
+        source_company_id = str(raw.get("source_company_id") or "").strip()
+        product_id = str(raw.get("product_id") or "").strip()
+        if not source_company_id or not product_id:
+            return True, [], JSONResponse(
+                {"detail": "Cada oferta deve informar source_company_id e product_id."}, status_code=422,
+            )
+        key = (source_company_id, product_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        source_company = company_get(source_company_id)
+        if not source_company:
+            return True, [], JSONResponse({"detail": "Empresa do catálogo não encontrada."}, status_code=404)
+        denied = __cad__(request, source_company_id)
+        if denied:
+            return True, [], denied
+        product = product_get(product_id)
+        if not product or str(product.get("company_id") or "") != source_company_id:
+            return True, [], JSONResponse(
+                {"detail": "Produto não pertence à empresa de catálogo informada."}, status_code=422,
+            )
+        resolved.append({
+            "ref": {"source_company_id": source_company_id, "product_id": product_id},
+            "source_company": source_company,
+            "product": product,
+            # Os assets são consultados pelo par validado, nunca por busca global de nome.
+            "logos": asset_list_logos(source_company_id, product_id) or [],
+            "photos": asset_list_photos(source_company_id, product_id) or [],
+            "solutions": solution_list(product_id) or [],
+        })
+    return True, resolved, None
+
+
+def _offer_products(resolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Produtos com proveniência/assets para o motor de IA, sem mutar linhas do banco."""
+    out = []
+    for item in resolved:
+        product = dict(item.get("product") or {})
+        source = item.get("source_company") or {}
+        product["_source_company_id"] = item["ref"]["source_company_id"]
+        product["_source_company_name"] = source.get("name") or ""
+        product["_offer_ref"] = dict(item["ref"])
+        product["_logos"] = list(item.get("logos") or [])
+        product["_photos"] = list(item.get("photos") or [])
+        product["solutions"] = list(item.get("solutions") or [])
+        out.append(product)
+    return out
+
+
+def _company_with_offer_products(company: Dict[str, Any], explicit: bool,
+                                 products: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not explicit:
+        return company
+    scoped = dict(company)
+    scoped["_offer_products_explicit"] = True
+    scoped["_offer_products_override"] = products
+    return scoped
+
+
+def _offer_context(products: List[Dict[str, Any]]) -> str:
+    """Contexto factual e limitado das ofertas explicitamente selecionadas."""
+    blocks = []
+    for product in products:
+        functions = product.get("functions") or []
+        if isinstance(functions, str):
+            try:
+                import json as _json
+                functions = _json.loads(functions)
+            except Exception:
+                functions = [functions]
+        solutions = [
+            (s.get("name") or s.get("title") or s.get("description") or "").strip()
+            for s in (product.get("solutions") or [])
+            if isinstance(s, dict)
+        ]
+        facts = [
+            ("Descrição: " + (product.get("description") or "").strip()) if product.get("description") else "",
+            ("Objetivo: " + (product.get("objective") or "").strip()) if product.get("objective") else "",
+            ("Funções: " + "; ".join(str(v).strip() for v in functions if str(v).strip())[:1800]) if functions else "",
+            ("Soluções: " + "; ".join(v for v in solutions if v)[:1600]) if solutions else "",
+            ("Base de conhecimento: " + (product.get("knowledge") or "").strip()[:7000]) if product.get("knowledge") else "",
+            ("Pesquisa web validada: " + (product.get("web_brief") or "").strip()[:2500]) if product.get("web_brief") else "",
+        ]
+        blocks.append(
+            f"[{product.get('name') or 'Oferta'} — catálogo de {product.get('_source_company_name') or 'empresa selecionada'}] "
+            + " | ".join(v for v in facts if v)
+        )
+    if not blocks:
+        return "OFERTAS SELECIONADAS: nenhuma; produza conteúdo institucional sem inventar produto."
+    return (
+        "OFERTAS SELECIONADAS EXPLICITAMENTE (use somente estes fatos; a marca da arte continua sendo a empresa-alvo): "
+        + " || ".join(blocks)[:12000]
+    )
+
+
+def _attach_offer_refs(slides: List[Dict[str, Any]], products: List[Dict[str, Any]]) -> None:
+    """Anexa o ID da oferta à tela quando o campo app identifica uma seleção única."""
+    by_id = {str(p.get("id")): p for p in products if p.get("id")}
+    by_name: Dict[str, List[Dict[str, Any]]] = {}
+    for product in products:
+        name = (product.get("name") or "").strip().lower()
+        if name:
+            by_name.setdefault(name, []).append(product)
+    for slide in slides or []:
+        current = slide.get("offer_ref") if isinstance(slide.get("offer_ref"), dict) else {}
+        current_product = by_id.get(str(current.get("product_id") or ""))
+        if current_product and current_product.get("_offer_ref") == current:
+            continue
+        matches = by_name.get((slide.get("app") or "").strip().lower()) or []
+        if len(matches) == 1:
+            slide["offer_ref"] = dict(matches[0]["_offer_ref"])
+
+
 @router.post("/kie-callback")
 async def kie_callback(request: Request):
     """Webhook público da Kie. A URL contém token derivado da chave Kie e não dá
@@ -243,6 +502,8 @@ def list_posts(request: Request, status: Optional[str] = None, company_id: Optio
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip() in POST_STATUSES]
     posts = post_list(statuses=statuses, company_id=company_id, limit=limit)
+    if _scids is not None and not company_id:
+        posts = [post for post in posts if str(post.get("company_id") or "") in _scids]
     return {"posts": posts, "labels": POST_LABELS, "transitions": POST_TRANSITIONS}
 
 
@@ -333,6 +594,52 @@ async def set_image_providers(request: Request):
     return {"ok": True, "hidden": hidden}
 
 
+@router.get("/offer-catalog")
+def offer_catalog(request: Request, company_id: str = ""):
+    """Catálogos acessíveis para vincular uma oferta à marca-alvo, sem duplicá-la."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    target = company_get(company_id) if company_id else None
+    if not target:
+        return JSONResponse({"detail": "Empresa-alvo não encontrada."}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
+    from ..db_companies import company_list
+    from ..main_utils import scoped_company_ids
+    allowed = scoped_company_ids(request)
+    catalogs = []
+    for source in (company_list(active_only=True) or []):
+        source_id = str(source.get("id") or "")
+        if not source_id or (allowed is not None and source_id not in allowed):
+            continue
+        products = []
+        for product in (product_list(source_id) or []):
+            if not product.get("active", True):
+                continue
+            product_id = str(product.get("id") or "")
+            products.append({
+                "id": product_id,
+                "name": product.get("name") or "",
+                "category": product.get("category") or "",
+                "description": product.get("description") or "",
+                "has_logo": bool(asset_list_logos(source_id, product_id)),
+                "has_photo": bool(asset_list_photos(source_id, product_id)),
+                "has_knowledge": bool((product.get("knowledge") or "").strip()),
+            })
+        if products:
+            catalogs.append({
+                "company_id": source_id,
+                "company_name": source.get("name") or "",
+                "is_target": source_id == str(company_id),
+                "lifecycle_stage": source.get("lifecycle_stage") or "managed",
+                "products": products,
+            })
+    catalogs.sort(key=lambda item: (not item["is_target"], item["company_name"].lower()))
+    return {"target_company_id": str(company_id), "catalogs": catalogs}
+
+
 @router.get("/{post_id}")
 def get_post(post_id: str, request: Request):
     err = _api_key_required(request)
@@ -341,6 +648,12 @@ def get_post(post_id: str, request: Request):
     post = post_get(post_id)
     if not post:
         return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
     return {"post": post}
 
 
@@ -356,6 +669,9 @@ async def create_post(request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     # parse hashtags
     hashtags = body.get("hashtags", "")
     if isinstance(hashtags, list):
@@ -398,6 +714,9 @@ async def transition_post(post_id: str, request: Request):
     post = post_get(post_id)
     if not post:
         return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
     current = post.get("status", "DRAFT")
     allowed = POST_TRANSITIONS.get(current, [])
     if to_status not in allowed:
@@ -417,6 +736,9 @@ async def update_post(post_id: str, request: Request):
     post = post_get(post_id)
     if not post:
         return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
     updated = post_update(post_id, body)
     return {"post": updated}
 
@@ -426,6 +748,12 @@ def delete_post(post_id: str, request: Request):
     err = _api_key_required(request)
     if err:
         return err
+    post = post_get(post_id)
+    if not post:
+        return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
     ok = post_delete(post_id)
     if not ok:
         return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
@@ -452,9 +780,26 @@ async def generate_with_ai(request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
+    offers_explicit, resolved_offers, offer_err = _resolve_offer_refs(request, body, company_id)
+    if offer_err:
+        return offer_err
+    selected_products = _offer_products(resolved_offers)
+    generation_company = _company_with_offer_products(company, offers_explicit, selected_products)
+    if offers_explicit:
+        briefing = briefing + "\n\n" + _offer_context(selected_products)
     try:
-        generated = generate_post_copy(company, briefing, networks)
-        return {"generated": generated}
+        generated = generate_post_copy(generation_company, briefing, networks)
+        if offers_explicit:
+            matches = [p for p in selected_products
+                       if (p.get("name") or "").strip().lower()
+                       == (generated.get("product") or "").strip().lower()]
+            if len(matches) == 1:
+                generated["offer_ref"] = dict(matches[0]["_offer_ref"])
+        return {"generated": generated,
+                "offer_refs": [dict(p["_offer_ref"]) for p in selected_products]}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
@@ -471,11 +816,18 @@ async def generate_post_image(request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
+    offers_explicit, resolved_offers, offer_err = _resolve_offer_refs(request, body, company_id)
+    if offer_err:
+        return offer_err
+    selected_products = _offer_products(resolved_offers)
     if not get_image_config():
         return JSONResponse({"detail": "Geração de imagem não configurada (chave OpenAI)."}, status_code=400)
     theme = (body.get("theme") or body.get("briefing") or "").strip()
     visual_prompt = (body.get("visual_prompt") or "").strip()
-    products = product_list(company_id) or []
+    products = selected_products if offers_explicit else (product_list(company_id) or [])
     colors = (company.get("brand_kit") or {}).get("colors") or {}
     brand_color = colors.get("primary") or colors.get("accent") or "#ED5E1F"
     model_override = (body.get("model") or "").strip() or None
@@ -495,9 +847,31 @@ async def generate_post_image(request: Request):
     tmpl = image_template_get(company, "post", (body.get("template_id") or "").strip()) if body.get("template_id") else None
     structure = (tmpl or {}).get("structure")
     prompt = _full_slide_prompt(s, brand_color, company.get("name", ""), structure, (tmpl or {}).get("variant"), _palette_str(colors))
-    prod = next((p for p in products if (p.get("name") or "").strip().lower() == product.lower()), None)
-    co_logo = _first_raster_logo(sorted(asset_list_logos(company_id) or [], key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1))
-    app_logo = _first_raster_logo(asset_list_logos(company_id, prod["id"])) if prod else None
+    requested_ref = body.get("offer_ref") if isinstance(body.get("offer_ref"), dict) else {}
+    prod = next((p for p in products
+                 if requested_ref and p.get("_offer_ref") == requested_ref), None)
+    if not prod:
+        prod = next((p for p in products if (p.get("name") or "").strip().lower() == product.lower()), None)
+    approved_company_logos = [logo for logo in (asset_list_logos(company_id) or []) if _logo_is_approved(logo)]
+    co_logo = _first_raster_logo(sorted(approved_company_logos, key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1))
+    if prod and offers_explicit:
+        product_logos = prod.get("_logos") or []
+    else:
+        product_logos = asset_list_logos(company_id, prod["id"]) if prod else []
+    app_logo = _first_raster_logo(product_logos) if product_logos else None
+    product_photo_bytes, product_photo_urls = [], []
+    if prod and offers_explicit:
+        for photo_asset in (prod.get("_photos") or [])[:2]:
+            photo_url = photo_asset.get("url") or ""
+            photo_bytes = _load_upload_bytes(
+                photo_url, {str(prod.get("_source_company_id") or company_id)},
+            )
+            if photo_bytes:
+                product_photo_bytes.append(photo_bytes)
+                product_photo_urls.append((_render_public_base() + photo_url) if photo_url.startswith("/") else photo_url)
+    if product_photo_bytes:
+        prompt += (" As imagens de referência mostram o PRODUTO REAL selecionado; preserve formato, cores, "
+                   "acabamento e detalhes visuais, sem substituí-lo por item genérico.")
     site = company.get("website") or ""
     phone = (company.get("phone") or "").strip()
     design_ov = ((company.get("brand_kit") or {}).get("creative_config") or {}).get("design")
@@ -512,7 +886,10 @@ async def generate_post_image(request: Request):
         handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@")
         if ai_bg:
             # Transbordo inteligente também no post único (mesmo cérebro do carrossel): se o provedor cair, usa equivalente.
-            img, cost, model = await asyncio.to_thread(generate_image_resilient, prompt, "1024x1536", None, model_override, None, set(), None)
+            img, cost, model = await asyncio.to_thread(
+                generate_image_resilient, prompt, "1024x1536", product_photo_bytes or None,
+                model_override, product_photo_urls or None, set(), None,
+            )
             if rm == "legacy_ai_full_art":   # modo antigo ISOLADO: IA desenha a arte inteira, código carimba logo
                 png = await asyncio.to_thread(compose_logos_only, img, co_logo, app_logo, colors)
                 if cta:  # post com CTA → rodapé de contato (WhatsApp + número do cadastro)
@@ -528,7 +905,8 @@ async def generate_post_image(request: Request):
             f.write(png)
         url = f"{UPLOAD_URL_PREFIX}/{company_id}/generated/{filename}"
         return {"url": url, "prompt": prompt, "cost": usd_to_brl(cost), "cost_usd": cost, "currency": "BRL",
-                "model": model, "composed": True, "template": (tmpl or {}).get("id")}
+                "model": model, "composed": True, "template": (tmpl or {}).get("id"),
+                "offer_refs": [dict(p["_offer_ref"]) for p in selected_products]}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)
 
@@ -544,9 +922,16 @@ async def generate_briefing_ep(request: Request):
     company = company_get(body.get("company_id"))
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
-    _dscope = __cad__(request, company.get("id"))
-    if _dscope:
-        return _dscope
+    denied = __cad__(request, company.get("id"))
+    if denied:
+        return denied
+    offers_explicit, resolved_offers, offer_err = _resolve_offer_refs(
+        request, body, str(company.get("id") or ""),
+    )
+    if offer_err:
+        return offer_err
+    selected_products = _offer_products(resolved_offers)
+    generation_company = _company_with_offer_products(company, offers_explicit, selected_products)
     theme = (body.get("theme") or body.get("assunto") or "").strip()
     if not theme:
         return JSONResponse({"detail": "Informe o assunto/tema"}, status_code=422)
@@ -562,12 +947,13 @@ async def generate_briefing_ep(request: Request):
         _eid = (body.get("event_id") or "").strip()
         if _eid:
             try:
-                from ..db_companies import event_get, organizer_get
-                event = event_get(_eid)
-                if event and event.get("organizer_id"):
-                    _org = organizer_get(event["organizer_id"])
-                    if _org:
-                        event = {**event, "organizer_name": _org.get("name")}
+                event, event_organizer = _load_owned_event(
+                    _eid, str(company.get("id") or ""),
+                )
+                if not event:
+                    return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
+                if event_organizer:
+                    event = {**event, "organizer_name": event_organizer.get("name")}
                 if event:
                     intent = "evento"   # selecionou evento → modo evento
             except Exception:
@@ -575,16 +961,21 @@ async def generate_briefing_ep(request: Request):
         if intent == "evento" and not event:
             # modo evento SEM evento real = prompt de evento sem dados → cai pra produtos (evita invenção).
             intent = "produtos"
-        res = await asyncio.to_thread(generate_briefing, company, theme,
+        focus_apps = ([p.get("name") or "" for p in selected_products]
+                      if offers_explicit else [a for a in (body.get("apps") or []) if (a or "").strip()])
+        res = await asyncio.to_thread(generate_briefing, generation_company, theme,
                                       body.get("objetivo") or "educar",
                                       body.get("formato") or "carrossel", n, intent, event,
-                                      [a for a in (body.get("apps") or []) if (a or "").strip()],
+                                      focus_apps,
                                       body.get("seconds") or 0)
+        if offers_explicit:
+            _attach_offer_refs(res.get("telas") or [], selected_products)
         # storyboard/scene_seconds: o ROTEIRO de vídeo que o briefing JÁ gerou — vai pro front e volta na
         # criação (preflight) p/ NÃO re-gerar (era o bug do "1 cena só / caixas vazias na criação").
         return {"briefing": res.get("text", ""), "telas": res.get("telas", []), "formato": res.get("formato"),
                 "storyboard": res.get("storyboard", []), "scene_seconds": res.get("scene_seconds", []),
-                "audio_plan": res.get("audio_plan", {})}
+                "audio_plan": res.get("audio_plan", {}),
+                "offer_refs": [dict(p["_offer_ref"]) for p in selected_products]}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)
 
@@ -600,6 +991,10 @@ async def post_story_image(post_id: str, request: Request):
     post = post_get(post_id)
     if not post:
         return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    cid = str(post.get("company_id") or "")
+    denied = __cad__(request, cid)
+    if denied:
+        return denied
     meta = post.get("meta") or {}
     if meta.get("story_url"):
         return {"url": meta["story_url"]}
@@ -609,12 +1004,11 @@ async def post_story_image(post_id: str, request: Request):
         return JSONResponse({"detail": "Post sem imagem"}, status_code=422)
     try:
         from ..services.template_composer import compose_story_repost
-        cid = post.get("company_id")
         company = company_get(cid) if cid else None
         colors = ((company or {}).get("brand_kit") or {}).get("colors") or {}
-        cov_rel = urls[0].split(UPLOAD_URL_PREFIX, 1)[-1].lstrip("/")
-        with open(os.path.join(UPLOAD_DIR, cov_rel), "rb") as cf:
-            cov = cf.read()
+        cov = _load_upload_bytes(urls[0], {cid})
+        if not cov:
+            return JSONResponse({"detail": "Imagem do post não encontrada"}, status_code=404)
         srep = await asyncio.to_thread(compose_story_repost, cov, colors)
         sdir = os.path.join(UPLOAD_DIR, cid, "story")
         os.makedirs(sdir, exist_ok=True)
@@ -642,6 +1036,9 @@ async def generate_post_carousel(request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     theme = (body.get("theme") or body.get("assunto") or body.get("briefing") or "").strip()
     if not theme:
         return JSONResponse({"detail": "Informe o tema/assunto do carrossel"}, status_code=422)
@@ -658,7 +1055,8 @@ async def generate_post_carousel(request: Request):
         if not slides:
             return JSONResponse({"detail": "IA não retornou slides para o carrossel."}, status_code=502)
         colors = (company.get("brand_kit") or {}).get("colors") or {}
-        co_logo = _first_raster_logo(sorted(asset_list_logos(company_id) or [], key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1))
+        approved_company_logos = [logo for logo in (asset_list_logos(company_id) or []) if _logo_is_approved(logo)]
+        co_logo = _first_raster_logo(sorted(approved_company_logos, key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1))
         site = company.get("website") or ""
         handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@").rstrip("/").split("/")[-1]
         hexid = _uuid.uuid4().hex
@@ -850,6 +1248,9 @@ def list_image_templates(request: Request, company_id: str = "", type: str = "ca
         return err
     from ..services.ai import image_templates
     co = company_get(company_id) if company_id else None
+    denied = __cad__(request, company_id) if company_id else None
+    if denied:
+        return denied
     return {"templates": image_templates(co, type or "carrossel")}
 
 
@@ -935,17 +1336,18 @@ def _format_event_info(ev: dict) -> str:
     return event_cta_info(ev)
 
 
-def _load_upload_bytes(url: str):
+def _load_upload_bytes(url: str, allowed_company_ids=None, max_bytes: int = 32 * 1024 * 1024):
     """Carrega bytes de um arquivo já servido (url começa com UPLOAD_URL_PREFIX) → caminho em UPLOAD_DIR.
     Usado pelo CACHE de foto: re-render da arte reusa a base salva, sem repagar a IA."""
     try:
-        if not url:
+        limit = int(max_bytes)
+        if limit < 1:
             return None
-        rel = url.split(UPLOAD_URL_PREFIX, 1)[-1].lstrip("/")
-        p = os.path.join(UPLOAD_DIR, rel)
-        if os.path.isfile(p):
+        p = _resolve_upload_path(url, allowed_company_ids)
+        if p and os.path.isfile(p) and os.path.getsize(p) <= limit:
             with open(p, "rb") as f:
-                return f.read()
+                data = f.read(limit + 1)
+            return data if len(data) <= limit else None
     except Exception:
         pass
     return None
@@ -978,6 +1380,8 @@ async def animate_art(request: Request):
     _deny = check_credits(company_id)
     if _deny:
         return JSONResponse({"detail": _deny, "error": "no_credits"}, status_code=402)
+    if not _resolve_upload_path(url, {company_id}):
+        return JSONResponse({"detail": "A arte deve pertencer a esta empresa"}, status_code=404)
     pub = (_render_public_base() + url) if url.startswith("/") else url
     motion = (body.get("motion") or "").strip() or (
         "Anime esta arte com elegância sutil: leve zoom-in cinematográfico, brilho suave percorrendo os elementos, "
@@ -1045,7 +1449,7 @@ async def edit_art(request: Request):
     _deny = check_credits(company_id)
     if _deny:
         return JSONResponse({"detail": _deny, "error": "no_credits"}, status_code=402)
-    img = _load_upload_bytes(url)
+    img = _load_upload_bytes(url, {company_id})
     if not img:
         return JSONResponse({"detail": "Arte não encontrada"}, status_code=404)
     prompt = ("EDITE a arte fornecida na imagem de referência. Aplique SOMENTE esta mudança: "
@@ -1082,6 +1486,26 @@ async def render_carousel(request: Request):
     _dscope = __cad__(request, company_id)
     if _dscope:
         return _dscope
+    offers_explicit, resolved_offers, offer_err = _resolve_offer_refs(request, body, str(company_id))
+    if offer_err:
+        return offer_err
+    selected_products = _offer_products(resolved_offers)
+    render_products = selected_products if offers_explicit else (product_list(company_id) or [])
+
+    requested_influencer = None
+    requested_influencer_id = str(body.get("influencer_id") or "").strip()
+    if requested_influencer_id:
+        requested_influencer = _load_owned_influencer(requested_influencer_id, str(company_id))
+        if not requested_influencer:
+            return JSONResponse({"detail": "Influencer não encontrado"}, status_code=404)
+    requested_event = requested_event_organizer = None
+    requested_event_id = str(body.get("event_id") or "").strip()
+    if requested_event_id:
+        requested_event, requested_event_organizer = _load_owned_event(
+            requested_event_id, str(company_id),
+        )
+        if not requested_event:
+            return JSONResponse({"detail": "Evento não encontrado"}, status_code=404)
 
     telas = body.get("telas") or []
     if not telas:
@@ -1106,7 +1530,10 @@ async def render_carousel(request: Request):
         import asyncio
         from ..services.template_composer import compose_carousel_slide, compose_card_slide
         colors = (company.get("brand_kit") or {}).get("colors") or {}
-        co_logos = _all_raster_logos(asset_list_logos(company_id))   # todas as variantes da marca
+        company_logo_assets = [
+            logo for logo in (asset_list_logos(company_id) or []) if _logo_is_approved(logo)
+        ]
+        co_logos = _all_raster_logos(company_logo_assets)             # variantes aprovadas da marca
         co_logo = co_logos[0] if co_logos else None                  # primária (p/ legacy/cta_footer)
         site = company.get("website") or ""
         handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@").rstrip("/").split("/")[-1]
@@ -1119,11 +1546,15 @@ async def render_carousel(request: Request):
         canvas_size = (1080, 1920) if fmt == "story" else (1080, 1350)
         img_size = "1024x1792" if fmt == "story" else "1024x1536"
         # Mapa nome do app (minúsculo) -> logo OFICIAL cadastrada (carimbada por código).
-        app_logos = {}
-        for p in (product_list(company_id) or []):
-            lps = _all_raster_logos(asset_list_logos(company_id, p["id"]))   # variantes do app
+        render_products_by_id = {str(p.get("id") or ""): p for p in render_products if p.get("id")}
+        app_logos, app_logos_by_id = {}, {}
+        for p in render_products:
+            source_company_id = p.get("_source_company_id") or company_id
+            product_assets = p.get("_logos") if offers_explicit else asset_list_logos(source_company_id, p["id"])
+            lps = _all_raster_logos(product_assets)   # variantes da oferta escolhida
             if lps:
                 app_logos[(p.get("name") or "").strip().lower()] = lps
+                app_logos_by_id[str(p.get("id") or "")] = lps
         brand_color = colors.get("primary") or colors.get("accent") or "#ED5E1F"
         from ..services.template_composer import compose_logos_only, compose_cta_footer
         from ..services.ai import image_template_get
@@ -1139,10 +1570,12 @@ async def render_carousel(request: Request):
                 if u and u.lower().rsplit(".", 1)[-1] in ("png", "jpg", "jpeg", "webp"):
                     return (base + u) if u.startswith("/") else u
             return None
-        company_logo_url = _logo_url(asset_list_logos(company_id))
+        company_logo_url = _logo_url(company_logo_assets)
         app_logo_urls = {}
-        for p in (product_list(company_id) or []):
-            u = _logo_url(asset_list_logos(company_id, p["id"]))
+        for p in render_products:
+            source_company_id = p.get("_source_company_id") or company_id
+            product_assets = p.get("_logos") if offers_explicit else asset_list_logos(source_company_id, p["id"])
+            u = _logo_url(product_assets)
             if u:
                 app_logo_urls[(p.get("name") or "").strip().lower()] = u
         # Token moldável: app_logo.on_all → repete a logo do app em TODAS as telas (carrossel de marca
@@ -1172,16 +1605,20 @@ async def render_carousel(request: Request):
                         pass
                 try:                                                  # URLs PÚBLICAS das logos (p/ Estúdio via kie image-edit)
                     from ..db_companies import asset_list_logos as _allg
-                    for _la in (_allg(company_id) or [])[:4]:
+                    for _la in [logo for logo in (_allg(company_id) or []) if _logo_is_approved(logo)][:4]:
                         _lu = _la.get("url") or ""
                         if _lu:
                             ref_ctx["logo_urls"].append((_render_public_base() + _lu) if _lu.startswith("/") else _lu)
                 except Exception:
                     pass
                 from ..db_companies import asset_list as _alist
-                for _ra in (_alist(company_id, role="brand_reference") or [])[:3]:   # artes de referência do cliente
+                _approved_arts = [
+                    _ra for _ra in (_alist(company_id, role="brand_reference") or [])
+                    if _reference_is_approved(_ra)
+                ][:3]
+                for _ra in _approved_arts:                    # apenas referências aprovadas pelo usuário
                     _ru = _ra.get("url") or ""
-                    _b = _load_upload_bytes(_ru)
+                    _b = _load_upload_bytes(_ru, {str(company_id)})
                     if _b:
                         ref_ctx["arts"].append(_b)
                         if _ru:                                       # URL pública p/ o kie image-edit
@@ -1213,8 +1650,7 @@ async def render_carousel(request: Request):
                         "a logo nem a paleta oficial da empresa): " + "; ".join(x for x in _rp_parts if x) + "."
                     )
                 try:
-                    from ..db_companies import product_list as _plist2
-                    for _p in (_plist2(company_id) or []):
+                    for _p in render_products:
                         _nm = (_p.get("name") or "").strip()
                         if _nm:
                             _fns3 = _p.get("functions") or []
@@ -1236,16 +1672,22 @@ async def render_carousel(request: Request):
         influencer, inf_photos, inf_photo_urls, inf_handle, used_inf_idx = None, [], [], "", set()
         if ai_bg and (use_composer or ref_full) and body.get("use_influencer"):
             try:
-                from ..db_companies import influencer_list, influencer_get
+                from ..db_companies import influencer_list
                 iid = (body.get("influencer_id") or "").strip()
                 if iid:
-                    _one = influencer_get(iid)
-                    _infs = [_one] if (_one and (_one.get("photos") or [])) else []
+                    _infs = ([requested_influencer]
+                             if requested_influencer and requested_influencer.get("photos") else [])
                 else:
-                    _infs = [x for x in (influencer_list(company_id) or []) if (x.get("photos") or [])]
+                    _infs = [
+                        safe for safe in (
+                            _sanitize_owned_influencer(item, str(company_id))
+                            for item in (influencer_list(company_id) or [])
+                        )
+                        if safe and safe.get("photos")
+                    ]
                 if _infs:
                     influencer = _infs[0]
-                    _pairs = [(_load_upload_bytes(p.get("url")), (p.get("url") or "")) for p in influencer["photos"]]
+                    _pairs = [(_load_upload_bytes(p.get("url"), {str(company_id)}), (p.get("url") or "")) for p in influencer["photos"]]
                     _pairs = [(b, u) for (b, u) in _pairs if b]
                     inf_photos = [b for (b, u) in _pairs]
                     inf_photo_urls = [u for (b, u) in _pairs]   # URLs públicas p/ o kie image-edit (compose_person_scene)
@@ -1267,20 +1709,17 @@ async def render_carousel(request: Request):
         _eid = (body.get("event_id") or "").strip()
         if _eid:
             try:
-                from ..db_companies import event_get, organizer_get
-                _ev = event_get(_eid); _event = _ev
+                _ev = requested_event
+                _event = _ev
                 _eassets = list((_ev or {}).get("logos") or [])
-                if _ev and _ev.get("organizer_id"):
-                    _org = organizer_get(_ev["organizer_id"])
-                    if _org:
-                        _eassets += list(_org.get("logos") or [])
+                if requested_event_organizer:
+                    _eassets += list(requested_event_organizer.get("logos") or [])
                 _epaths = []
                 for _a in _eassets:
                     _u = _a.get("url") or ""
-                    if _u.startswith(UPLOAD_URL_PREFIX):
-                        _pp = os.path.join(UPLOAD_DIR, _u[len(UPLOAD_URL_PREFIX):].lstrip("/"))
-                        if os.path.exists(_pp):
-                            _epaths.append(_logo_path_cutout(_pp))   # remove o FUNDO BRANCO (a caixa) da logo do evento
+                    _pp = _resolve_upload_path(_u, {str(company_id)})
+                    if _pp and os.path.exists(_pp):
+                        _epaths.append(_logo_path_cutout(_pp))   # remove o FUNDO BRANCO (a caixa) da logo do evento
                 event_logo_variants = _epaths or _all_raster_logos(_eassets)
                 if _ev:
                     event_cta_info = _format_event_info(_ev)   # REAL — substitui o que a IA tiver inventado
@@ -1295,6 +1734,27 @@ async def render_carousel(request: Request):
         _ds = (design_ov or {}).get("text_style") if isinstance(design_ov, dict) else None
         _seed = int(_hl.md5(((telas[0].get("title") if telas else "") + str(company_id)).encode("utf-8", "ignore")).hexdigest(), 16)
         carousel_style = (_ds or _styles[_seed % len(_styles)])
+
+        def _products_for_slide(slide):
+            """Ofertas relevantes limitadas ao conjunto já validado em offer_refs."""
+            if not offers_explicit:
+                return []
+            found, seen_ids = [], set()
+            slide_ref = slide.get("offer_ref") if isinstance(slide.get("offer_ref"), dict) else {}
+            product = render_products_by_id.get(str(slide_ref.get("product_id") or ""))
+            if product and product.get("_offer_ref") == slide_ref:
+                found.append(product); seen_ids.add(str(product.get("id")))
+            blob = " ".join(str(slide.get(key) or "") for key in ("app", "title", "body", "subtitle", "cta")).lower()
+            app_value = (slide.get("app") or "").strip().lower()
+            for candidate in render_products:
+                product_id = str(candidate.get("id") or "")
+                name = (candidate.get("name") or "").strip().lower()
+                if product_id in seen_ids or not name:
+                    continue
+                if name == app_value or name in blob:
+                    found.append(candidate); seen_ids.add(product_id)
+            return found
+
         async def _render_tela(i, s, _anchor_url=None):
             # PARALELO (fim dos 24min/8 artes): corpo de UMA tela. A tela 1 roda PRIMEIRO (é a âncora da
             # família visual); as demais rodam SIMULTÂNEAS (teto = setting render.parallel, default 4;
@@ -1306,6 +1766,11 @@ async def render_carousel(request: Request):
             # não só um. O nº de logos por tela é limitado pelo token app_logo.max_per_slide no composer.
             tl = ((s.get("app") or "") + " " + (s.get("title") or "") + " " + (s.get("body") or "")).lower()
             slide_app_logos, _seen = [], set()
+            slide_products = _products_for_slide(s)
+            for selected_product in slide_products:
+                product_id = str(selected_product.get("id") or "")
+                if product_id in app_logos_by_id and product_id not in _seen:
+                    _seen.add(product_id); slide_app_logos.append(app_logos_by_id[product_id])
             for nm in ([app_name] if app_name else []) + list(app_logos.keys()):
                 if nm and nm in app_logos and nm not in _seen and (nm == app_name or nm in tl):
                     _seen.add(nm); slide_app_logos.append(app_logos[nm])
@@ -1331,23 +1796,39 @@ async def render_carousel(request: Request):
             else:
                 prompt = _full_slide_prompt(s, brand_color, company.get("name", ""), structure, (tmpl or {}).get("variant"), _palette_str(colors))
             app_legacy = app_variants[0] if app_variants else None   # legacy usa 1 só
+            offer_photo_bytes, offer_photo_urls = [], []
+            if offers_explicit:
+                for selected_product in slide_products[:2]:
+                    photo_asset = next(iter(selected_product.get("_photos") or []), None)
+                    photo_url = (photo_asset or {}).get("url") or ""
+                    photo_bytes = _load_upload_bytes(
+                        photo_url, {str(selected_product.get("_source_company_id") or company_id)},
+                    )
+                    if photo_bytes:
+                        offer_photo_bytes.append(photo_bytes)
+                        offer_photo_urls.append((_render_public_base() + photo_url)
+                                                if photo_url.startswith("/") else photo_url)
+            if offer_photo_bytes:
+                prompt += (" As imagens de referência mostram o PRODUTO REAL selecionado; preserve formato, "
+                           "cores, acabamento e detalhes visuais, sem substituí-lo por item genérico.")
             img_ok, img_err, png, img, used_model = False, "", None, None, model
             # 1) GERAÇÃO da foto — do CACHE (base salva, custo 0) OU da IA com TRANSBORDO inteligente.
             reuse_url = reuse_bases[i - 1] if i - 1 < len(reuse_bases) else None
             if ai_bg and reuse_url:
-                img = _load_upload_bytes(reuse_url)            # CACHE: reusa a foto, NÃO paga IA
+                img = _load_upload_bytes(reuse_url, {str(company_id)})  # CACHE local da empresa
                 img_ok = img is not None
             # INFLUENCER na CAPA/CTA: compõe a pessoa real na cena (nano-banana), em vez da cena vazia.
             stype = (s.get("type") or "").lower()
             # ── ESTÚDIO IA (reference_full): a IA arquiteta a ARTE INTEIRA da tela, guiada pelas referências
             # do cadastro (logos, artes de referência, manual, KB) + a IDEIA DO CLIENTE (enriquece, não substitui).
             if ref_full and img is None:
-                _refs = list(ref_ctx["logos"]) + list(ref_ctx["arts"])
-                # PRIORIDADE nas URLs — o caminho kie CORTA em 5: âncora + marca (2) + logos de PRODUTO
-                # entram ANTES das artes de referência. Antes as logos de produto caíam fora do corte e o
-                # modelo desenhava o produto DE MEMÓRIA (Deezer com identidade antiga) mesmo cadastrado.
-                _ref_urls = list((ref_ctx.get("logo_urls") or [])[:2])
-                _ref_urls_tail = list(ref_ctx.get("art_urls") or [])
+                # Cada provedor limita referências. Reservamos espaço para estilo, marca e oferta,
+                # em vez de deixar um grupo inteiro expulsar os demais do corte (5 URLs / 8 bytes).
+                _refs = list((ref_ctx.get("arts") or [])[:2]) + list((ref_ctx.get("logos") or [])[:2])
+                _brand_ref_urls = list((ref_ctx.get("logo_urls") or [])[:2])
+                _style_ref_urls = list((ref_ctx.get("art_urls") or [])[:2])
+                _ref_urls = []
+                _anchor_ref_url = ""
                 _extra = []
                 if ref_ctx["arts"]:
                     _extra.append("As artes de REFERÊNCIA do cliente definem a FAMÍLIA VISUAL — siga esse estilo "
@@ -1360,10 +1841,12 @@ async def render_carousel(request: Request):
                                   "na composição (é a capa/CTA), rosto e expressão 100% FIÉIS — não redesenhe o rosto, "
                                   "não troque a pessoa, integre-a como protagonista da cena.")
                 if _anchor_url and i > 1:
-                    _prev = _load_upload_bytes(_anchor_url) if isinstance(_anchor_url, str) else None
+                    _prev = (_load_upload_bytes(_anchor_url, {str(company_id)})
+                             if isinstance(_anchor_url, str) else None)
                     if _prev:
                         _refs.append(_prev)
-                        _ref_urls.insert(0, (_render_public_base() + _anchor_url) if _anchor_url.startswith("/") else _anchor_url)
+                        _anchor_ref_url = ((_render_public_base() + _anchor_url)
+                                           if _anchor_url.startswith("/") else _anchor_url)
                         _extra.append("Uma das referências é a PRIMEIRA tela desta MESMA peça: mantenha EXATAMENTE "
                                       "a mesma família visual (layout, tipografia, paleta, tom).")
                 _kb = ref_ctx["kb"].get(((s.get("app") or "").strip().lower()), "")
@@ -1375,24 +1858,45 @@ async def render_carousel(request: Request):
                 _blob = " ".join([(s.get("app") or ""), (s.get("title") or ""),
                                   (s.get("body") or s.get("subtitle") or ""), (s.get("cta") or "")]).lower()
                 _prod_logos, _seen_p = [], set()
-                try:
-                    from ..db_companies import company_list as _clist3, product_list as _plist3
-                    # a PRÓPRIA empresa primeiro (a logo cadastrada dela vence a do catálogo comum)
-                    for _co3 in ([{"id": company_id}] + [c for c in (_clist3() or []) if c["id"] != company_id]):
-                        for _p3 in (_plist3(_co3["id"]) or []):
-                            _n3 = (_p3.get("name") or "").strip().lower()
-                            if not _n3 or _n3 in _seen_p or not (_n3 == _apnm or _n3 in _blob):
-                                continue
-                            _as3 = asset_list_logos(_co3["id"], _p3["id"])
-                            _lg3 = _all_raster_logos(_as3)
-                            if not _lg3:
-                                continue
-                            _u3 = next((a.get("url") for a in (_as3 or [])
-                                        if (a.get("url") or "").lower().rsplit(".", 1)[-1] in ("png", "jpg", "jpeg", "webp")), "")
-                            _seen_p.add(_n3)
-                            _prod_logos.append(((_p3.get("name") or "").strip(), _lg3[0], _u3 or ""))
-                except Exception:
-                    pass
+                if offers_explicit:
+                    # Caminho novo: somente IDs já validados. Nenhuma varredura por outros clientes.
+                    for _p3 in slide_products:
+                        _n3 = (_p3.get("name") or "").strip().lower()
+                        _as3 = _p3.get("_logos") or []
+                        _lg3 = _all_raster_logos(_as3)
+                        if not _n3 or _n3 in _seen_p or not _lg3:
+                            continue
+                        _u3 = next((a.get("url") for a in _as3
+                                    if (a.get("url") or "").lower().rsplit(".", 1)[-1]
+                                    in ("png", "jpg", "jpeg", "webp")), "")
+                        _seen_p.add(_n3)
+                        _prod_logos.append(((_p3.get("name") or "").strip(), _lg3[0], _u3 or ""))
+                else:
+                    try:
+                        from ..db_companies import company_list as _clist3, product_list as _plist3
+                        from ..main_utils import scoped_company_ids as _scoped_ids3
+                        # Compatibilidade legada: projetos sem offer_refs ainda usam a descoberta antiga.
+                        _allowed3 = _scoped_ids3(request)
+                        _other_companies3 = [
+                            c for c in (_clist3() or [])
+                            if c["id"] != company_id and (_allowed3 is None or str(c["id"]) in _allowed3)
+                        ]
+                        for _co3 in ([{"id": company_id}] + _other_companies3):
+                            for _p3 in (_plist3(_co3["id"]) or []):
+                                _n3 = (_p3.get("name") or "").strip().lower()
+                                if not _n3 or _n3 in _seen_p or not (_n3 == _apnm or _n3 in _blob):
+                                    continue
+                                _as3 = asset_list_logos(_co3["id"], _p3["id"])
+                                _lg3 = _all_raster_logos(_as3)
+                                if not _lg3:
+                                    continue
+                                _u3 = next((a.get("url") for a in (_as3 or [])
+                                            if (a.get("url") or "").lower().rsplit(".", 1)[-1]
+                                            in ("png", "jpg", "jpeg", "webp")), "")
+                                _seen_p.add(_n3)
+                                _prod_logos.append(((_p3.get("name") or "").strip(), _lg3[0], _u3 or ""))
+                    except Exception:
+                        pass
                 for _pn, _lp2, _pu in _prod_logos[:3]:
                     try:
                         _refs.append(open(_lp2, "rb").read())
@@ -1403,7 +1907,34 @@ async def render_carousel(request: Request):
                                       " de memória ou usar identidade/versão antiga dela.")
                     except Exception:
                         pass
-                _ref_urls += _ref_urls_tail                 # artes de referência POR ÚLTIMO (são as 1ªs a cair no corte)
+                if offers_explicit:
+                    for _p3 in slide_products[:2]:
+                        _photo = next(iter(_p3.get("_photos") or []), None)
+                        _photo_url = (_photo or {}).get("url") or ""
+                        _photo_bytes = _load_upload_bytes(
+                            _photo_url, {str(_p3.get("_source_company_id") or company_id)},
+                        )
+                        if not _photo_bytes:
+                            continue
+                        _refs.append(_photo_bytes)
+                        _ref_urls.append((_render_public_base() + _photo_url)
+                                         if _photo_url.startswith("/") else _photo_url)
+                        _extra.append(
+                            "Uma das referências é a FOTO REAL da oferta "
+                            + ((_p3.get("name") or "produto").strip())
+                            + " — preserve formato, cores e detalhes visuais; não substitua por produto genérico."
+                        )
+                # Ordem final: continuidade da peça, família visual aprovada, marca e oferta real.
+                # Deduplicação mantém ao menos uma inspiração dentro do limite do provedor.
+                _ordered_urls = ([_anchor_ref_url] if _anchor_ref_url else [])
+                _ordered_urls += _style_ref_urls[:1] + _brand_ref_urls[:1] + _ref_urls
+                _ordered_urls += _style_ref_urls[1:] + _brand_ref_urls[1:]
+                _ref_urls, _seen_ref_urls = [], set()
+                for _ref_url in _ordered_urls:
+                    if _ref_url and _ref_url not in _seen_ref_urls:
+                        _seen_ref_urls.add(_ref_url)
+                        _ref_urls.append(_ref_url)
+                _ref_urls = _ref_urls[:5]
                 # ── TEXTO EXATO (fix estrutural anti-erro de PT/acento): o modelo NÃO escreve o que "acha",
                 # ele COPIA estas strings verbatim. Separa o que é TEXTO-A-RENDERIZAR do que é direção visual.
                 _txt_items = [("TÍTULO", (s.get('title') or '').strip()),
@@ -1456,6 +1987,9 @@ async def render_carousel(request: Request):
                     + "TIPOGRAFIA: use a identidade tipográfica da MARCA (das referências/manual) — NUNCA fonte genérica de IA. "
                     + "As imagens de referência incluem as VERSÕES OFICIAIS da logo — ESCOLHA a versão que melhor se "
                       "integra ao fundo da sua composição e aplique-a LIMPA, sem faixa/painel/retângulo atrás. "
+                    + ("Use as ARTES DE INSPIRAÇÃO apenas para abstrair ritmo, hierarquia, densidade e atmosfera. "
+                       "Não copie literalmente texto, logo, personagem, oferta ou layout de terceiros. "
+                       if ref_ctx.get("arts") else "")
                     + ((f"CONTATO REAL da empresa — inclua INTEGRADO com elegância no rodapé/CTA da arte (tipografia "
                         f"da marca, legível), copiando EXATAMENTE: {ref_ctx['contact']}. NUNCA invente números, site ou @. "
                         ) if (ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta")) else
@@ -1562,7 +2096,8 @@ async def render_carousel(request: Request):
                 # entre as telas → não insiste num provedor morto. Editorial só se a cadeia INTEIRA falhar.
                 try:
                     img, cost, used_model = await asyncio.to_thread(
-                        generate_image_resilient, prompt, img_size, None, model, None, dead_providers, img_registry)
+                        generate_image_resilient, prompt, img_size, offer_photo_bytes or None,
+                        model, offer_photo_urls or None, dead_providers, img_registry)
                     img_ok = True
                     total_cost += (cost or 0.0)
                     if used_model and used_model != model:
@@ -1585,7 +2120,10 @@ async def render_carousel(request: Request):
                         break
                     if _regen < 2:                            # none/sem resposta → gera OUTRA foto (o texto não pode cobrir pessoa/objeto)
                         try:
-                            img, _vc, _vm = await asyncio.to_thread(generate_image_resilient, prompt, img_size, None, model, None, dead_providers, img_registry)
+                            img, _vc, _vm = await asyncio.to_thread(
+                                generate_image_resilient, prompt, img_size, offer_photo_bytes or None,
+                                model, offer_photo_urls or None, dead_providers, img_registry,
+                            )
                             total_cost += (_vc or 0.0)
                             spillovers.append((i, "regerada: sem lado limpo"))
                         except Exception:
@@ -1632,6 +2170,8 @@ async def render_carousel(request: Request):
             return {"i": i, "base": base_out, "cost": total_cost, "fails": fails, "spills": spillovers,
                     "slide": {"url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{fn}",
                               "type": s.get("type"), "title": s.get("title", ""), "app": s.get("app") or "",
+                              **({"offer_ref": s.get("offer_ref")}
+                                 if isinstance(s.get("offer_ref"), dict) else {}),
                               "prompt": prompt, "image_ok": img_ok, "image_error": img_err, "base_url": base_out,
                               "model_used": used_model}}
 
@@ -1682,7 +2222,9 @@ async def render_carousel(request: Request):
                              "fmt": fmt, "carousel_urls": [o["url"] for o in out],
                              "base_urls": bases, "render_mode": render_mode,
                              "model": model or "editorial", "template_id": (tmpl or {}).get("id"),
-                             "collab_handle": (inf_handle or "").lstrip("@")},   # @ do influencer p/ collab na publicação
+                             "collab_handle": (inf_handle or "").lstrip("@"),
+                             **({"offer_refs": [dict(p["_offer_ref"]) for p in selected_products]}
+                                if offers_explicit else {})},   # @ do influencer p/ collab na publicação
                 })
                 post_id = _p.get("id")
             except Exception:
@@ -1697,7 +2239,8 @@ async def render_carousel(request: Request):
                 "credits_debited": _blog(company_id, "image", total_cost, model=str(body.get("model") or ""), meta={"mode": render_mode, "telas": total}),
                 "cost": usd_to_brl(total_cost), "cost_usd": round(total_cost, 4),
                 "currency": "BRL", "count": total, "slides": out, "base_urls": bases, "post_id": post_id,
-                "caption": resp_caption}
+                "caption": resp_caption,
+                "offer_refs": [dict(p["_offer_ref"]) for p in selected_products]}
         if spillovers:   # transbordou: alguma tela usou um modelo diferente do pedido (provedor sem saldo/erro)
             ups = ", ".join(f"tela {idx}→{m}" for idx, m in spillovers[:5])
             resp["spillover"] = (f"{len(spillovers)} tela(s) transbordaram p/ outro modelo (o pedido falhou/sem saldo): "
@@ -1725,6 +2268,9 @@ async def kie_recover(request: Request):
     company_id = (body.get("company_id") or "").strip()
     if not company_get(company_id):
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     ids = [str(x).strip() for x in (body.get("task_ids") or []) if str(x).strip()]
     minutes = int(body.get("minutes") or 180)
     if not ids:
@@ -1835,6 +2381,9 @@ async def generate_post_video(request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     provider_config = get_video_config((body.get("model") or "").strip() or None)
     if not provider_config:
         return JSONResponse({"detail": "Geração de vídeo não configurada (chave OpenAI)."}, status_code=400)
@@ -2084,7 +2633,8 @@ def _render_branded_video_job(company_id: str, jid: str, scene_prompts: list, se
 
 
 def _render_studio_video_job(company_id: str, jid: str, theme: str, video_prompt: str,
-                             target_seconds: int, base_url: str) -> None:
+                             target_seconds: int, base_url: str,
+                             offer_products: Optional[List[Dict[str, Any]]] = None) -> None:
     """ESTÚDIO VÍDEO (receita validada v5-v7): roteiro simples → keyframes com identidade (reference_full)
     → Veo3 anima (voz nativa, enableTranslation OFF) → crossfade. REGRAS DE OURO: toda a FALA numa cena só
     (voz única); demais cenas = b-roll sem voz; ZERO overlay de código (identidade vem dos keyframes)."""
@@ -2095,7 +2645,7 @@ def _render_studio_video_job(company_id: str, jid: str, theme: str, video_prompt
     from ..services.ai import (generate_image_reference_full, cheap_text_config, get_ai_config,
                                complete_ai, extract_json, _kie_key, _KIE_BASE, get_setting as _gs)
     from ..services.video_composer import _ff
-    from ..db_companies import product_list as _pl, company_list as _cl, company_get as _cg
+    from ..db_companies import product_list as _pl, company_get as _cg
     jdir = _video_job_dir(company_id)
     sp_path = os.path.join(jdir, jid + ".json")
 
@@ -2119,11 +2669,16 @@ def _render_studio_video_job(company_id: str, jid: str, theme: str, video_prompt
         _kb = ""
         try:
             _tl = (theme or "").lower()
-            for _co in (_cl() or []):
-                for _p in (_pl(_co["id"]) or []):
-                    _nm = (_p.get("name") or "").strip()
-                    if _nm and _nm.lower() in _tl:
-                        _kb += f" [{_nm}] " + (_p.get("description") or "") + " " + (_p.get("objective") or "")
+            _available_products = list(offer_products) if offer_products is not None else (_pl(company_id) or [])
+            _matched_products = (
+                _available_products if offer_products is not None else
+                [_p for _p in _available_products
+                 if (_p.get("name") or "").strip().lower() in _tl]
+            )
+            for _p in _matched_products[:3]:
+                _nm = (_p.get("name") or "").strip()
+                if _nm:
+                    _kb += f" [{_nm}] " + (_p.get("description") or "") + " " + (_p.get("objective") or "")
         except Exception:
             pass
         sysm = "Você é diretor de comerciais curtos. Responda SÓ JSON válido pt-BR."
@@ -2143,19 +2698,24 @@ def _render_studio_video_job(company_id: str, jid: str, theme: str, video_prompt
             cenas.append({"kf": f"cena da marca {company.get('name','')} sobre {theme}", "mov": "câmera suave"})
         # 2) REFERÊNCIAS: logos da empresa + logos de produtos citados (catálogo compartilhado)
         refs = []
-        for _lp in (_all_raster_logos(asset_list_logos(company_id)) or [])[:3]:
+        approved_company_logos = [logo for logo in (asset_list_logos(company_id) or []) if _logo_is_approved(logo)]
+        for _lp in (_all_raster_logos(approved_company_logos) or [])[:3]:
             try:
                 refs.append(open(_lp, "rb").read())
             except Exception:
                 pass
         try:
             _tl = (theme or "").lower()
-            for _co in (_cl() or []):
-                for _p in (_pl(_co["id"]) or []):
-                    _nm = (_p.get("name") or "").strip().lower()
-                    if _nm and _nm in _tl:
-                        for _lp in (_all_raster_logos(asset_list_logos(_co["id"], _p["id"])) or [])[:1]:
-                            refs.append(open(_lp, "rb").read())
+            _available_products = list(offer_products) if offer_products is not None else (_pl(company_id) or [])
+            _matched_products = (
+                _available_products if offer_products is not None else
+                [_p for _p in _available_products
+                 if (_p.get("name") or "").strip().lower() in _tl]
+            )
+            for _p in _matched_products[:2]:
+                _assets = (_p.get("_logos") or []) if offer_products is not None else asset_list_logos(company_id, _p["id"])
+                for _lp in (_all_raster_logos(_assets) or [])[:1]:
+                    refs.append(open(_lp, "rb").read())
         except Exception:
             pass
         IDENT = (f"Identidade da marca {company.get('name','')}: {(bk.get('visual_prompt_base') or '').strip()} "
@@ -2268,6 +2828,13 @@ async def generate_branded_video(request: Request):
     _dscope = __cad__(request, company.get("id"))
     if _dscope:
         return _dscope
+    offers_explicit, resolved_offers, offer_err = _resolve_offer_refs(
+        request, body, str(company.get("id") or ""),
+    )
+    if offer_err:
+        return offer_err
+    selected_products = _offer_products(resolved_offers)
+    company = _company_with_offer_products(company, offers_explicit, selected_products)
     from ..services.ai import (get_video_config, build_video_storyboard, build_video_audio_plan,
                                video_model_max_seconds, video_scene_count, video_segment_plan,
                                video_model_id_from_config)
@@ -2307,8 +2874,10 @@ async def generate_branded_video(request: Request):
         _burl = _render_public_base()   # base PÚBLICA (kie precisa baixar os keyframes; request.base_url pode ser localhost)
         import threading as _th2
         _th2.Thread(target=_render_studio_video_job,
-                    args=(cid, jid, theme, video_prompt, target or 15, _burl), daemon=True).start()
-        return {"job": jid, "scenes": _n_est, "engine": "estudio"}
+                    args=(cid, jid, theme, video_prompt, target or 15, _burl,
+                          selected_products if offers_explicit else None), daemon=True).start()
+        return {"job": jid, "scenes": _n_est, "engine": "estudio",
+                "offer_refs": [dict(product["_offer_ref"]) for product in selected_products]}
     mx = video_model_max_seconds(_selected_model_id)          # máx de segundos POR CLIPE do modelo confirmado
     n_hint = video_scene_count(target, mx, ai_count=max(0, len(body.get("storyboard") or []))) if target > 0 else 0
     per_hint = max(1, min(mx, round(target / n_hint))) if n_hint else (mx or 8)
@@ -2354,14 +2923,18 @@ async def generate_branded_video(request: Request):
         return "".join(c for c in s if not _ud.combining(c)).replace(" ", "").replace("-", "")
     _focus_names = [a.strip() for a in (body.get("apps") or []) if (a or "").strip()]
     _tn = _norm(theme)
-    _prods = product_list(cid) or []
+    _prods = selected_products if offers_explicit else (product_list(cid) or [])
     if _focus_names:
         _match = [p for p in _prods if (p.get("name") or "").strip().lower() in {a.lower() for a in _focus_names}]
+    elif offers_explicit:
+        _match = _prods[:1]
     else:
         _match = [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tn]
     app_logos = {}
     for _p in _match[:1]:                                            # SÓ o app em foco → nunca carimba app errado
-        _lps = _all_raster_logos(asset_list_logos(cid, _p["id"]))
+        _lps = _all_raster_logos(
+            (_p.get("_logos") or []) if offers_explicit else asset_list_logos(cid, _p["id"])
+        )
         if _lps:
             app_logos[(_p.get("name") or "").strip().lower()] = _lps
     site = (company.get("website") or "").strip()
@@ -2414,7 +2987,8 @@ async def generate_branded_video(request: Request):
                      carousel_first_frame_url, (target or None), _provider_config),
                daemon=True).start()
     return {"job": jid, "scenes": n, "provider": _vprov,
-            "model": video_model_id_from_config(_provider_config)}
+            "model": video_model_id_from_config(_provider_config),
+            "offer_refs": [dict(product["_offer_ref"]) for product in selected_products]}
 
 
 @router.post("/video-preflight")
@@ -2432,6 +3006,18 @@ async def video_preflight(request: Request):
     if not get_video_config(_requested_model or None):
         return {"configured": False}
     company = company_get(body.get("company_id"))
+    if not company:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company.get("id"))
+    if denied:
+        return denied
+    offers_explicit, resolved_offers, offer_err = _resolve_offer_refs(
+        request, body, str(company.get("id") or ""),
+    )
+    if offer_err:
+        return offer_err
+    selected_products = _offer_products(resolved_offers)
+    generation_company = _company_with_offer_products(company, offers_explicit, selected_products)
     theme = (body.get("theme") or "").strip()
     vp = (body.get("video_prompt") or "").strip()
     import math as _math
@@ -2453,7 +3039,7 @@ async def video_preflight(request: Request):
         char_lock = (body.get("character") or "").strip()
     else:                                                                            # sem briefing → gera agora
         try:
-            sb = await asyncio.to_thread(build_video_storyboard, company, theme, vp, target, n_hint, per_hint, (body.get("style") or "").strip()) if company else []
+            sb = await asyncio.to_thread(build_video_storyboard, generation_company, theme, vp, target, n_hint, per_hint, (body.get("style") or "").strip())
         except Exception:
             sb = []
         prompts = [s.get("prompt") for s in (sb or []) if s.get("prompt")]
@@ -2503,7 +3089,8 @@ async def video_preflight(request: Request):
             "price_per_clip_usd": price, "total_usd": total_usd, "total_brl": round(usd_to_brl(total_usd), 2),
             "price_real": real, "is_credits": is_credits, "credits_per_clip": kie_credits_per_clip,
             "total_credits": kie_credits, "credits_learned": bool(get_setting("kie.credits." + _vm[len("kie:"):]) if is_credits else False),
-            "storyboard": prompts, "scene_descs": descs, "character": char_lock}
+            "storyboard": prompts, "scene_descs": descs, "character": char_lock,
+            "offer_refs": [dict(product["_offer_ref"]) for product in selected_products]}
 
 
 @router.post("/video-styles")
@@ -2520,6 +3107,12 @@ async def video_styles(request: Request):
         body = {}
     cid = (body.get("company_id") or "").strip()
     company = company_get(cid) if cid else None
+    if cid:
+        if not company:
+            return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+        denied = __cad__(request, cid)
+        if denied:
+            return denied
     return {"styles": video_styles_list(company)}
 
 
@@ -2533,6 +3126,11 @@ async def video_scene_regen(request: Request):
     body = await request.json()
     from ..services.ai import cheap_text_config, get_ai_config, complete_ai, extract_json, video_style_directive
     company = company_get(body.get("company_id"))
+    if not company:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company.get("id"))
+    if denied:
+        return denied
     theme = (body.get("theme") or "").strip()
     descs = [d for d in (body.get("scene_descs") or []) if isinstance(d, str)]
     try:
@@ -2568,7 +3166,14 @@ async def branded_video_status(request: Request):
         return err
     import json as _json, time as _time
     body = await request.json()
-    p = os.path.join(UPLOAD_DIR, body.get("company_id") or "", "video", (body.get("job") or "") + ".json")
+    cid = str(body.get("company_id") or "").strip()
+    job = str(body.get("job") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", cid) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job):
+        return JSONResponse({"detail": "company_id ou job inválido"}, status_code=422)
+    denied = __cad__(request, cid)
+    if denied:
+        return denied
+    p = os.path.join(UPLOAD_DIR, cid, "video", job + ".json")
     if not os.path.exists(p):
         return {"status": "unknown"}
     try:
@@ -2627,6 +3232,14 @@ async def video_status(request: Request, jobs: str = "", company_id: str = ""):
     ids = [j for j in (jobs or "").split(",") if j.strip()]
     if not ids:
         return JSONResponse({"detail": "jobs é obrigatório"}, status_code=422)
+    if company_id:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", company_id):
+            return JSONResponse({"detail": "company_id inválido"}, status_code=422)
+        denied = __cad__(request, company_id)
+        if denied:
+            return denied
+    if any(not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", job) for job in ids):
+        return JSONResponse({"detail": "job inválido"}, status_code=422)
     try:
         import asyncio
         states = await asyncio.gather(*[asyncio.to_thread(get_video_job, i) for i in ids])
@@ -2672,6 +3285,9 @@ def get_trends(company_id: str, request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     report = report_get_latest(company_id, "TRENDS")
     return {"report": report, "ai_enabled": is_ai_enabled()}
 
@@ -2684,6 +3300,9 @@ async def generate_trends_report(company_id: str, request: Request):
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     if not is_ai_enabled():
         return JSONResponse({"detail": "IA não configurada — adicione sua chave em Configurações."}, status_code=400)
     try:

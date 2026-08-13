@@ -3261,11 +3261,14 @@ def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
     knowledge/web_brief), filtrado pelos apps citados no tema. SÓ LEITURA: não dispara refresh, não toca no
     motor de imagem (generate_carousel fica intacto). Vazio se não houver produto → vídeo segue como antes.
     Faz a CENA e a NARRAÇÃO falarem do app de verdade, com fatos (não genérico)."""
-    try:
-        from ..db_companies import product_list as _plist
-        prods = _plist(company.get("id")) or []
-    except Exception:
-        return ""
+    if company.get("_offer_products_explicit"):
+        prods = list(company.get("_offer_products_override") or [])
+    else:
+        try:
+            from ..db_companies import product_list as _plist
+            prods = _plist(company.get("id")) or []
+        except Exception:
+            return ""
     if not prods:
         return ""
     import unicodedata as _ud
@@ -3286,14 +3289,25 @@ def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
             except Exception:
                 fns = [fns] if fns else []
         fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:800]
+        desc = (p.get("description") or "").strip()
         obj = (p.get("objective") or "").strip()
         kb = (p.get("knowledge") or "").strip()
         web = (p.get("web_brief") or "").strip()
+        sols = [
+            (s.get("name") or s.get("title") or s.get("description") or "").strip()
+            for s in (p.get("solutions") or []) if isinstance(s, dict)
+        ]
         seg = []
+        if p.get("_source_company_name"):
+            seg.append("Catálogo de origem: " + str(p.get("_source_company_name"))[:160])
+        if desc:
+            seg.append("Descrição: " + desc[:800])
         if obj:
             seg.append("Objetivo: " + obj)
         if fns_t:
             seg.append("Funções: " + fns_t)
+        if sols:
+            seg.append("Soluções: " + "; ".join(v for v in sols if v)[:800])
         if kb:
             seg.append("Fatos (use SÓ o que está aqui, não invente recursos): " + kb[:2500])
         if web:
@@ -4240,11 +4254,34 @@ def download_video(job_id: str, config_override: Optional[Dict[str, Any]] = None
 
 def _fetch_site_text(site_url: str) -> str:
     """Fetch a site → text for AI extraction. Prefers meta description/title (SPA-safe)
-    and strips cookie-consent boilerplate. Returns '' on failure."""
+    and strips cookie-consent boilerplate. Private/reserved targets and unsafe
+    redirects are rejected before any text can be sent to an AI provider."""
+    import ipaddress
     import re
+    import socket
+    from urllib.parse import urljoin, urlparse
     if not site_url:
         return ""
     url = site_url if site_url.startswith("http") else "https://" + site_url
+
+    def public_url(candidate: str) -> bool:
+        try:
+            parsed = urlparse(candidate)
+            if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
+                return False
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if port not in (80, 443):
+                return False
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if not host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+                return False
+            addresses = {
+                row[4][0].split("%", 1)[0]
+                for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            }
+            return bool(addresses) and all(ipaddress.ip_address(value).is_global for value in addresses)
+        except (OSError, TypeError, ValueError):
+            return False
 
     def meta(html: str, key: str, attr: str = "name") -> str:
         m = re.search(r'<meta[^>]+' + attr + r'=["\']' + re.escape(key) + r'["\'][^>]*\bcontent=["\']([^"\']*)', html, re.I)
@@ -4253,9 +4290,38 @@ def _fetch_site_text(site_url: str) -> str:
         return (m.group(1).strip() if m else "")
 
     try:
-        with httpx.Client(timeout=25.0, follow_redirects=True,
-                          headers={"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"}) as c:
-            html = c.get(url).text
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; CaripostBot/1.0)"}
+        current = url
+        html = ""
+        with httpx.Client(timeout=httpx.Timeout(20.0, connect=8.0), follow_redirects=False,
+                          headers=headers, trust_env=False) as c:
+            for _attempt in range(5):
+                if not public_url(current):
+                    return ""
+                with c.stream("GET", current, follow_redirects=False) as response:
+                    status = int(response.status_code)
+                    location = str(response.headers.get("location") or "").strip()
+                    if status in (301, 302, 303, 307, 308) and location:
+                        current = urljoin(current, location)
+                        continue
+                    if status >= 400:
+                        return ""
+                    content_type = str(response.headers.get("content-type") or "").lower()
+                    if content_type and "html" not in content_type:
+                        return ""
+                    declared = str(response.headers.get("content-length") or "")
+                    if declared.isdigit() and int(declared) > 3 * 1024 * 1024:
+                        return ""
+                    body = bytearray()
+                    for chunk in response.iter_bytes():
+                        body.extend(chunk)
+                        if len(body) > 3 * 1024 * 1024:
+                            return ""
+                    encoding = response.encoding or "utf-8"
+                    html = bytes(body).decode(encoding, errors="replace")
+                    break
+            else:
+                return ""
         tm = re.search(r'<title[^>]*>(.*?)</title>', html, re.I | re.S)
         metas = [(tm.group(1).strip() if tm else ""), meta(html, "description"), meta(html, "keywords"),
                  meta(html, "og:title", "property"), meta(html, "og:description", "property"),
@@ -4276,27 +4342,25 @@ def _fetch_site_text(site_url: str) -> str:
 
 def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", segment: str = "",
                             facebook: str = "") -> Dict[str, Any]:
-    """Read the company's site/Instagram and define brand voice/persona/audience/visual base
-    for the agency. NEVER returns prices."""
+    """Extract evidence-backed facts and propose only the creative fields explicitly."""
     import re as _re
     import json as _json
     config = cheap_text_config(get_ai_config())
     if not config:
         raise ValueError("IA não configurada — adicione sua chave em Configurações.")
     text = _fetch_site_text(site_url)
-    facebook_text = _fetch_site_text(facebook) if facebook.startswith(("http://", "https://")) else ""
-    if facebook_text:
-        text = (text + "\nPERFIL FACEBOOK:\n" + facebook_text)[:16000]
     system = (
-        "Você é um estrategista de marca. A partir do site/Instagram de uma EMPRESA, defina a "
-        "identidade verbal e o posicionamento para uma agência criar posts. Responda SOMENTE com "
-        "JSON válido, sem markdown. IGNORE textos de cookies/LGPD/privacidade. NUNCA inclua preços."
+        "Você é um estrategista de marca trabalhando com evidências. Responda SOMENTE JSON válido. "
+        "description, segment, audience e colors são fatos: use somente informação explícita no conteúdo "
+        "oficial fornecido; se não houver evidência, devolva string vazia ou {}. voice, persona e "
+        "visual_prompt_base podem ser propostas criativas coerentes com fatos conhecidos, sem inventar "
+        "produtos, resultados, contatos, presença geográfica ou promessas. Ignore cookies/LGPD. Sem preços."
     )
     user = (
         f"Empresa: {name}\nSegmento atual: {segment or '(não informado)'}\n"
         f"Instagram: {instagram or '(não informado)'}\n"
         f"Facebook: {facebook or '(não informado)'}\n"
-        f"Conteúdo do site:\n{text or '(site indisponível — infira pelo nome e Instagram)'}\n\n"
+        f"Conteúdo do site:\n{text or '(nenhuma evidência pública disponível)'}\n\n"
         "Extraia exatamente este JSON:\n"
         '{"description":"o que a empresa faz (1-2 frases)",'
         '"segment":"segmento curto (ex: agência de SVAs para provedores)",'
@@ -4307,13 +4371,19 @@ def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", 
         '"colors":{"nome_da_cor":"#RRGGBB"}}\n'
         "Em colors, retorne apenas cores sustentadas pelo site, com nomes curtos e até 8 tons realmente distintos; "
         "não invente variações quase iguais para completar quantidade. "
-        "Sem preços. Responda só o JSON."
+        "Não trate o nome da empresa, um @ ou uma URL como prova do que ela vende. Sem preços. Responda só o JSON."
     )
     raw = _call_openai_compat(config["provider"], config["apiKey"], config["model"], system, user, 1600)
     m = _re.search(r'\{.*\}', raw, _re.S)
     data = _json.loads(m.group(0)) if m else {}
     for k in ("price", "preco", "preço", "pricing", "valor", "plano", "planos"):
         data.pop(k, None)
+    if not text:
+        # O prompt orienta, mas a fronteira de confiança precisa existir em
+        # código: @, nome e URL nunca provam segmento, público ou descrição.
+        for key in ("description", "segment", "audience"):
+            data[key] = ""
+        data["colors"] = {}
     if not isinstance(data.get("colors"), dict):
         data["colors"] = {}
     data["site_text_used"] = bool(text)
@@ -4329,6 +4399,11 @@ def enrich_product_from_web(name: str, site_url: str = "", instagram: str = "") 
     if not config:
         raise ValueError("IA não configurada — adicione sua chave em Configurações.")
     text = _fetch_site_text(site_url)
+    if not text:
+        return {
+            "description": "", "objective": "", "functions": [], "category": "",
+            "colors": {}, "alacarte": [], "site_text_used": False,
+        }
     system = (
         "Você analisa o site de um aplicativo/SVA e extrai o PERFIL do produto para uma agência "
         "que cria posts. Responda SOMENTE com JSON válido, sem markdown. "
@@ -4340,7 +4415,7 @@ def enrich_product_from_web(name: str, site_url: str = "", instagram: str = "") 
     user = (
         f"Produto/app: {name}\n"
         f"Instagram: {instagram or '(não informado)'}\n"
-        f"Conteúdo do site:\n{text or '(site indisponível — infira pelo nome e Instagram)'}\n\n"
+        f"Conteúdo do site:\n{text}\n\n"
         "Extraia exatamente este JSON:\n"
         '{"description":"1-2 frases: o que é e diferenciais",'
         '"objective":"como a agência deve posicionar/vender este app nos posts (público, ângulo)",'
@@ -4410,15 +4485,25 @@ def generate_post_copy(company: Dict[str, Any], briefing: str, networks: List[st
         user_parts.append(f"Persona da marca: {brand_kit['persona']}")
     if networks:
         user_parts.append(f"Redes alvo: {', '.join(networks)}")
-    try:
-        from ..db_companies import product_list
-        _prods = product_list(company.get("id") or "") or []
-    except Exception:
-        _prods = []
+    if company.get("_offer_products_explicit"):
+        _prods = list(company.get("_offer_products_override") or [])
+    else:
+        try:
+            from ..db_companies import product_list
+            _prods = product_list(company.get("id") or "") or []
+        except Exception:
+            _prods = []
     if _prods:
+        _product_intro = (
+            "Ofertas vinculadas explicitamente a este conteúdo (podem vir do catálogo de outra empresa; "
+            "a identidade visual continua sendo da Empresa acima). Fale somente destas ofertas e siga o "
+            "'objetivo' de cada uma: "
+            if company.get("_offer_products_explicit") else
+            "Produtos/apps que a empresa vende (fale de um produto real e seus benefícios, escolhendo o "
+            "mais alinhado ao briefing; siga o 'objetivo' de cada um): "
+        )
         user_parts.append(
-            "Produtos/apps que a empresa vende (fale de um produto real e seus benefícios, "
-            "escolhendo o mais alinhado ao briefing; siga o 'objetivo' de cada um): "
+            _product_intro
             + "; ".join(f"{p.get('name')}: {(p.get('description') or '')[:120]}" + (f" [objetivo: {(p.get('objective') or '')[:150]}]" if p.get('objective') else "") for p in _prods[:25])
         )
     user_parts.append(f"Briefing do post: {briefing}")
@@ -5006,12 +5091,17 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
     if single:
         system = system + G["single_addendum"]                            # particularidade do formato arte única
     # Apps REAIS cadastrados → a IA tagueia o campo 'app' por tela a partir DESTES (não inventa) e distribui.
-    try:
-        from ..db_companies import product_list as _plist
-        _prods = _plist(company.get("id")) or []
+    _offers_explicit = bool(company.get("_offer_products_explicit"))
+    if _offers_explicit:
+        _prods = list(company.get("_offer_products_override") or [])
         _apps = [(p.get("name") or "").strip() for p in _prods if (p.get("name") or "").strip()]
-    except Exception:
-        _prods, _apps = [], []
+    else:
+        try:
+            from ..db_companies import product_list as _plist
+            _prods = _plist(company.get("id")) or []
+            _apps = [(p.get("name") or "").strip() for p in _prods if (p.get("name") or "").strip()]
+        except Exception:
+            _prods, _apps = [], []
     # FOCO EXCLUSIVO: se o usuário marcou só certos apps (caixinhas), restringe o universo a eles (case-insensitive, nome exato do banco).
     _focus_names = [a.strip() for a in (apps_focus or []) if (a or "").strip()]
     if _focus_names:
@@ -5039,11 +5129,22 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:2000]
         kb = (p.get("knowledge") or "").strip()
         obj = (p.get("objective") or "").strip()
+        desc = (p.get("description") or "").strip()
+        sols = [
+            (s.get("name") or s.get("title") or s.get("description") or "").strip()
+            for s in (p.get("solutions") or []) if isinstance(s, dict)
+        ]
         seg = []
+        if p.get("_source_company_name"):
+            seg.append("Catálogo de origem: " + str(p.get("_source_company_name"))[:160])
+        if desc:
+            seg.append("Descrição: " + desc[:1600])
         if obj:
             seg.append("Objetivo: " + obj)
         if fns_t:
             seg.append("Funções: " + fns_t)
+        if sols:
+            seg.append("Soluções: " + "; ".join(v for v in sols if v)[:1600])
         if kb:
             seg.append("Base de conhecimento (fatos REAIS — use SÓ o que está aqui, não invente recursos):\n" + kb[:8000])
         return (p.get("name"), " | ".join(seg)) if seg else None
@@ -5061,13 +5162,14 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
     if _wtexts:
         web_line = ("PESQUISA WEB (fatos REAIS da internet — combine com o acima, NÃO invente): "
                     + (" || ".join(_wtexts))[:3000] + ". ")
-    try:
-        _stale = [p for p in _wfocus if _web_brief_stale(p)]
-        if _stale:
-            import threading as _th
-            _th.Thread(target=refresh_web_briefs, args=(company.get("id"), _stale, theme), daemon=True).start()
-    except Exception:
-        pass
+    if not _offers_explicit:
+        try:
+            _stale = [p for p in _wfocus if _web_brief_stale(p)]
+            if _stale:
+                import threading as _th
+                _th.Thread(target=refresh_web_briefs, args=(company.get("id"), _stale, theme), daemon=True).start()
+        except Exception:
+            pass
     # MODO EVENTO: injeta os dados REAIS do evento (datas/local/stand) na instrução do briefing.
     event_line = ""
     if event:
@@ -5086,7 +5188,9 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
         n_rule = G["n_exact"].format(n=floor)
     else:
         n_rule = G["n_default"] + (f" Garanta NO MÍNIMO {floor} telas no total. " if floor else "")
-    apps_line = ("OFERTAS desta empresa — produtos/serviços/procedimentos (use SOMENTE estes no campo 'app', nome EXATO): "
+    _apps_origin = ("OFERTAS VINCULADAS A ESTE CONTEÚDO (catálogo selecionado; a marca visual permanece a empresa-alvo)"
+                    if _offers_explicit else "OFERTAS desta empresa")
+    apps_line = (_apps_origin + " — produtos/serviços/procedimentos (use SOMENTE estes no campo 'app', nome EXATO): "
                  + ", ".join(_apps) + ". Em CADA slide de CONTEÚDO que trate de uma oferta, preencha 'app' com a oferta "
                  "MAIS relevante daquele slide e DISTRIBUA as ofertas citadas no tema entre as telas (não deixe 'app' "
                  "vazio quando a tela é sobre uma oferta). Telas de conceito geral podem ficar com 'app' vazio. ") if _apps else ""

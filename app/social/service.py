@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .base import SUPPORTED_SOCIAL_PLATFORMS, SocialProviderError
 from .composio_provider import ComposioSocialProvider
 from .mock_provider import MockSocialProvider
+
+
+SOCIAL_ENABLED_LIFECYCLE_STAGES = {"managed", "internal"}
+_LIFECYCLE_LABELS = {
+    "managed": "gerenciada",
+    "internal": "interna",
+    "prospect": "prospecto",
+    "lost": "perdida",
+}
 
 
 def get_social_provider():
@@ -59,6 +69,42 @@ def ensure_brand_exists(brand_id: str) -> Dict[str, Any]:
     except Exception:
         pass
     raise SocialProviderError("Marca/empresa não encontrada.", status_code=404)
+
+
+def brand_lifecycle_stage(brand: Dict[str, Any]) -> str:
+    """Retorna o estágio social efetivo sem quebrar cadastros legados.
+
+    Empresas antigas não possuem ``lifecycle_stage``. Elas já podiam publicar e,
+    por compatibilidade, continuam sendo tratadas como gerenciadas até passarem
+    pela migração. Creators também permanecem elegíveis, pois não participam do
+    ciclo prospecto -> cliente das empresas.
+    """
+    if brand.get("kind") != "company":
+        return "managed"
+    record = brand.get("brand") if isinstance(brand.get("brand"), dict) else {}
+    raw = record.get("lifecycle_stage") or record.get("lifecycleStage")
+    if not raw:
+        return "managed"
+    return str(raw).strip().lower()
+
+
+def ensure_social_brand_eligible(brand_id: str, *, action: str = "usar recursos sociais") -> Dict[str, Any]:
+    """Bloqueia conexão/publicação para prospectos e empresas perdidas."""
+    brand = ensure_brand_exists(brand_id)
+    stage = brand_lifecycle_stage(brand)
+    if stage not in SOCIAL_ENABLED_LIFECYCLE_STAGES:
+        label = _LIFECYCLE_LABELS.get(stage, stage or "não definido")
+        raise SocialProviderError(
+            f"Empresa em estágio '{label}' não pode {action}. "
+            "Conexões e publicações sociais são permitidas apenas para empresas gerenciadas ou internas.",
+            status_code=403,
+            detail={
+                "error": "social_lifecycle_forbidden",
+                "lifecycle_stage": stage,
+                "allowed_lifecycle_stages": sorted(SOCIAL_ENABLED_LIFECYCLE_STAGES),
+            },
+        )
+    return brand
 
 
 def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -140,7 +186,7 @@ def is_approved_payload(body: Dict[str, Any], source_post: Optional[Dict[str, An
 async def connect_account(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
     brand_id = body.get("brandId") or body.get("brand_id")
     platform = normalize_platform(body.get("platform"))
-    ensure_brand_exists(brand_id)
+    ensure_social_brand_eligible(brand_id, action="iniciar uma conexão social")
     return await connect_brand_account(
         brand_id=brand_id,
         platform=platform,
@@ -157,7 +203,7 @@ async def connect_brand_account(
     account_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cria a autorização no escopo da empresa, não do operador da agência."""
-    ensure_brand_exists(brand_id)
+    ensure_social_brand_eligible(brand_id, action="iniciar uma conexão social")
     platform = normalize_platform(platform)
     user_id = f"brand:{brand_id}"
     provider = get_social_provider()
@@ -194,7 +240,7 @@ async def connect_brand_account(
 
 
 async def handle_connection_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
-    from ..db_agency import social_connection_get_by_composio, social_connection_update, social_connection_upsert
+    from ..db_agency import social_connection_get_by_composio, social_connection_list, social_connection_update
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     comp_id = (
@@ -212,6 +258,9 @@ async def handle_connection_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
     status = "connected" if status_raw in {"active", "connected", "success", "completed"} else status_raw
     existing = social_connection_get_by_composio(comp_id)
     if existing:
+        ensure_social_brand_eligible(existing.get("brand_id"), action="concluir uma conexão social")
+        if existing.get("status") == "revoked":
+            return {"ok": True, "ignored": True, "detail": "callback de conexão já revogada"}
         social_connection_update(existing["id"], {
             "status": status,
             "external_account_id": data.get("external_account_id") or data.get("account_id") or existing.get("external_account_id"),
@@ -223,20 +272,29 @@ async def handle_connection_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
     brand_id = data.get("brand_id") or data.get("brandId") or metadata.get("brand_id") or metadata.get("brandId")
     platform = data.get("platform") or metadata.get("platform")
     if not brand_id or not platform:
-        return {"ok": True, "ignored": True, "detail": "callback sem brand_id/platform para nova conexão"}
-    connection = social_connection_upsert({
-        "user_id": data.get("user_id") or metadata.get("user_id") or "api",
-        "brand_id": brand_id,
-        "platform": normalize_platform(platform),
-        "provider": "composio",
+        return {"ok": True, "ignored": True, "detail": "callback sem conexão local iniciada"}
+    platform = normalize_platform(platform)
+    ensure_social_brand_eligible(brand_id, action="concluir uma conexão social")
+    pending = [
+        item for item in social_connection_list(
+            brand_id=brand_id,
+            platform=platform,
+            include_revoked=True,
+        )
+        if item.get("status") == "pending" and not item.get("composio_connection_id")
+    ]
+    if not pending:
+        return {"ok": True, "ignored": True, "detail": "callback sem conexão local pendente correspondente"}
+    connection_id = pending[0]["id"]
+    social_connection_update(connection_id, {
+        "status": status,
         "external_account_id": data.get("external_account_id") or data.get("account_id"),
         "external_account_name": data.get("name") or data.get("account_name"),
         "composio_connection_id": comp_id,
-        "status": status,
-        "metadata": {"callback": _safe_log_payload(payload)},
+        "metadata": {**(pending[0].get("metadata") or {}), "callback": _safe_log_payload(payload)},
         "last_sync_at": datetime.now(timezone.utc).isoformat(),
     })
-    return {"ok": True, "connection": connection}
+    return {"ok": True, "connection": social_connection_get_by_composio(comp_id)}
 
 
 def list_accounts(brand_id: str, platform: Optional[str] = None) -> Dict[str, Any]:
@@ -252,6 +310,9 @@ async def disconnect_account(connection_id: str) -> Dict[str, Any]:
     connection = social_connection_get(connection_id)
     if not connection:
         raise SocialProviderError("Conta social não encontrada.", status_code=404)
+    # A lifecycle gate blocks new connections/publication, but must never trap an
+    # existing OAuth grant when a company becomes a prospect or is marked lost.
+    ensure_brand_exists(connection.get("brand_id"))
     provider = get_social_provider()
     try:
         if connection.get("provider") == "composio" and connection.get("composio_connection_id"):
@@ -259,6 +320,93 @@ async def disconnect_account(connection_id: str) -> Dict[str, Any]:
     finally:
         social_connection_revoke(connection_id)
     return {"deleted": True}
+
+
+async def test_account(connection_id: str, *, page_id: Optional[str] = None) -> Dict[str, Any]:
+    """Confere o OAuth e executa uma ferramenta oficial, sem efeito colateral."""
+    from ..db_agency import social_connection_get, social_connection_update
+
+    connection = social_connection_get(connection_id)
+    if not connection:
+        raise SocialProviderError("Conta social não encontrada.", status_code=404)
+    ensure_social_brand_eligible(connection.get("brand_id"), action="testar uma conexão social")
+
+    local_status = str(connection.get("status") or "").strip().lower()
+    if local_status == "revoked":
+        raise SocialProviderError("Conta social já foi revogada.", status_code=422)
+    remote: Dict[str, Any] = {}
+    remote_status = local_status
+    composio_id = str(connection.get("composio_connection_id") or "").strip()
+    provider = get_social_provider()
+    requester = getattr(provider, "_request", None)
+    if connection.get("provider") == "composio" and composio_id and callable(requester):
+        response = await requester("GET", f"/connected_accounts/{quote(composio_id, safe='')}")
+        remote = response
+        if not (remote.get("status") or remote.get("state") or remote.get("connection_status")):
+            for key in ("data", "item", "connected_account"):
+                if isinstance(response.get(key), dict):
+                    remote = response[key]
+                    break
+        remote_status = str(
+            remote.get("status")
+            or remote.get("state")
+            or remote.get("connection_status")
+            or local_status
+        ).strip().lower()
+
+    normalized = "connected" if remote_status in {"active", "connected", "success", "completed"} else remote_status
+    verified_at = datetime.now(timezone.utc).isoformat()
+    probe_result: Dict[str, Any] = {}
+    ok = normalized in {"connected", "active"}
+    platform = str(connection.get("platform") or "").strip().lower()
+    if ok and connection.get("provider") == "composio" and platform in {"instagram", "facebook"}:
+        probe = getattr(provider, "test_connection", None)
+        if inspect.iscoroutinefunction(probe):
+            current_meta = connection.get("metadata") if isinstance(connection.get("metadata"), dict) else {}
+            requested_page_id = str(page_id or current_meta.get("facebook_page_id") or "").strip() or None
+            probe_result = await probe(
+                platform=platform,
+                connection={**connection, "status": normalized},
+                selected_page_id=requested_page_id,
+            )
+
+    updates: Dict[str, Any] = {"last_sync_at": verified_at}
+    if normalized and normalized != local_status:
+        updates["status"] = normalized
+    if probe_result:
+        metadata = dict(connection.get("metadata") or {})
+        metadata["last_verified_at"] = verified_at
+        metadata["tool_test"] = _safe_log_payload({
+            key: value for key, value in probe_result.items()
+            if key not in {"managed_pages", "selected_page"}
+        })
+        if platform == "instagram":
+            account = probe_result.get("account") if isinstance(probe_result.get("account"), dict) else {}
+            if account.get("id"):
+                updates["external_account_id"] = str(account["id"])
+            if account.get("username") or account.get("name"):
+                updates["external_account_name"] = str(account.get("username") or account.get("name"))
+            metadata["instagram_account"] = account
+        elif platform == "facebook":
+            pages = probe_result.get("managed_pages") if isinstance(probe_result.get("managed_pages"), list) else []
+            metadata["managed_pages"] = pages
+            selected = probe_result.get("selected_page") if isinstance(probe_result.get("selected_page"), dict) else None
+            if selected:
+                metadata["facebook_page_id"] = str(selected.get("id") or "")
+                metadata["facebook_page_name"] = str(selected.get("name") or "")
+                updates["external_account_id"] = metadata["facebook_page_id"]
+                updates["external_account_name"] = metadata["facebook_page_name"]
+        updates["metadata"] = metadata
+    social_connection_update(connection_id, updates)
+    current = social_connection_get(connection_id) or connection
+    return {
+        "ok": ok,
+        "status": normalized or local_status or "unknown",
+        "connection": _safe_log_payload(current),
+        "remote": _safe_log_payload(remote),
+        "probe": _safe_log_payload(probe_result),
+        "selection_required": bool(probe_result.get("selection_required")),
+    }
 
 
 def _build_assets(asset_urls: List[str], content_type: str) -> List[Dict[str, Any]]:
@@ -279,8 +427,10 @@ def _build_assets(asset_urls: List[str], content_type: str) -> List[Dict[str, An
 async def create_post(body: Dict[str, Any], request: Any) -> Dict[str, Any]:
     from ..db_agency import social_connection_get, social_post_create, social_post_log_create
     brand_id = body.get("brandId") or body.get("brand_id")
-    ensure_brand_exists(brand_id)
+    ensure_social_brand_eligible(brand_id, action="publicar ou agendar conteúdo social")
     source_post = _approved_from_source(body.get("sourcePostId") or body.get("source_post_id"))
+    if source_post and str(source_post.get("company_id") or "") != str(brand_id or ""):
+        raise SocialProviderError("Post de origem pertence a outra empresa.", status_code=403)
     approved = is_approved_payload(body, source_post)
     scheduled_at = iso_or_none(body.get("scheduledAt") or body.get("scheduled_at"))
     asset_urls = body.get("assetUrls") or body.get("asset_urls") or []
@@ -383,6 +533,7 @@ async def publish_social_post(post_id: str, *, already_acquired: bool = False) -
     post = social_post_get(post_id)
     if not post:
         raise SocialProviderError("Post social não encontrado.", status_code=404)
+    ensure_social_brand_eligible(post.get("brand_id"), action="publicar conteúdo social")
     if post.get("status") not in {"approved", "scheduled", "publishing"}:
         raise SocialProviderError("Post precisa estar aprovado antes de publicar.", status_code=422)
     if not already_acquired and post.get("status") != "publishing":
@@ -445,12 +596,32 @@ async def publish_social_post(post_id: str, *, already_acquired: bool = False) -
 
 
 async def process_due_social_posts() -> Dict[str, Any]:
-    from ..db_agency import social_post_acquire_for_publish, social_post_due, social_post_log_create
+    from ..db_agency import (
+        social_post_acquire_for_publish, social_post_due, social_post_log_create,
+        social_post_update,
+    )
     now = datetime.now(timezone.utc).isoformat()
     due = social_post_due(now)
     triggered = 0
     for post in due:
         post_id = post["id"]
+        try:
+            ensure_social_brand_eligible(post.get("brand_id"), action="publicar conteúdo social")
+        except SocialProviderError as exc:
+            metadata = dict(post.get("metadata") or {})
+            metadata.update({
+                "failure_reason": "social_lifecycle_forbidden",
+                "failure_detail": exc.message,
+                "failed_at": now,
+            })
+            social_post_update(post_id, {"status": "failed", "metadata": metadata})
+            social_post_log_create(
+                post_id,
+                f"Publicação bloqueada pelo estágio da empresa: {exc.message}",
+                level="warning",
+                payload={"error": "social_lifecycle_forbidden"},
+            )
+            continue
         if not social_post_acquire_for_publish(post_id, from_statuses=["scheduled"]):
             continue
         social_post_log_create(post_id, "Worker social iniciou publicação agendada.")
@@ -472,6 +643,7 @@ async def post_metrics(post_id: str) -> Dict[str, Any]:
     post = social_post_get(post_id, include_logs=False)
     if not post:
         raise SocialProviderError("Post social não encontrado.", status_code=404)
+    ensure_social_brand_eligible(post.get("brand_id"), action="consultar métricas sociais")
     provider = get_social_provider()
     metrics = []
     for channel in post.get("channels") or []:

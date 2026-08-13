@@ -124,11 +124,23 @@ def _m4_agency(conn: sqlite3.Connection) -> None:
     ensure_index(conn, "idx_companies_owner", "companies", "owner_user_id")
 
 
+def _m5_company_lifecycle(conn: sqlite3.Connection) -> None:
+    """Prospecting lifecycle. Pre-existing rows keep managed-client semantics."""
+    ensure_column(
+        conn, "companies", "lifecycle_stage",
+        "lifecycle_stage TEXT NOT NULL DEFAULT 'managed' "
+        "CHECK (lifecycle_stage IN ('prospect', 'managed', 'internal', 'lost'))",
+    )
+    ensure_column(conn, "companies", "converted_at", "converted_at TEXT")
+    ensure_index(conn, "idx_companies_lifecycle", "companies", "lifecycle_stage")
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline", _m1_baseline),
     (2, "billing", _m2_billing),
     (3, "tenancy", _m3_tenancy),
     (4, "agency", _m4_agency),
+    (5, "company_lifecycle", _m5_company_lifecycle),
 ]
 
 

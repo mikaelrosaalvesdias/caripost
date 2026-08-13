@@ -73,7 +73,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.27.116")
+app = FastAPI(title="Adult Meta (internal)", version="1.27.117")
 
 
 @app.middleware("http")

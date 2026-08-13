@@ -20,6 +20,7 @@ from ..social.service import (
     create_post,
     disconnect_account,
     ensure_brand_exists,
+    ensure_social_brand_eligible,
     handle_connection_callback,
     list_accounts,
     normalize_platform,
@@ -28,6 +29,7 @@ from ..social.service import (
     process_due_social_posts,
     publish_social_post,
     get_social_provider,
+    test_account,
 )
 
 router = APIRouter(prefix="/api/social", tags=["social"])
@@ -78,7 +80,14 @@ def _public_base(request: Request) -> str:
     return base or "https://caripost.cariap.com.br"
 
 
-def _invite_page(title: str, detail: str, *, token: str = "", error: bool = False) -> HTMLResponse:
+def _invite_page(
+    title: str,
+    detail: str,
+    *,
+    token: str = "",
+    error: bool = False,
+    status_code: int = 200,
+) -> HTMLResponse:
     action = (
         f'<form method="post" action="/api/social/connect-invite/{escape(token)}/start">'
         '<button type="submit">Conectar Instagram</button></form>'
@@ -95,12 +104,61 @@ background:#ff7a18;color:#fff;font-weight:800;font-size:16px;cursor:pointer;widt
 small{{display:block;color:#8b8199;margin-top:18px}}</style></head><body><main>
 <b>CARIPOST</b><h1>{escape(title)}</h1><p>{escape(detail)}</p>{action}
 <small>A autorização acontece no ambiente oficial do Instagram/Meta via Composio. O Caripost não recebe sua senha.</small>
-</main></body></html>""")
+</main></body></html>""", status_code=status_code)
 
 
 def _auth(request: Request):
     from ..main_utils import require_api_key
     return require_api_key(request)
+
+
+def _ensure_brand_access(request: Request, brand_id: str) -> None:
+    """Aplica o mesmo escopo de empresa usado pelos demais routers."""
+    from ..main_utils import company_access_denied
+
+    denied = company_access_denied(request, brand_id)
+    if denied:
+        raise SocialProviderError(
+            "Acesso negado a esta empresa.",
+            status_code=403,
+            detail={"error": "company_scope"},
+        )
+
+
+def _connection_brand_id(connection_id: str) -> str:
+    from ..db_agency import social_connection_get
+
+    connection = social_connection_get(connection_id)
+    if not connection:
+        raise SocialProviderError("Conta social não encontrada.", status_code=404)
+    return str(connection.get("brand_id") or "")
+
+
+def _social_post_brand_id(post_id: str) -> str:
+    from ..db_agency import social_post_get
+
+    post = social_post_get(post_id, include_logs=False)
+    if not post:
+        raise SocialProviderError("Post social não encontrado.", status_code=404)
+    return str(post.get("brand_id") or "")
+
+
+def _competitor_brand_id(competitor_id: str) -> str:
+    from ..db_companies import competitor_list
+
+    competitor = next((item for item in competitor_list() if item.get("id") == competitor_id), None)
+    if not competitor:
+        raise SocialProviderError("Concorrente não encontrado.", status_code=404)
+    return str(competitor.get("company_id") or "")
+
+
+def _reference_brand_id(reference_id: str) -> str:
+    from ..db_companies import asset_get
+
+    reference = asset_get(reference_id)
+    if not reference:
+        raise SocialProviderError("Referência não encontrada.", status_code=404)
+    return str(reference.get("company_id") or "")
 
 
 def _error(exc: Exception) -> JSONResponse:
@@ -153,14 +211,11 @@ def social_config(request: Request):
 
 @router.get("/workspace")
 def workspace(request: Request, brandId: str):
-    from ..main_utils import company_access_denied as _cad
-    _d = _cad(request, brandId)
-    if _d:
-        return _d
     err = _auth(request)
     if err:
         return err
     try:
+        _ensure_brand_access(request, brandId)
         ensure_brand_exists(brandId)
         from ..db_agency import social_connection_list, social_post_list
         from ..db_companies import (
@@ -196,6 +251,7 @@ async def analyze_brand(brand_id: str, request: Request):
     except Exception:
         body = {}
     try:
+        _ensure_brand_access(request, brand_id)
         from ..db_companies import (
             asset_list,
             brand_kit_apply_auto,
@@ -323,6 +379,7 @@ async def generate_brand_drafts(brand_id: str, request: Request):
     except Exception:
         body = {}
     try:
+        _ensure_brand_access(request, brand_id)
         from ..db_companies import company_get, post_create, report_get_latest
         company = company_get(brand_id)
         if not company:
@@ -366,6 +423,8 @@ async def connect(request: Request):
         return err
     try:
         body = await request.json()
+        brand_id = str(body.get("brandId") or body.get("brand_id") or "").strip()
+        _ensure_brand_access(request, brand_id)
         return await connect_account(body, request)
     except Exception as exc:
         return _error(exc)
@@ -381,17 +440,10 @@ async def create_connect_invite(request: Request):
     except Exception:
         body = {}
     brand_id = str(body.get("brandId") or body.get("brand_id") or "").strip()
-    denied = None
     try:
-        from ..main_utils import company_access_denied
-        denied = company_access_denied(request, brand_id)
-    except Exception:
-        pass
-    if denied:
-        return denied
-    try:
+        _ensure_brand_access(request, brand_id)
         platform = normalize_platform(body.get("platform") or "instagram")
-        brand = ensure_brand_exists(brand_id)
+        brand = ensure_social_brand_eligible(brand_id, action="criar um convite de conexão social")
         expires_at = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         token = _make_invite_token(brand_id, platform, expires_at)
         return {
@@ -409,6 +461,10 @@ def connect_invite_page(token: str):
     payload = _read_invite_token(token)
     if not payload:
         return _invite_page("Link inválido ou expirado", "Peça um novo link à sua agência.", error=True)
+    try:
+        ensure_social_brand_eligible(payload["brand_id"], action="iniciar uma conexão social")
+    except SocialProviderError as exc:
+        return _invite_page("Conexão indisponível", exc.message, error=True, status_code=exc.status_code)
     from ..db_companies import company_get
     company = company_get(payload["brand_id"]) or {}
     return _invite_page(
@@ -435,7 +491,8 @@ async def start_connect_invite(token: str, request: Request):
         return RedirectResponse(redirect_url, status_code=303)
     except Exception as exc:
         message = getattr(exc, "message", str(exc)) or "Não foi possível iniciar a autorização."
-        return _invite_page("Não foi possível conectar", message, error=True)
+        status_code = exc.status_code if isinstance(exc, SocialProviderError) else 500
+        return _invite_page("Não foi possível conectar", message, error=True, status_code=status_code)
 
 
 @router.post("/callback")
@@ -460,8 +517,16 @@ async def callback_get(request: Request):
         if result.get("ignored"):
             detail = "Callback recebido. Se a conta ainda aparecer pendente, confira o webhook do Composio."
         return HTMLResponse(f"<html><body><h1>Caripost</h1><p>{detail}</p></body></html>")
+    except SocialProviderError as exc:
+        return HTMLResponse(
+            f"<html><body><h1>Caripost</h1><p>{escape(exc.message)}</p></body></html>",
+            status_code=exc.status_code,
+        )
     except Exception as exc:
-        return HTMLResponse(f"<html><body><h1>Caripost</h1><p>Erro: {str(exc)}</p></body></html>", status_code=500)
+        return HTMLResponse(
+            f"<html><body><h1>Caripost</h1><p>Erro: {escape(str(exc))}</p></body></html>",
+            status_code=500,
+        )
 
 
 @router.get("/accounts")
@@ -470,6 +535,7 @@ def accounts(request: Request, brandId: str, platform: Optional[str] = None):
     if err:
         return err
     try:
+        _ensure_brand_access(request, brandId)
         return list_accounts(brandId, platform)
     except Exception as exc:
         return _error(exc)
@@ -481,7 +547,25 @@ async def delete_account(connection_id: str, request: Request):
     if err:
         return err
     try:
+        _ensure_brand_access(request, _connection_brand_id(connection_id))
         return await disconnect_account(connection_id)
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.post("/accounts/{connection_id}/test")
+async def test_social_account(connection_id: str, request: Request):
+    err = _auth(request)
+    if err:
+        return err
+    try:
+        _ensure_brand_access(request, _connection_brand_id(connection_id))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        page_id = body.get("page_id") or body.get("pageId") if isinstance(body, dict) else None
+        return await test_account(connection_id, page_id=page_id)
     except Exception as exc:
         return _error(exc)
 
@@ -493,8 +577,21 @@ def list_social_posts(request: Request, brandId: Optional[str] = None, status: O
         return err
     try:
         if brandId:
+            _ensure_brand_access(request, brandId)
             ensure_brand_exists(brandId)
         from ..db_agency import social_post_list
+        if not brandId:
+            from ..main_utils import scoped_company_ids
+            scoped_ids = scoped_company_ids(request)
+            if scoped_ids is not None:
+                posts = []
+                for company_id in scoped_ids:
+                    posts.extend(social_post_list(brand_id=company_id, status=status, limit=limit))
+                posts.sort(
+                    key=lambda item: str((item or {}).get("updated_at") or (item or {}).get("created_at") or ""),
+                    reverse=True,
+                )
+                return {"posts": posts[:max(1, min(int(limit or 100), 500))]}
         return {"posts": social_post_list(brand_id=brandId, status=status, limit=limit)}
     except Exception as exc:
         return _error(exc)
@@ -507,6 +604,8 @@ async def create_social_post(request: Request):
         return err
     try:
         body = await request.json()
+        brand_id = str(body.get("brandId") or body.get("brand_id") or "").strip()
+        _ensure_brand_access(request, brand_id)
         return await create_post(body, request)
     except Exception as exc:
         return _error(exc)
@@ -518,6 +617,7 @@ async def publish(post_id: str, request: Request):
     if err:
         return err
     try:
+        _ensure_brand_access(request, _social_post_brand_id(post_id))
         return await publish_social_post(post_id)
     except Exception as exc:
         return _error(exc)
@@ -529,6 +629,7 @@ def status(post_id: str, request: Request):
     if err:
         return err
     try:
+        _ensure_brand_access(request, _social_post_brand_id(post_id))
         return post_status(post_id)
     except Exception as exc:
         return _error(exc)
@@ -540,6 +641,7 @@ async def metrics(post_id: str, request: Request):
     if err:
         return err
     try:
+        _ensure_brand_access(request, _social_post_brand_id(post_id))
         return await post_metrics(post_id)
     except Exception as exc:
         return _error(exc)
@@ -551,6 +653,13 @@ async def run_worker(request: Request):
     if err:
         return err
     try:
+        from ..main_utils import scoped_company_ids
+        if scoped_company_ids(request) is not None:
+            raise SocialProviderError(
+                "O worker social global só pode ser executado pela administração.",
+                status_code=403,
+                detail={"error": "company_scope"},
+            )
         return await process_due_social_posts()
     except Exception as exc:
         return _error(exc)
@@ -562,6 +671,7 @@ def list_competitors(request: Request, brandId: str):
     if err:
         return err
     try:
+        _ensure_brand_access(request, brandId)
         ensure_brand_exists(brandId)
         from ..db_companies import competitor_list
         return {"competitors": competitor_list(brandId)}
@@ -577,6 +687,7 @@ async def create_competitor(request: Request):
     try:
         body = await request.json()
         brand_id = body.get("brandId") or body.get("brand_id")
+        _ensure_brand_access(request, brand_id)
         ensure_brand_exists(brand_id)
         name = (body.get("name") or "").strip()
         if not name:
@@ -597,6 +708,7 @@ async def analyze_competitor(competitor_id: str, request: Request):
     if err:
         return err
     try:
+        _ensure_brand_access(request, _competitor_brand_id(competitor_id))
         from ..db_companies import competitor_list, competitor_update
         competitor = next((c for c in competitor_list() if c.get("id") == competitor_id), None)
         if not competitor:
@@ -631,11 +743,15 @@ def delete_competitor(competitor_id: str, request: Request):
     err = _auth(request)
     if err:
         return err
-    from ..db_companies import competitor_delete
-    ok = competitor_delete(competitor_id)
-    if not ok:
-        return JSONResponse({"detail": "Concorrente não encontrado"}, status_code=404)
-    return {"deleted": True}
+    try:
+        _ensure_brand_access(request, _competitor_brand_id(competitor_id))
+        from ..db_companies import competitor_delete
+        ok = competitor_delete(competitor_id)
+        if not ok:
+            return JSONResponse({"detail": "Concorrente não encontrado"}, status_code=404)
+        return {"deleted": True}
+    except Exception as exc:
+        return _error(exc)
 
 
 @router.get("/references")
@@ -644,6 +760,7 @@ def list_references(request: Request, brandId: str):
     if err:
         return err
     try:
+        _ensure_brand_access(request, brandId)
         ensure_brand_exists(brandId)
         from ..db_companies import asset_list
         return {"references": asset_list(brandId)}
@@ -659,6 +776,7 @@ async def create_reference(request: Request):
     try:
         body = await request.json()
         brand_id = body.get("brandId") or body.get("brand_id")
+        _ensure_brand_access(request, brand_id)
         ensure_brand_exists(brand_id)
         url = (body.get("url") or "").strip()
         if not url:
@@ -686,8 +804,12 @@ def delete_reference(reference_id: str, request: Request):
     err = _auth(request)
     if err:
         return err
-    from ..db_companies import asset_delete
-    ok = asset_delete(reference_id)
-    if not ok:
-        return JSONResponse({"detail": "Referência não encontrada"}, status_code=404)
-    return {"deleted": True}
+    try:
+        _ensure_brand_access(request, _reference_brand_id(reference_id))
+        from ..db_companies import asset_delete
+        ok = asset_delete(reference_id)
+        if not ok:
+            return JSONResponse({"detail": "Referência não encontrada"}, status_code=404)
+        return {"deleted": True}
+    except Exception as exc:
+        return _error(exc)

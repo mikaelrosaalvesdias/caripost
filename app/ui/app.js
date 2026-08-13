@@ -534,6 +534,16 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.117', date: '2026-08-13',
+    items: [
+      { type: 'feat', text: 'Clientes agora distinguem prospectos, gerenciados, internos e perdidos sem duplicar cadastro, histórico ou identidade.' },
+      { type: 'feat', text: 'Propostas usam a marca do prospecto com ofertas escolhidas por ID no catálogo da CARIAP, inclusive em artes, carrosséis e vídeos.' },
+      { type: 'feat', text: 'Prospectos recebem link de aprovação e download; conexão social e publicação ficam exclusivas para marcas gerenciadas ou internas.' },
+      { type: 'fix', text: 'Pesquisa de Instagram/Facebook deixou de depender de cookie e scraping: usa ferramentas oficiais, site da empresa e revisão explícita dos assets.' },
+      { type: 'fix', text: 'Escopo de empresa, URLs públicas, uploads e callbacks sociais ganharam validações contra mistura de tenants e acesso indevido.' },
+    ],
+  },
+  {
     version: 'v1.27.116', date: '2026-08-07',
     items: [
       { type: 'fix', text: 'Produtos importados não repetem a cidade no nome quando a fonte já informa a mesma localidade com ou sem UF.' },

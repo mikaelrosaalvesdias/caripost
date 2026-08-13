@@ -2,6 +2,16 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.117 - 2026-08-13
+
+- **feat(clientes): prospeccao e operacao social separadas.** Uma empresa nasce como prospecto, pode virar gerenciada no mesmo ID e preserva marca, produtos, artes, aprovacoes e historico; empresas internas continuam com conexoes e publicacao.
+- **feat(conteudo): marca-alvo e oferta agora sao escolhas independentes.** A arte pode usar a identidade da Rio Cable e uma oferta selecionada por ID no catalogo da CARIAP, sem copiar nem misturar os cadastros; o vinculo chega a post, story, carrossel e video.
+- **feat(prospectos): entrega acionavel.** O fluxo sem rede social exibe link de aprovacao, abertura e download das pecas; conectar ou publicar fica bloqueado ate a empresa ser gerenciada/interna.
+- **fix(importacao): identidade social sem cookie ou scraping anonimo.** Instagram/Facebook usam caminhos oficiais quando elegiveis, com conexao de pesquisa da propria CARIAP para alvos publicos; site oficial e upload revisado permanecem como fallback, e candidatos nunca viram logo/referencia principal sem aprovacao.
+- **fix(security): isolamento e proveniencia.** Rotas de empresa/social/oferta validam tenant e ownership, arquivos ficam contidos em uploads, URLs de enriquecimento bloqueiam redes privadas e redirects inseguros, e callbacks/conexoes sao vinculados a empresa correta.
+- Testes: lifecycle e migracao, catalogo externo e overrides de IA, Meta/Composio, curadoria de referencias, guardas sociais, templates de video e caminhos de upload; validacao Python/JSX/JS e diff-check.
+- Versao: main.py/UI/OS 1.27.117, cache bust `app.js?v=127117` e OS `v=127117`.
+
 ## v1.27.116 - 2026-08-07
 
 - **fix(clientes): localidade sem repeticao nos produtos importados.** Nomes que ja trazem a cidade deixam de receber novamente a mesma localidade apenas porque a fonte acrescentou a UF, mantendo a deduplicacao entre importacoes.

@@ -2,6 +2,8 @@ import os
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from unittest.mock import patch
 
 
 _temp_dir = tempfile.TemporaryDirectory()
@@ -22,6 +24,63 @@ class BrandKitPersistenceTests(unittest.TestCase):
 
     def create_company(self, name):
         return companies_db.company_create({"name": name, "socials": {}})
+
+    def test_company_lifecycle_defaults_to_prospect_and_is_exposed_everywhere(self):
+        company = self.create_company("Novo prospect")
+
+        self.assertEqual(company["lifecycle_stage"], "prospect")
+        self.assertIsNone(company["converted_at"])
+        listed = next(item for item in companies_db.company_list() if item["id"] == company["id"])
+        self.assertEqual(listed["lifecycle_stage"], "prospect")
+        self.assertIsNone(listed["converted_at"])
+
+    def test_company_lifecycle_validation_and_managed_conversion_are_idempotent(self):
+        company = companies_db.company_create({
+            "name": "Prospect preservado",
+            "socials": {"instagram": "prospect-preservado"},
+            "notes": "Histórico comercial",
+        })
+        with self.assertRaises(ValueError):
+            companies_db.company_update(company["id"], {"lifecycle_stage": "cliente"})
+        self.assertEqual(companies_db.company_get(company["id"])["lifecycle_stage"], "prospect")
+
+        converted = companies_db.company_convert_to_managed(company["id"])
+        repeated = companies_db.company_convert_to_managed(company["id"])
+
+        self.assertEqual(converted["id"], company["id"])
+        self.assertEqual(converted["name"], company["name"])
+        self.assertEqual(converted["socials"], company["socials"])
+        self.assertEqual(converted["notes"], company["notes"])
+        self.assertEqual(converted["lifecycle_stage"], "managed")
+        self.assertIsNotNone(converted["converted_at"])
+        self.assertEqual(repeated["converted_at"], converted["converted_at"])
+        self.assertEqual(repeated["updated_at"], converted["updated_at"])
+
+    def test_legacy_company_rows_are_migrated_as_managed(self):
+        with tempfile.TemporaryDirectory() as legacy_dir:
+            legacy_path = Path(legacy_dir) / "legacy.db"
+            with patch.object(db, "DB_PATH", legacy_path):
+                with db.get_conn() as conn:
+                    conn.execute("""
+                        CREATE TABLE companies (
+                            id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+                            segment TEXT, city TEXT, state TEXT, website TEXT, phone TEXT, email TEXT,
+                            socials TEXT NOT NULL DEFAULT '{}', notes TEXT,
+                            active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                        )
+                    """)
+                    conn.execute(
+                        "INSERT INTO companies (id, name, slug, socials, created_at, updated_at) "
+                        "VALUES ('legacy-1', 'Cliente legado', 'cliente-legado', '{}', 'old', 'old')"
+                    )
+                companies_db.init_companies_db()
+
+                legacy = companies_db.company_get("legacy-1")
+                new_company = companies_db.company_create({"name": "Prospect pós-migração"})
+
+                self.assertEqual(legacy["lifecycle_stage"], "managed")
+                self.assertIsNone(legacy["converted_at"])
+                self.assertEqual(new_company["lifecycle_stage"], "prospect")
 
     def test_atomic_brand_upsert_and_namespaced_extras(self):
         company = self.create_company("Persistência de marca")

@@ -8,12 +8,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..db_companies import asset_list_logos, company_get
+from ..main_utils import company_access_denied as __cad__
 from ..services.template_video import (
     UPLOAD_DIR,
     UPLOAD_URL_PREFIX,
     list_template_video_templates,
     render_template_video,
 )
+from .posts import _offer_context, _offer_products, _resolve_offer_refs
 
 
 router = APIRouter(prefix="/api/template-video", tags=["template-video"])
@@ -26,6 +28,9 @@ def _auth(request: Request):
 
 def _first_logo_path(company_id: str) -> Optional[str]:
     for asset in asset_list_logos(company_id) or []:
+        review_status = str((asset.get("meta") or {}).get("review_status") or "").strip().lower()
+        if review_status in {"candidate_needs_review", "rejected"}:
+            continue
         url = asset.get("url") or ""
         if not url.startswith(UPLOAD_URL_PREFIX) or url.lower().endswith(".svg"):
             continue
@@ -34,6 +39,51 @@ def _first_logo_path(company_id: str) -> Optional[str]:
         if (path.startswith(root + os.sep) or path == root) and os.path.exists(path):
             return path
     return None
+
+
+def _selected_offer_label(products) -> str:
+    """Rótulo factual curto para o template quando o usuário não escreveu a oferta."""
+    names = []
+    for product in products or []:
+        name = str(product.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return " · ".join(names)[:180]
+
+
+def _template_offer_scope(request: Request, body: Dict[str, Any], company_id: str):
+    """Reusa a validação por IDs/tenant do fluxo principal de conteúdo."""
+    explicit, resolved, error = _resolve_offer_refs(request, body, company_id)
+    if error:
+        return explicit, [], error
+    return explicit, _offer_products(resolved), None
+
+
+def _template_body_with_offers(body: Dict[str, Any], explicit: bool, products) -> Dict[str, Any]:
+    """Preenche somente um rótulo comprovável; identidade continua vindo da marca-alvo."""
+    scoped = dict(body)
+    if not explicit:
+        return scoped
+    scoped["_offer_refs_explicit"] = True
+    scoped["_selected_offer_label"] = _selected_offer_label(products)
+    if not str(scoped.get("offer") or "").strip():
+        scoped["offer"] = scoped["_selected_offer_label"]
+    return scoped
+
+
+def _public_offer_refs(products):
+    return [dict(product["_offer_ref"]) for product in (products or []) if product.get("_offer_ref")]
+
+
+def _pin_target_brand_fields(suggestion: Dict[str, Any], company: Dict[str, Any], explicit: bool) -> None:
+    """O catálogo informa a oferta; nunca vira a assinatura visual do prospect."""
+    if not explicit:
+        return
+    target_name = str(company.get("name") or "MARCA").strip() or "MARCA"
+    if "eyebrow" in suggestion:
+        suggestion["eyebrow"] = target_name
+    if "right_label" in suggestion:
+        suggestion["right_label"] = target_name
 
 
 @router.get("/templates")
@@ -60,13 +110,16 @@ def _fallback_suggestion(company: Dict[str, Any], body: Dict[str, Any]) -> Dict[
             "cta": cta,
             "duration_sec": int(body.get("duration_sec") or 10),
         }
+    fallback_offer = body.get("offer")
+    if not fallback_offer and "_offer_refs_explicit" not in body:
+        fallback_offer = "condicao especial"
     return {
         "template_id": template_id,
         "eyebrow": company.get("name") or "Caripost",
         "title": subject[:80],
         "subtitle": "Uma mensagem direta, visual e fiel a marca.",
         "cta": cta,
-        "offer": body.get("offer") or "condicao especial",
+        "offer": fallback_offer or "",
         "quote": "Marca consistente, mensagem clara e criativo rapido de aprovar.",
         "stat": "token zero no render",
         "benefits": ["identidade preservada", "ritmo de video", "CTA claro"],
@@ -84,6 +137,9 @@ async def suggest(request: Request):
     company_id = (body.get("company_id") or "").strip()
     if not company_id:
         return JSONResponse({"detail": "company_id obrigatorio"}, status_code=422)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa nao encontrada"}, status_code=404)
@@ -91,19 +147,29 @@ async def suggest(request: Request):
     if not subject:
         return JSONResponse({"detail": "subject/theme obrigatorio"}, status_code=422)
 
-    fallback = _fallback_suggestion(company, body)
+    offers_explicit, offer_products, offer_error = _template_offer_scope(request, body, company_id)
+    if offer_error:
+        return offer_error
+    scoped_body = _template_body_with_offers(body, offers_explicit, offer_products)
+    fallback = _fallback_suggestion(company, scoped_body)
+    public_refs = _public_offer_refs(offer_products)
     try:
         from ..services.ai import cheap_text_config, complete_ai, extract_json, get_ai_config
 
         config = cheap_text_config(get_ai_config())
         if not config:
-            return {"ok": True, "suggestion": fallback, "source": "fallback"}
+            response = {"ok": True, "suggestion": fallback, "source": "fallback"}
+            if offers_explicit:
+                response["offer_refs"] = public_refs
+            return response
         brand = company.get("brand_kit") or {}
         colors = brand.get("colors") or {}
         system = (
             "Voce e um diretor criativo de social video. Responda SOMENTE JSON valido. "
             "Crie copy curta para video vertical de marca. Nao invente preco, data, promessa legal ou numero factual. "
-            "Preserve a identidade, mas gere uma ideia visual forte, brasileira, moderna e facil de aprovar."
+            "Preserve a identidade da empresa-alvo, mas gere uma ideia visual forte, brasileira, moderna e facil de aprovar. "
+            "Quando houver ofertas selecionadas, use somente os fatos fornecidos; a empresa dona do catalogo nao substitui "
+            "a identidade visual da empresa-alvo."
         )
         user = {
             "empresa": company.get("name"),
@@ -134,14 +200,23 @@ async def suggest(request: Request):
                 "duration_sec": 8,
             },
         }
+        if offers_explicit:
+            user["ofertas_selecionadas"] = _offer_context(offer_products)
         raw = complete_ai(config, system, json.dumps(user, ensure_ascii=False), 1000)
         data = extract_json(raw) or {}
         suggestion = {**fallback, **{k: v for k, v in data.items() if v not in (None, "", [])}}
         if "template_id" not in suggestion:
             suggestion["template_id"] = fallback["template_id"]
-        return {"ok": True, "suggestion": suggestion, "source": "ai_text"}
+        _pin_target_brand_fields(suggestion, company, offers_explicit)
+        response = {"ok": True, "suggestion": suggestion, "source": "ai_text"}
+        if offers_explicit:
+            response["offer_refs"] = public_refs
+        return response
     except Exception as exc:
-        return {"ok": True, "suggestion": fallback, "source": "fallback", "warning": str(exc)[:180]}
+        response = {"ok": True, "suggestion": fallback, "source": "fallback", "warning": str(exc)[:180]}
+        if offers_explicit:
+            response["offer_refs"] = public_refs
+        return response
 
 
 @router.post("/render")
@@ -153,16 +228,24 @@ async def render(request: Request):
     company_id = (body.get("company_id") or "").strip()
     if not company_id:
         return JSONResponse({"detail": "company_id obrigatorio"}, status_code=422)
+    denied = __cad__(request, company_id)
+    if denied:
+        return denied
     company = company_get(company_id)
     if not company:
         return JSONResponse({"detail": "Empresa nao encontrada"}, status_code=404)
     if not (body.get("title") or body.get("headline")):
         return JSONResponse({"detail": "title/headline obrigatorio"}, status_code=422)
+    offers_explicit, offer_products, offer_error = _template_offer_scope(request, body, company_id)
+    if offer_error:
+        return offer_error
+    render_body = _template_body_with_offers(body, offers_explicit, offer_products)
+    _pin_target_brand_fields(render_body, company, offers_explicit)
     try:
-        result = render_template_video(company=company, payload=body, logo_path=_first_logo_path(company_id))
+        result = render_template_video(company=company, payload=render_body, logo_path=_first_logo_path(company_id))
     except Exception as exc:
         return JSONResponse({"detail": "Falha ao renderizar template: " + str(exc)[:300]}, status_code=502)
-    return {
+    response = {
         "ok": True,
         "job_id": result.job_id,
         "artifact_type": result.artifact_type,
@@ -178,3 +261,6 @@ async def render(request: Request):
         "token_cost": 0,
         "engine": "template_video_poc",
     }
+    if offers_explicit:
+        response["offer_refs"] = _public_offer_refs(offer_products)
+    return response

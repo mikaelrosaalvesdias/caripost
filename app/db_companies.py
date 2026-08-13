@@ -20,6 +20,18 @@ from typing import Any, Dict, List, Optional
 from .db import get_conn, _sqlite_retry
 
 
+COMPANY_LIFECYCLE_STAGES = frozenset({"prospect", "managed", "internal", "lost"})
+
+
+def company_lifecycle_stage_validate(value: Any) -> str:
+    """Return the canonical lifecycle stage or reject unsupported values."""
+    stage = str(value or "").strip().lower()
+    if stage not in COMPANY_LIFECYCLE_STAGES:
+        allowed = "|".join(sorted(COMPANY_LIFECYCLE_STAGES))
+        raise ValueError(f"lifecycle_stage deve ser um de: {allowed}")
+    return stage
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Schema init
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,12 +60,24 @@ def init_companies_db() -> None:
                 socials     TEXT NOT NULL DEFAULT '{}',
                 notes       TEXT,
                 active      INTEGER NOT NULL DEFAULT 1,
+                lifecycle_stage TEXT NOT NULL DEFAULT 'prospect'
+                    CHECK (lifecycle_stage IN ('prospect', 'managed', 'internal', 'lost')),
+                converted_at TEXT,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             )
         """)
+        # A table created above starts in prospect mode. When upgrading an old
+        # database, every pre-existing company was already a managed client.
+        _ensure_column(
+            "companies", "lifecycle_stage",
+            "lifecycle_stage TEXT NOT NULL DEFAULT 'managed' "
+            "CHECK (lifecycle_stage IN ('prospect', 'managed', 'internal', 'lost'))",
+        )
+        _ensure_column("companies", "converted_at", "converted_at TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_active ON companies(active)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_slug ON companies(slug)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_lifecycle ON companies(lifecycle_stage)")
 
         # ── Brand kits ─────────────────────────────────────────────────────
         conn.execute("""
@@ -450,6 +474,7 @@ def company_get(company_id: str) -> Optional[Dict[str, Any]]:
 def company_create(data: Dict[str, Any]) -> Dict[str, Any]:
     cid = _uuid()
     now = _now()
+    lifecycle_stage = company_lifecycle_stage_validate(data.get("lifecycle_stage", "prospect"))
     slug = _slugify(data.get("name", "empresa"))
     # ensure unique slug
     with get_conn() as conn:
@@ -472,13 +497,20 @@ def company_create(data: Dict[str, Any]) -> Dict[str, Any]:
         "socials": socials,
         "notes": data.get("notes"),
         "active": 1,
+        "lifecycle_stage": lifecycle_stage,
+        "converted_at": now if lifecycle_stage == "managed" else None,
         "created_at": now,
         "updated_at": now,
     }
     with get_conn() as conn:
         conn.execute("""
-            INSERT INTO companies (id, name, slug, segment, city, state, website, phone, email, socials, notes, active, created_at, updated_at)
-            VALUES (:id, :name, :slug, :segment, :city, :state, :website, :phone, :email, :socials, :notes, :active, :created_at, :updated_at)
+            INSERT INTO companies (
+                id, name, slug, segment, city, state, website, phone, email,
+                socials, notes, active, lifecycle_stage, converted_at, created_at, updated_at
+            ) VALUES (
+                :id, :name, :slug, :segment, :city, :state, :website, :phone, :email,
+                :socials, :notes, :active, :lifecycle_stage, :converted_at, :created_at, :updated_at
+            )
         """, conn_data)
     # create inline competitors
     for comp in data.get("competitors") or []:
@@ -502,6 +534,13 @@ def company_update(company_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
     if "active" in data:
         fields.append("active = ?")
         values.append(1 if data["active"] else 0)
+    if "lifecycle_stage" in data:
+        lifecycle_stage = company_lifecycle_stage_validate(data["lifecycle_stage"])
+        fields.append("lifecycle_stage = ?")
+        values.append(lifecycle_stage)
+        if lifecycle_stage == "managed":
+            fields.append("converted_at = COALESCE(converted_at, ?)")
+            values.append(now)
     if not fields:
         return company_get(company_id)
     fields.append("updated_at = ?")
@@ -509,6 +548,20 @@ def company_update(company_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
     values.append(company_id)
     with get_conn() as conn:
         conn.execute(f"UPDATE companies SET {', '.join(fields)} WHERE id = ?", values)
+    return company_get(company_id)
+
+
+@_sqlite_retry
+def company_convert_to_managed(company_id: str) -> Optional[Dict[str, Any]]:
+    """Promote a company without changing its identity or repeating timestamps."""
+    now = _now()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE companies SET lifecycle_stage = 'managed', "
+            "converted_at = COALESCE(converted_at, ?), updated_at = ? "
+            "WHERE id = ? AND lifecycle_stage <> 'managed'",
+            (now, now, company_id),
+        )
     return company_get(company_id)
 
 
