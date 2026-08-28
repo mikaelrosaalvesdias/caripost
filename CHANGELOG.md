@@ -2,6 +2,22 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.121 - 2026-08-28
+
+- **feat(clientes): cadastro completo de subprodutos e planos.** Planos/subprodutos passam a ter todos os campos e recursos de produtos: objetivo comercial/posicionamento, lista de benefícios/funções, categoria, link oficial, paleta de cores, redes sociais e base de conhecimento (KB).
+- **feat(clientes): upload de documentos e OCR em planos.** Upload de PDF, DOCX, TXT, MD, CSV e imagens para a base de conhecimento de subprodutos/planos com auto-preenchimento por IA de campos em branco.
+- **feat(clientes): aba Produtos & Planos na interface.** Gerenciamento visual completo no painel do cliente, permitindo criar, editar e excluir grupos de produtos, produtos e subprodutos/planos, além de copiar produtos de outros clientes.
+- Validacao: compilacao Python, verificacao sintatica JS, diff-check e scan de segredos.
+- Versao: main.py/UI/OS 1.27.121, cache bust `app.js?v=127121`.
+
+## v1.27.120 - 2026-08-28
+
+- **feat(clientes): catalogo em grupo, produto e plano.** Ofertas como Zapping, e-Saude e Aya podem compartilhar a identidade do produto sem duplicacao, mantendo Full, Lite, Pronto Atendimento, Clinica e demais variacoes como planos proprios.
+- **feat(clientes): vinculo comercial exato e persistente.** O cadastro do cliente aponta para a empresa dona do catalogo, produto, plano e adicionais contratados; Telecine, Premiere e equivalentes continuam separados como opcionais.
+- **fix(dados): compatibilidade e protecao de referencias.** Produtos legados permanecem em "Sem grupo", a migracao e aditiva/idempotente e itens utilizados por clientes nao podem ser excluidos antes da remocao do vinculo.
+- Validacao: testes de banco/migracao/tenancy, compilacao Python, verificacao JS/JSX, fluxo real do catalogo no navegador e `git diff --check`.
+- Versao: main.py/UI/OS 1.27.120, cache bust `app.js?v=127120` e OS `v=127120`.
+
 ## v1.27.117 - 2026-08-13
 
 - **feat(clientes): prospeccao e operacao social separadas.** Uma empresa nasce como prospecto, pode virar gerenciada no mesmo ID e preserva marca, produtos, artes, aprovacoes e historico; empresas internas continuam com conexoes e publicacao.

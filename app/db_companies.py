@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 import unicodedata
 import uuid
@@ -153,11 +154,30 @@ def init_companies_db() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_company_type ON research_reports(company_id, type)")
 
-        # ── Products ────────────────────────────────────────────────────────
+        # ── Product catalog (group → product → plan) ────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_groups (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                description TEXT,
+                active      INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_product_groups_company ON product_groups(company_id)")
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_product_groups_company_name
+            ON product_groups(company_id, name COLLATE NOCASE)
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id          TEXT PRIMARY KEY,
                 company_id  TEXT NOT NULL,
+                group_id    TEXT,
                 name        TEXT NOT NULL,
                 slug        TEXT,
                 description TEXT,
@@ -168,10 +188,76 @@ def init_companies_db() -> None:
                 active      INTEGER NOT NULL DEFAULT 1,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL,
-                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                FOREIGN KEY (group_id) REFERENCES product_groups(id) ON DELETE RESTRICT
             )
         """)
+        # Older installations have products but not the catalog hierarchy.
+        _ensure_column(
+            "products", "group_id",
+            "group_id TEXT REFERENCES product_groups(id) ON DELETE RESTRICT",
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_products_company ON products(company_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_products_group ON products(group_id)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_plans (
+                id          TEXT PRIMARY KEY,
+                company_id  TEXT NOT NULL,
+                product_id  TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                description TEXT,
+                features    TEXT NOT NULL DEFAULT '[]',
+                active      INTEGER NOT NULL DEFAULT 1,
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            )
+        """)
+        _ensure_column("product_plans", "features", "features TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column("product_plans", "sort_order", "sort_order INTEGER NOT NULL DEFAULT 0")
+        _ensure_column("product_plans", "category", "category TEXT")
+        _ensure_column("product_plans", "website", "website TEXT")
+        _ensure_column("product_plans", "objective", "objective TEXT")
+        _ensure_column("product_plans", "functions", "functions TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column("product_plans", "knowledge", "knowledge TEXT")
+        _ensure_column("product_plans", "web_brief", "web_brief TEXT")
+        _ensure_column("product_plans", "web_brief_at", "web_brief_at TEXT")
+        _ensure_column("product_plans", "colors", "colors TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column("product_plans", "socials", "socials TEXT NOT NULL DEFAULT '{}'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_product_plans_company ON product_plans(company_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_product_plans_product ON product_plans(product_id)")
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_product_plans_product_name
+            ON product_plans(product_id, name COLLATE NOCASE)
+        """)
+
+        # A client can consume a product maintained in another company's
+        # catalog without receiving an independent copy of that product.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS company_catalog_links (
+                id                TEXT PRIMARY KEY,
+                company_id        TEXT NOT NULL,
+                source_company_id TEXT NOT NULL,
+                product_id        TEXT NOT NULL,
+                plan_id           TEXT,
+                solution_ids      TEXT NOT NULL DEFAULT '[]',
+                notes             TEXT,
+                active            INTEGER NOT NULL DEFAULT 1,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_company_id) REFERENCES companies(id) ON DELETE RESTRICT,
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT,
+                FOREIGN KEY (plan_id) REFERENCES product_plans(id) ON DELETE RESTRICT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_links_company ON company_catalog_links(company_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_links_source ON company_catalog_links(source_company_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_links_product ON company_catalog_links(product_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_links_plan ON company_catalog_links(plan_id)")
 
         # ── Company assets (logos, references) ─────────────────────────────
         conn.execute("""
@@ -568,6 +654,11 @@ def company_convert_to_managed(company_id: str) -> Optional[Dict[str, Any]]:
 @_sqlite_retry
 def company_delete(company_id: str) -> bool:
     with get_conn() as conn:
+        if conn.execute(
+            "SELECT 1 FROM company_catalog_links WHERE source_company_id = ? LIMIT 1",
+            (company_id,),
+        ).fetchone():
+            raise ValueError("Catálogo vinculado a clientes. Remova os vínculos antes de excluir.")
         cur = conn.execute("DELETE FROM companies WHERE id = ?", (company_id,))
         return cur.rowcount > 0
 
@@ -1223,8 +1314,116 @@ def asset_list_photos(company_id: str, product_id: str) -> List[Dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Products CRUD
+# Product groups + products CRUD
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _serialize_product_group(row: Any) -> Dict[str, Any]:
+    item = dict(row)
+    item["active"] = bool(item.get("active", 1))
+    return item
+
+
+def _catalog_group_id_for_company(conn: sqlite3.Connection, company_id: str, value: Any) -> Optional[str]:
+    group_id = str(value or "").strip()
+    if not group_id:
+        return None
+    row = conn.execute(
+        "SELECT company_id FROM product_groups WHERE id = ?", (group_id,),
+    ).fetchone()
+    if not row or str(row["company_id"]) != str(company_id):
+        raise ValueError("Grupo de produtos não pertence a esta empresa.")
+    return group_id
+
+
+@_sqlite_retry
+def product_group_list(company_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM product_groups WHERE company_id = ? "
+            "ORDER BY name COLLATE NOCASE, created_at",
+            (company_id,),
+        ).fetchall()
+        return [_serialize_product_group(row) for row in rows]
+
+
+@_sqlite_retry
+def product_group_get(group_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM product_groups WHERE id = ?", (group_id,)).fetchone()
+        return _serialize_product_group(row) if row else None
+
+
+@_sqlite_retry
+def product_group_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("name é obrigatório")
+    now = _now()
+    group_id = _uuid()
+    try:
+        with get_conn() as conn:
+            if not conn.execute("SELECT 1 FROM companies WHERE id = ?", (company_id,)).fetchone():
+                raise ValueError("Empresa não encontrada.")
+            conn.execute(
+                "INSERT INTO product_groups "
+                "(id, company_id, name, description, active, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    group_id, company_id, name, data.get("description"),
+                    1 if data.get("active", True) else 0, now, now,
+                ),
+            )
+    except sqlite3.IntegrityError as exc:
+        if "unique" in str(exc).lower():
+            raise ValueError("Já existe um grupo com este nome nesta empresa.") from exc
+        raise
+    return product_group_get(group_id)
+
+
+@_sqlite_retry
+def product_group_update(group_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields: List[str] = []
+    values: List[Any] = []
+    if "name" in data:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise ValueError("name é obrigatório")
+        fields.append("name = ?")
+        values.append(name)
+    if "description" in data:
+        fields.append("description = ?")
+        values.append(data.get("description"))
+    if "active" in data:
+        fields.append("active = ?")
+        values.append(1 if data.get("active") else 0)
+    if not fields:
+        return product_group_get(group_id)
+    fields.append("updated_at = ?")
+    values.extend((_now(), group_id))
+    try:
+        with get_conn() as conn:
+            cur = conn.execute(
+                f"UPDATE product_groups SET {', '.join(fields)} WHERE id = ?", values,
+            )
+            if cur.rowcount == 0:
+                return None
+    except sqlite3.IntegrityError as exc:
+        if "unique" in str(exc).lower():
+            raise ValueError("Já existe um grupo com este nome nesta empresa.") from exc
+        raise
+    return product_group_get(group_id)
+
+
+@_sqlite_retry
+def product_group_delete(group_id: str) -> bool:
+    with get_conn() as conn:
+        if conn.execute(
+            "SELECT 1 FROM products WHERE group_id = ? LIMIT 1", (group_id,),
+        ).fetchone():
+            return False
+        cur = conn.execute("DELETE FROM product_groups WHERE id = ?", (group_id,))
+        return cur.rowcount > 0
+
 
 @_sqlite_retry
 def product_list(company_id: str) -> List[Dict[str, Any]]:
@@ -1260,7 +1459,9 @@ def product_copy(source_product_id: str, target_company_id: str) -> Optional[Dic
     """Duplica um produto de OUTRA empresa pra target_company_id: novo id + slug próprio, mantendo
     nome/descrição/categoria/objetivo/funções/base de conhecimento/cores/web_brief. Cada cópia é
     INDEPENDENTE (editar numa não afeta a origem). NÃO copia logos/fotos (assets do cliente de origem)
-    nem soluções — o núcleo que alimenta o briefing (texto/KB) é o que viaja. Retorna o produto ou None."""
+    nem soluções — o núcleo que alimenta o briefing (texto/KB) é o que viaja. O grupo é resolvido
+    por nome (ou criado) no destino para nunca manter uma referência entre empresas. Retorna o
+    produto ou None."""
     with get_conn() as conn:
         src = conn.execute("SELECT * FROM products WHERE id = ?", (source_product_id,)).fetchone()
     if not src:
@@ -1271,18 +1472,50 @@ def product_copy(source_product_id: str, target_company_id: str) -> Optional[Dic
     base = _slugify(src.get("name") or "produto")
     slug = base
     with get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM companies WHERE id = ?", (target_company_id,)).fetchone():
+            return None
+        target_group_id = None
+        if src.get("group_id"):
+            source_group = conn.execute(
+                "SELECT * FROM product_groups WHERE id = ? AND company_id = ?",
+                (src.get("group_id"), src.get("company_id")),
+            ).fetchone()
+            if source_group:
+                target_group = conn.execute(
+                    "SELECT id FROM product_groups "
+                    "WHERE company_id = ? AND name = ? COLLATE NOCASE",
+                    (target_company_id, source_group["name"]),
+                ).fetchone()
+                if not target_group:
+                    candidate_id = _uuid()
+                    conn.execute(
+                        "INSERT OR IGNORE INTO product_groups "
+                        "(id, company_id, name, description, active, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            candidate_id, target_company_id, source_group["name"],
+                            source_group["description"], source_group["active"], now, now,
+                        ),
+                    )
+                    target_group = conn.execute(
+                        "SELECT id FROM product_groups "
+                        "WHERE company_id = ? AND name = ? COLLATE NOCASE",
+                        (target_company_id, source_group["name"]),
+                    ).fetchone()
+                target_group_id = str(target_group["id"]) if target_group else None
         n = 1
         while conn.execute("SELECT 1 FROM products WHERE company_id = ? AND slug = ?", (target_company_id, slug)).fetchone():
             slug = f"{base}-{n}"
             n += 1
         conn.execute("""
-            INSERT INTO products (id, company_id, name, slug, description, category, website, socials, colors,
-                                  active, created_at, updated_at, objective, functions, knowledge, web_brief, web_brief_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-        """, (pid, target_company_id, src.get("name"), slug, src.get("description"), src.get("category"),
-              src.get("website"), src.get("socials") or "{}", src.get("colors") or "{}", now, now,
-              src.get("objective"), src.get("functions"), src.get("knowledge"),
-              src.get("web_brief"), src.get("web_brief_at")))
+            INSERT INTO products (id, company_id, group_id, name, slug, description, category, website,
+                                  socials, colors, active, created_at, updated_at, objective, functions,
+                                  knowledge, web_brief, web_brief_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        """, (pid, target_company_id, target_group_id, src.get("name"), slug, src.get("description"),
+              src.get("category"), src.get("website"), src.get("socials") or "{}",
+              src.get("colors") or "{}", now, now, src.get("objective"), src.get("functions"),
+              src.get("knowledge"), src.get("web_brief"), src.get("web_brief_at")))
     return product_get(pid)
 
 
@@ -1292,6 +1525,9 @@ def product_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     now = _now()
     slug = _slugify(data.get("name", "produto"))
     with get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM companies WHERE id = ?", (company_id,)).fetchone():
+            raise ValueError("Empresa não encontrada.")
+        group_id = _catalog_group_id_for_company(conn, company_id, data.get("group_id"))
         base = slug
         n = 1
         while conn.execute("SELECT 1 FROM products WHERE company_id = ? AND slug = ?", (company_id, slug)).fetchone():
@@ -1303,16 +1539,324 @@ def product_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     with get_conn() as conn:
         conn.execute("""
             INSERT INTO products (
-                id, company_id, name, slug, description, category, website, socials, colors,
+                id, company_id, group_id, name, slug, description, category, website, socials, colors,
                 active, created_at, updated_at, objective, functions, knowledge, web_brief, web_brief_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            pid, company_id, data.get("name", ""), slug, data.get("description"),
+            pid, company_id, group_id, data.get("name", ""), slug, data.get("description"),
             data.get("category"), data.get("website"), socials, colors, now, now,
             data.get("objective"), functions, data.get("knowledge"), data.get("web_brief"),
             data.get("web_brief_at"),
         ))
     return product_get(pid)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Product plans + client links to shared catalogs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _serialize_product_plan(row: Any) -> Dict[str, Any]:
+    item = dict(row)
+    try:
+        features = json.loads(item.get("features") or "[]")
+    except (TypeError, ValueError):
+        features = []
+    try:
+        functions = json.loads(item.get("functions") or "[]")
+    except (TypeError, ValueError):
+        functions = []
+    try:
+        colors = json.loads(item.get("colors") or "{}")
+    except (TypeError, ValueError):
+        colors = {}
+    try:
+        socials = json.loads(item.get("socials") or "{}")
+    except (TypeError, ValueError):
+        socials = {}
+    item["features"] = features if isinstance(features, list) else []
+    item["functions"] = functions if isinstance(functions, list) else []
+    item["colors"] = colors if isinstance(colors, dict) else {}
+    item["socials"] = socials if isinstance(socials, dict) else {}
+    item["active"] = bool(item.get("active", 1))
+    item["sort_order"] = int(item.get("sort_order") or 0)
+    return item
+
+
+def _product_plan_features(value: Any) -> List[Any]:
+    features = value or []
+    if not isinstance(features, list):
+        raise ValueError("features deve ser uma lista.")
+    return features
+
+
+def _product_plan_sort_order(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sort_order deve ser um número inteiro.") from exc
+
+
+@_sqlite_retry
+def product_plan_list(product_id: str) -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM product_plans WHERE product_id = ? "
+            "ORDER BY sort_order, name COLLATE NOCASE, created_at",
+            (product_id,),
+        ).fetchall()
+        return [_serialize_product_plan(row) for row in rows]
+
+
+@_sqlite_retry
+def product_plan_get(plan_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM product_plans WHERE id = ?", (plan_id,)).fetchone()
+        return _serialize_product_plan(row) if row else None
+
+
+@_sqlite_retry
+def product_plan_create(product_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("name é obrigatório")
+    features = _product_plan_features(data.get("features"))
+    functions = data.get("functions") or []
+    if not isinstance(functions, list):
+        functions = [functions]
+    colors = data.get("colors") or {}
+    socials = data.get("socials") or {}
+    sort_order = _product_plan_sort_order(data.get("sort_order"))
+    plan_id = _uuid()
+    now = _now()
+    try:
+        with get_conn() as conn:
+            product = conn.execute(
+                "SELECT company_id FROM products WHERE id = ?", (product_id,),
+            ).fetchone()
+            if not product:
+                raise ValueError("Produto não encontrado.")
+            conn.execute(
+                "INSERT INTO product_plans "
+                "(id, company_id, product_id, name, description, features, active, sort_order, "
+                "created_at, updated_at, category, website, objective, functions, knowledge, "
+                "web_brief, web_brief_at, colors, socials) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    plan_id, product["company_id"], product_id, name, data.get("description"),
+                    json.dumps(features), 1 if data.get("active", True) else 0,
+                    sort_order, now, now, data.get("category"), data.get("website"),
+                    data.get("objective"), json.dumps(functions), data.get("knowledge"),
+                    data.get("web_brief"), data.get("web_brief_at"),
+                    json.dumps(colors), json.dumps(socials),
+                ),
+            )
+    except sqlite3.IntegrityError as exc:
+        if "unique" in str(exc).lower():
+            raise ValueError("Já existe um plano com este nome neste produto.") from exc
+        raise
+    return product_plan_get(plan_id)
+
+
+@_sqlite_retry
+def product_plan_update(plan_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    fields: List[str] = []
+    values: List[Any] = []
+    for key in ("name", "description", "category", "website", "objective", "knowledge", "web_brief", "web_brief_at"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "features" in data:
+        fields.append("features = ?")
+        values.append(json.dumps(_product_plan_features(data.get("features"))))
+    if "functions" in data:
+        funcs = data.get("functions") or []
+        if not isinstance(funcs, list):
+            funcs = [funcs]
+        fields.append("functions = ?")
+        values.append(json.dumps(funcs))
+    if "colors" in data:
+        fields.append("colors = ?")
+        values.append(json.dumps(data["colors"] or {}))
+    if "socials" in data:
+        fields.append("socials = ?")
+        values.append(json.dumps(data["socials"] or {}))
+    if "active" in data:
+        fields.append("active = ?")
+        values.append(1 if data.get("active") else 0)
+    if "sort_order" in data:
+        fields.append("sort_order = ?")
+        values.append(_product_plan_sort_order(data.get("sort_order")))
+    if not fields:
+        return product_plan_get(plan_id)
+    fields.append("updated_at = ?")
+    values.extend((_now(), plan_id))
+    try:
+        with get_conn() as conn:
+            cur = conn.execute(
+                f"UPDATE product_plans SET {', '.join(fields)} WHERE id = ?", values,
+            )
+            if cur.rowcount == 0:
+                return None
+    except sqlite3.IntegrityError as exc:
+        if "unique" in str(exc).lower():
+            raise ValueError("Já existe um plano com este nome neste produto.") from exc
+        raise
+    return product_plan_get(plan_id)
+
+
+@_sqlite_retry
+def product_plan_delete(plan_id: str) -> bool:
+    if catalog_link_references_plan(plan_id):
+        return False
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM product_plans WHERE id = ?", (plan_id,))
+        return cur.rowcount > 0
+
+
+def _serialize_catalog_link(row: Any) -> Dict[str, Any]:
+    item = dict(row)
+    try:
+        solution_ids = json.loads(item.get("solution_ids") or "[]")
+    except (TypeError, ValueError):
+        solution_ids = []
+    item["solution_ids"] = solution_ids if isinstance(solution_ids, list) else []
+    item["active"] = bool(item.get("active", 1))
+    return item
+
+
+@_sqlite_retry
+def catalog_link_list(company_id: str) -> List[Dict[str, Any]]:
+    """List links owned by the target/client company."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM company_catalog_links WHERE company_id = ? "
+            "ORDER BY created_at DESC",
+            (company_id,),
+        ).fetchall()
+        return [_serialize_catalog_link(row) for row in rows]
+
+
+@_sqlite_retry
+def catalog_link_get(link_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM company_catalog_links WHERE id = ?", (link_id,),
+        ).fetchone()
+        return _serialize_catalog_link(row) if row else None
+
+
+@_sqlite_retry
+def catalog_link_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Link a target company to an offer owned by one source company."""
+    source_company_id = str(data.get("source_company_id") or "").strip()
+    product_id = str(data.get("product_id") or "").strip()
+    plan_id = str(data.get("plan_id") or "").strip() or None
+    if not source_company_id or not product_id:
+        raise ValueError("source_company_id e product_id são obrigatórios.")
+    if str(company_id) == source_company_id:
+        raise ValueError("O catálogo de origem deve ser diferente da empresa-alvo.")
+    raw_solution_ids = data.get("solution_ids") or []
+    if not isinstance(raw_solution_ids, list):
+        raise ValueError("solution_ids deve ser uma lista.")
+    solution_ids = list(dict.fromkeys(
+        str(value).strip() for value in raw_solution_ids if str(value).strip()
+    ))
+    if len(solution_ids) > 50:
+        raise ValueError("Selecione no máximo 50 adicionais.")
+
+    link_id = _uuid()
+    now = _now()
+    with get_conn() as conn:
+        companies = {
+            str(row["id"]) for row in conn.execute(
+                "SELECT id FROM companies WHERE id IN (?, ?)",
+                (company_id, source_company_id),
+            ).fetchall()
+        }
+        if str(company_id) not in companies:
+            raise ValueError("Empresa-alvo não encontrada.")
+        if source_company_id not in companies:
+            raise ValueError("Empresa do catálogo não encontrada.")
+        product = conn.execute(
+            "SELECT company_id FROM products WHERE id = ?", (product_id,),
+        ).fetchone()
+        if not product or str(product["company_id"]) != source_company_id:
+            raise ValueError("Produto não pertence ao catálogo informado.")
+        if plan_id:
+            plan = conn.execute(
+                "SELECT company_id, product_id FROM product_plans WHERE id = ?", (plan_id,),
+            ).fetchone()
+            if (
+                not plan
+                or str(plan["company_id"]) != source_company_id
+                or str(plan["product_id"]) != product_id
+            ):
+                raise ValueError("Plano não pertence ao produto informado.")
+        valid_solution_ids = {
+            str(row["id"]) for row in conn.execute(
+                "SELECT id FROM solutions WHERE company_id = ? AND product_id = ?",
+                (source_company_id, product_id),
+            ).fetchall()
+        }
+        if any(solution_id not in valid_solution_ids for solution_id in solution_ids):
+            raise ValueError("Um adicional não pertence ao produto informado.")
+        duplicate = conn.execute(
+            "SELECT 1 FROM company_catalog_links "
+            "WHERE company_id = ? AND product_id = ? "
+            "AND ((plan_id IS NULL AND ? IS NULL) OR plan_id = ?) LIMIT 1",
+            (company_id, product_id, plan_id, plan_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("Este produto/plano já está vinculado ao cliente.")
+        conn.execute(
+            "INSERT INTO company_catalog_links "
+            "(id, company_id, source_company_id, product_id, plan_id, solution_ids, notes, "
+            "active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                link_id, company_id, source_company_id, product_id, plan_id,
+                json.dumps(solution_ids), str(data.get("notes") or "").strip()[:2000] or None,
+                1 if data.get("active", True) else 0, now, now,
+            ),
+        )
+    return catalog_link_get(link_id)
+
+
+@_sqlite_retry
+def catalog_link_delete(link_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM company_catalog_links WHERE id = ?", (link_id,))
+        return cur.rowcount > 0
+
+
+@_sqlite_retry
+def catalog_link_references_product(product_id: str) -> bool:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT 1 FROM company_catalog_links WHERE product_id = ? LIMIT 1", (product_id,),
+        ).fetchone() is not None
+
+
+@_sqlite_retry
+def catalog_link_references_plan(plan_id: str) -> bool:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT 1 FROM company_catalog_links WHERE plan_id = ? LIMIT 1", (plan_id,),
+        ).fetchone() is not None
+
+
+@_sqlite_retry
+def catalog_link_references_solution(solution_id: str) -> bool:
+    wanted = str(solution_id)
+    with get_conn() as conn:
+        rows = conn.execute("SELECT solution_ids FROM company_catalog_links").fetchall()
+    for row in rows:
+        try:
+            values = json.loads(row["solution_ids"] or "[]")
+        except (TypeError, ValueError):
+            values = []
+        if isinstance(values, list) and any(str(value) == wanted for value in values):
+            return True
+    return False
 
 
 # ── INFLUENCERS (por empresa) — cadastro + banco de imagem (fotos em company_assets) ──
@@ -1665,6 +2209,18 @@ def product_update(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
     now = _now()
     fields = []
     values: List[Any] = []
+    if "group_id" in data:
+        with get_conn() as conn:
+            product = conn.execute(
+                "SELECT company_id FROM products WHERE id = ?", (product_id,),
+            ).fetchone()
+            if not product:
+                return None
+            group_id = _catalog_group_id_for_company(
+                conn, str(product["company_id"]), data.get("group_id"),
+            )
+        fields.append("group_id = ?")
+        values.append(group_id)
     for key in ("name", "description", "category", "website", "objective", "knowledge", "web_brief", "web_brief_at"):
         if key in data:
             fields.append(f"{key} = ?")
@@ -1693,6 +2249,8 @@ def product_update(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str, 
 
 @_sqlite_retry
 def product_delete(product_id: str) -> bool:
+    if catalog_link_references_product(product_id):
+        return False
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
         return cur.rowcount > 0
@@ -1773,6 +2331,8 @@ def solution_update(solution_id: str, data: Dict[str, Any]) -> Optional[Dict[str
 
 @_sqlite_retry
 def solution_delete(solution_id: str) -> bool:
+    if catalog_link_references_solution(solution_id):
+        return False
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM solutions WHERE id = ?", (solution_id,))
         return cur.rowcount > 0

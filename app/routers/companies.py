@@ -27,6 +27,10 @@ from ..db_companies import (
     asset_list_logos, asset_list_photos, asset_clear_primary, asset_set_primary_logo,
     asset_claim_primary_logo_if_empty,
     product_list, product_get, product_create, product_copy, product_update, product_delete,
+    product_group_list, product_group_get, product_group_create, product_group_update, product_group_delete,
+    product_plan_list, product_plan_get, product_plan_create, product_plan_update, product_plan_delete,
+    catalog_link_list, catalog_link_get, catalog_link_create, catalog_link_delete,
+    catalog_link_references_product, catalog_link_references_plan, catalog_link_references_solution,
     solution_list, solution_get, solution_create, solution_update, solution_delete,
 )
 from ..db import settings_get
@@ -328,7 +332,10 @@ def delete_company(company_id: str, request: Request):
     denied = _company_scope_required(request, company_id)
     if denied:
         return denied
-    ok = company_delete(company_id)
+    try:
+        ok = company_delete(company_id)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
     if not ok:
         return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
     return {"deleted": True}
@@ -3520,8 +3527,140 @@ def list_all_competitors(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Products (Cliente → Produto) + Solutions (→ Solução) — content sources
+# Catalog (Grupo → Produto → Plano) + adicionais — content sources
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _catalog_group_for_product(product: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    group_id = str(product.get("group_id") or "").strip()
+    if not group_id:
+        return None
+    group = product_group_get(group_id)
+    if not group or str(group.get("company_id") or "") != str(product.get("company_id") or ""):
+        return None
+    return group
+
+
+def _catalog_product_entry(company_id: str, product: Dict[str, Any], *, assets: bool = False) -> Dict[str, Any]:
+    """Return one product with its hierarchy while keeping legacy product fields intact."""
+    item = dict(product)
+    item["group"] = _catalog_group_for_product(item)
+    item["plans"] = product_plan_list(str(item.get("id") or ""))
+    item["solutions"] = solution_list(str(item.get("id") or ""))
+    if assets:
+        item["logos"] = asset_list_logos(company_id, str(item.get("id") or ""))
+        item["photos"] = asset_list_photos(company_id, str(item.get("id") or ""))
+    return item
+
+
+def _catalog_link_view(link: Dict[str, Any]) -> Dict[str, Any]:
+    """Expand a stored client link with names used by the client screen."""
+    item = dict(link)
+    product = product_get(str(item.get("product_id") or ""))
+    plan = product_plan_get(str(item.get("plan_id") or "")) if item.get("plan_id") else None
+    source = company_get(str(item.get("source_company_id") or ""))
+    group = _catalog_group_for_product(product) if product else None
+    wanted = {str(value) for value in (item.get("solution_ids") or []) if str(value)}
+    additions = [row for row in (solution_list(str(item.get("product_id") or "")) if product else [])
+                 if str(row.get("id") or "") in wanted]
+    item.update({
+        "source_company_name": (source or {}).get("name") or "",
+        "group": group,
+        "product": product,
+        "plan": plan,
+        "solutions": additions,
+    })
+    return item
+
+
+def _validated_product_group(company_id: str, raw_group_id: Any):
+    group_id = str(raw_group_id or "").strip()
+    if not group_id:
+        return None, None
+    group = product_group_get(group_id)
+    if not group or str(group.get("company_id") or "") != str(company_id):
+        return None, JSONResponse({"detail": "Grupo de produtos não pertence a esta empresa."}, status_code=422)
+    return group_id, None
+
+
+@router.get("/{company_id}/product-groups")
+def list_product_groups(company_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    return {"groups": product_group_list(company_id)}
+
+
+@router.post("/{company_id}/product-groups")
+async def create_product_group(company_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data["name"] = str(data.get("name") or "").strip()
+    if not data["name"]:
+        return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
+    try:
+        return {"group": product_group_create(company_id, data)}
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
+@router.put("/{company_id}/product-groups/{group_id}")
+async def update_product_group(company_id: str, group_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    group = product_group_get(group_id)
+    if not group or str(group.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Grupo de produtos não encontrado"}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if "name" in data:
+        data["name"] = str(data.get("name") or "").strip()
+        if not data["name"]:
+            return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
+    try:
+        updated = product_group_update(group_id, data)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    return {"group": updated}
+
+
+@router.delete("/{company_id}/product-groups/{group_id}")
+def delete_product_group(company_id: str, group_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    group = product_group_get(group_id)
+    if not group or str(group.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Grupo de produtos não encontrado"}, status_code=404)
+    if not product_group_delete(group_id):
+        return JSONResponse(
+            {"detail": "O grupo possui produtos. Mova os produtos antes de excluir."}, status_code=409,
+        )
+    return {"deleted": True}
+
 
 @router.get("/{company_id}/products")
 def list_products(company_id: str, request: Request):
@@ -3531,11 +3670,8 @@ def list_products(company_id: str, request: Request):
     denied = _company_scope_required(request, company_id)
     if denied:
         return denied
-    products = product_list(company_id)
-    for p in products:
-        p["solutions"] = solution_list(p["id"])
-        p["logos"] = asset_list_logos(company_id, p["id"])
-        p["photos"] = asset_list_photos(company_id, p["id"])   # Fase 2: fotos do produto (a IA analisa)
+    products = [_catalog_product_entry(company_id, product, assets=True)
+                for product in product_list(company_id)]
     return {"products": products}
 
 
@@ -3555,6 +3691,11 @@ async def create_product(company_id: str, request: Request):
         data = {}
     if not (data.get("name") or "").strip():
         return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
+    group_id, group_error = _validated_product_group(company_id, data.get("group_id"))
+    if group_error:
+        return group_error
+    if "group_id" in data:
+        data["group_id"] = group_id
     return {"product": product_create(company_id, data)}
 
 
@@ -3637,10 +3778,100 @@ async def update_product(company_id: str, product_id: str, request: Request):
         data = await request.json()
     except Exception:
         data = {}
+    if "group_id" in data:
+        group_id, group_error = _validated_product_group(company_id, data.get("group_id"))
+        if group_error:
+            return group_error
+        data["group_id"] = group_id
     product = product_update(product_id, data)
     if not product:
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     return {"product": product}
+
+
+@router.get("/{company_id}/products/{product_id}/plans")
+def list_product_plans(company_id: str, product_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    product = product_get(product_id)
+    if not product or str(product.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    return {"plans": product_plan_list(product_id)}
+
+
+@router.post("/{company_id}/products/{product_id}/plans")
+async def create_product_plan(company_id: str, product_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    product = product_get(product_id)
+    if not product or str(product.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data["name"] = str(data.get("name") or "").strip()
+    if not data["name"]:
+        return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
+    try:
+        plan = product_plan_create(product_id, data)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    return {"plan": plan}
+
+
+@router.put("/{company_id}/plans/{plan_id}")
+async def update_product_plan(company_id: str, plan_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    plan = product_plan_get(plan_id)
+    if not plan or str(plan.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Plano não encontrado"}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if "name" in data:
+        data["name"] = str(data.get("name") or "").strip()
+        if not data["name"]:
+            return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
+    try:
+        updated = product_plan_update(plan_id, data)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    return {"plan": updated}
+
+
+@router.delete("/{company_id}/plans/{plan_id}")
+def delete_product_plan(company_id: str, plan_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    plan = product_plan_get(plan_id)
+    if not plan or str(plan.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Plano não encontrado"}, status_code=404)
+    if catalog_link_references_plan(plan_id):
+        return JSONResponse(
+            {"detail": "Plano vinculado a cliente. Remova o vínculo antes de excluir."}, status_code=409,
+        )
+    if not product_plan_delete(plan_id):
+        return JSONResponse({"detail": "Plano não encontrado"}, status_code=404)
+    return {"deleted": True}
 
 
 def _extract_doc_text(name: str, raw: bytes) -> str:
@@ -3820,6 +4051,104 @@ def clear_product_kb(company_id: str, product_id: str, request: Request):
     if not prod or prod.get("company_id") != company_id:
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     product_update(product_id, {"knowledge": ""})
+    return {"ok": True}
+
+
+@router.post("/{company_id}/plans/{plan_id}/kb")
+async def upload_plan_kb(company_id: str, plan_id: str, request: Request, file: UploadFile = File(...)):
+    """BASE DE CONHECIMENTO do plano/subproduto: sobe PDF/TXT/MD, EXTRAI o texto e ACUMULA em plan.knowledge."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    plan = product_plan_get(plan_id)
+    if not plan or plan.get("company_id") != company_id:
+        return JSONResponse({"detail": "Plano não encontrado"}, status_code=404)
+    raw = await file.read()
+    name = file.filename or "doc.txt"
+    import asyncio as _aio
+    try:
+        text = ((await _aio.to_thread(_extract_doc_text, name, raw)) or "").strip()
+    except Exception as e:
+        return JSONResponse({"detail": f"Falha ao ler '{name}': {e}"}, status_code=400)
+    if not text or len(text) < 20:
+        try:
+            text = ((await _aio.to_thread(_vision_ocr_doc, name, raw)) or "").strip()
+        except Exception:
+            text = ""
+    if not text:
+        return JSONResponse({"detail": f"Não consegui extrair texto de '{name}'. Formatos: PDF, DOCX, TXT, MD, CSV e imagem/PDF escaneado."}, status_code=400)
+    prev = (plan.get("knowledge") or "").strip()
+    merged = (prev + f"\n\n===== {name} =====\n" + text).strip()[:60000]
+    product_plan_update(plan_id, {"knowledge": merged})
+    filled = {}
+    try:
+        need_desc = not (plan.get("description") or "").strip()
+        _fns = plan.get("functions") or []
+        if isinstance(_fns, str):
+            try:
+                import json as _j
+                _fns = _j.loads(_fns)
+            except Exception:
+                _fns = [_fns] if _fns.strip() else []
+        need_obj = not (plan.get("knowledge") or "").strip()
+        need_fns = not _fns
+        if need_desc or need_obj or need_fns:
+            from ..services.ai import cheap_text_config, get_ai_config, complete_ai, extract_json
+            cfg = cheap_text_config(get_ai_config())
+            if cfg:
+                sysm = "Você extrai dados de um plano/subproduto de um documento. Responda SÓ JSON válido, pt-BR, sem preços."
+                usr = (f"Plano: {plan.get('name','')}. Do texto do documento abaixo, extraia: "
+                       '{"description":"descrição clara em 1-2 frases","objective":"como VENDER/posicionar este plano '
+                       '(1-2 frases)","functions":["benefício/função 1","benefício 2","..."]} (3 a 8 functions). '
+                       "DOCUMENTO:\n" + text[:12000])
+                import asyncio as _aio2
+                data = extract_json(await _aio2.to_thread(complete_ai, cfg, sysm, usr, 900)) or {}
+                upd = {}
+                if need_desc and (data.get("description") or "").strip():
+                    upd["description"] = data["description"].strip()
+                if need_obj and (data.get("objective") or "").strip():
+                    upd["objective"] = data["objective"].strip()
+                if need_fns and isinstance(data.get("functions"), list) and data["functions"]:
+                    upd["functions"] = [str(f).strip() for f in data["functions"] if str(f).strip()][:10]
+                if upd:
+                    product_plan_update(plan_id, upd)
+                    filled = upd
+    except Exception:
+        pass
+    return {"ok": True, "file": name, "chars": len(text), "total_chars": len(merged),
+            "filled": filled, "plan": product_plan_get(plan_id)}
+
+
+@router.get("/{company_id}/plans/{plan_id}/kb")
+def get_plan_kb(company_id: str, plan_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    plan = product_plan_get(plan_id)
+    if not plan or plan.get("company_id") != company_id:
+        return JSONResponse({"detail": "Plano não encontrado"}, status_code=404)
+    kb = (plan.get("knowledge") or "")
+    return {"chars": len(kb), "preview": kb[:2000]}
+
+
+@router.delete("/{company_id}/plans/{plan_id}/kb")
+def clear_plan_kb(company_id: str, plan_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    plan = product_plan_get(plan_id)
+    if not plan or plan.get("company_id") != company_id:
+        return JSONResponse({"detail": "Plano não encontrado"}, status_code=404)
+    product_plan_update(plan_id, {"knowledge": ""})
     return {"ok": True}
 
 
@@ -4079,6 +4408,10 @@ def delete_product(company_id: str, product_id: str, request: Request):
     prod = product_get(product_id)
     if not prod or str(prod.get("company_id") or "") != str(company_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
+    if catalog_link_references_product(product_id):
+        return JSONResponse(
+            {"detail": "Produto vinculado a cliente. Remova o vínculo antes de excluir."}, status_code=409,
+        )
     if not product_delete(product_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
     return {"deleted": True}
@@ -4234,8 +4567,138 @@ def delete_solution(company_id: str, solution_id: str, request: Request):
     existing_solution = solution_get(solution_id)
     if not existing_solution or str(existing_solution.get("company_id") or "") != str(company_id):
         return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    if catalog_link_references_solution(solution_id):
+        return JSONResponse(
+            {"detail": "Adicional vinculado a cliente. Remova o vínculo antes de excluir."}, status_code=409,
+        )
     if not solution_delete(solution_id):
         return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    return {"deleted": True}
+
+
+@router.get("/{company_id}/catalog-links")
+def list_catalog_links(company_id: str, request: Request):
+    """List the exact catalog products/plans contracted by this client."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    return {"links": [_catalog_link_view(link) for link in catalog_link_list(company_id)]}
+
+
+@router.get("/{company_id}/catalog-links/options")
+def catalog_link_options(company_id: str, request: Request):
+    """Catalogs visible to the operator, nested as group → product → plan/add-on."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    from ..main_utils import scoped_company_ids
+    scoped = scoped_company_ids(request)
+    catalogs = []
+    for source in (company_list(active_only=True) or []):
+        source_id = str(source.get("id") or "")
+        if not source_id or source_id == str(company_id):
+            continue
+        if scoped is not None and source_id not in scoped:
+            continue
+        products = [_catalog_product_entry(source_id, product)
+                    for product in (product_list(source_id) or []) if product.get("active", True)]
+        if not products:
+            continue
+        catalogs.append({
+            "company_id": source_id,
+            "company_name": source.get("name") or "",
+            "lifecycle_stage": source.get("lifecycle_stage") or "managed",
+            "groups": [group for group in product_group_list(source_id) if group.get("active", True)],
+            "products": products,
+        })
+    catalogs.sort(key=lambda item: (
+        item.get("lifecycle_stage") != "internal",
+        "cariap" not in str(item.get("company_name") or "").lower(),
+        str(item.get("company_name") or "").lower(),
+    ))
+    return {"catalogs": catalogs}
+
+
+@router.post("/{company_id}/catalog-links")
+async def create_catalog_link(company_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    source_company_id = str(data.get("source_company_id") or "").strip()
+    product_id = str(data.get("product_id") or "").strip()
+    plan_id = str(data.get("plan_id") or "").strip() or None
+    if not source_company_id or not product_id:
+        return JSONResponse(
+            {"detail": "source_company_id e product_id são obrigatórios."}, status_code=422,
+        )
+    if source_company_id == str(company_id):
+        return JSONResponse({"detail": "Escolha um catálogo diferente do cliente-alvo."}, status_code=422)
+    source_denied = _company_scope_required(request, source_company_id)
+    if source_denied:
+        return source_denied
+    product = product_get(product_id)
+    if not product or str(product.get("company_id") or "") != source_company_id:
+        return JSONResponse({"detail": "Produto não pertence ao catálogo informado."}, status_code=422)
+    if plan_id:
+        plan = product_plan_get(plan_id)
+        if not plan or str(plan.get("product_id") or "") != product_id:
+            return JSONResponse({"detail": "Plano não pertence ao produto informado."}, status_code=422)
+    raw_solution_ids = data.get("solution_ids") or []
+    if not isinstance(raw_solution_ids, list):
+        return JSONResponse({"detail": "solution_ids deve ser uma lista."}, status_code=422)
+    solution_ids = list(dict.fromkeys(str(value).strip() for value in raw_solution_ids if str(value).strip()))
+    if len(solution_ids) > 50:
+        return JSONResponse({"detail": "Selecione no máximo 50 adicionais."}, status_code=422)
+    valid_solution_ids = {str(row.get("id") or "") for row in solution_list(product_id)}
+    if any(solution_id not in valid_solution_ids for solution_id in solution_ids):
+        return JSONResponse({"detail": "Um adicional não pertence ao produto informado."}, status_code=422)
+    payload = {
+        "source_company_id": source_company_id,
+        "product_id": product_id,
+        "plan_id": plan_id,
+        "solution_ids": solution_ids,
+        "notes": str(data.get("notes") or "").strip()[:2000],
+        "active": bool(data.get("active", True)),
+    }
+    try:
+        link = catalog_link_create(company_id, payload)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return {"link": _catalog_link_view(link)}
+
+
+@router.delete("/{company_id}/catalog-links/{link_id}")
+def delete_catalog_link(company_id: str, link_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    link = catalog_link_get(link_id)
+    if not link or str(link.get("company_id") or "") != str(company_id):
+        return JSONResponse({"detail": "Vínculo de catálogo não encontrado"}, status_code=404)
+    if not catalog_link_delete(link_id):
+        return JSONResponse({"detail": "Vínculo de catálogo não encontrado"}, status_code=404)
     return {"deleted": True}
 
 

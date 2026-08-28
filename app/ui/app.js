@@ -534,6 +534,21 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.121', date: '2026-08-28',
+    items: [
+      { type: 'feat', text: 'Cadastro completo de subprodutos/planos com objetivo comercial, benefícios, categoria, link oficial e base de conhecimento KB por documento/OCR.' },
+      { type: 'feat', text: 'Aba Produtos & Planos adicionada no painel de Clientes para gerenciamento completo de grupos, produtos e subprodutos/planos.' },
+    ],
+  },
+  {
+    version: 'v1.27.120', date: '2026-08-28',
+    items: [
+      { type: 'feat', text: 'Catálogo comercial organizado em grupo, produto e plano, com adicionais separados para ofertas como Zapping, e-Saúde e Aya.' },
+      { type: 'feat', text: 'Clientes agora podem receber um vínculo persistente com o produto, o plano e os adicionais exatos de outro catálogo, sem duplicar cadastros.' },
+      { type: 'fix', text: 'Produtos antigos continuam disponíveis em Sem grupo, e itens vinculados ficam protegidos contra exclusão acidental.' },
+    ],
+  },
+  {
     version: 'v1.27.117', date: '2026-08-13',
     items: [
       { type: 'feat', text: 'Clientes agora distinguem prospectos, gerenciados, internos e perdidos sem duplicar cadastro, histórico ou identidade.' },
@@ -17669,6 +17684,7 @@ function clienteTab(tab) {
   else if (tab === 'visual') clienteRenderVisual(c, content);
   else if (tab === 'voz') clienteRenderVoz(c, content);
   else if (tab === 'concorrentes') clienteRenderConcorrentes(c, content);
+  else if (tab === 'produtos') clienteRenderProdutos(c, content);
   else if (tab === 'gerar') clienteRenderGerar(c, content);
 }
 
@@ -17898,6 +17914,679 @@ async function clienteRemoveCompetitor(compId) {
     await apiFetch(`/api/companies/${_clienteCurrent.id}/competitors/${compId}`, { method: 'DELETE' });
     await clienteDetail(_clienteCurrent.id, 'concorrentes');
   } catch (e) { alert('Erro: ' + e.message); }
+}
+
+// ── PRODUTOS & PLANOS (Catálogo Comercial) ──────────────────────────────────
+
+let _cpProducts = [];
+let _cpGroups = [];
+
+async function clienteRenderProdutos(c, el) {
+  el.innerHTML = `<div class="card" style="padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div>
+        <h2 style="margin:0">Catálogo de Produtos &amp; Planos</h2>
+        <p style="color:var(--muted);font-size:13px;margin:4px 0 0">Gerencie grupos, produtos e subprodutos (planos) de ${esc(c.name)}</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" onclick="cpShowProductModal()">+ Novo Produto</button>
+        <button class="btn" onclick="cpShowPlanModal()">+ Novo Plano / Subproduto</button>
+        <button class="btn" onclick="cpShowGroupModal()">+ Novo Grupo</button>
+        <button class="btn" onclick="cpShowCopyModal()">📋 Copiar de Outro Cliente</button>
+      </div>
+    </div>
+
+    <div id="cp_form_container" style="margin-top:16px"></div>
+
+    <div id="cp_groups_bar" style="margin-top:20px;padding:12px 16px;background:var(--surface,#141414);border:1px solid var(--border);border-radius:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase">Grupos:</span>
+      <div id="cp_groups_pills" style="display:flex;gap:8px;flex-wrap:wrap">Carregando grupos...</div>
+    </div>
+
+    <div id="cp_products_tree" style="margin-top:20px;display:flex;flex-direction:column;gap:16px">
+      <div style="color:var(--muted);text-align:center;padding:30px">Carregando catálogo...</div>
+    </div>
+  </div>`;
+
+  await cpLoadCatalogData();
+}
+
+async function cpLoadCatalogData() {
+  if (!_clienteCurrent) return;
+  const cid = _clienteCurrent.id;
+  try {
+    const [pRes, gRes] = await Promise.all([
+      apiFetch(`/api/companies/${cid}/products`),
+      apiFetch(`/api/companies/${cid}/product-groups`),
+    ]);
+    _cpProducts = pRes.products || [];
+    _cpGroups = gRes.groups || [];
+    cpRenderGroupsPills();
+    cpRenderProductsTree();
+  } catch (e) {
+    const tree = qs('cp_products_tree');
+    if (tree) tree.innerHTML = `<div style="color:var(--bad);padding:20px">Erro ao carregar catálogo: ${esc(e.message)}</div>`;
+  }
+}
+
+function cpRenderGroupsPills() {
+  const pillsEl = qs('cp_groups_pills');
+  if (!pillsEl) return;
+  if (!_cpGroups.length) {
+    pillsEl.innerHTML = '<span style="color:var(--muted);font-size:13px">Nenhum grupo cadastrado (produtos sem grupo).</span>';
+    return;
+  }
+  pillsEl.innerHTML = _cpGroups.map(g => `
+    <span class="badge" style="background:#222;border:1px solid #444;color:#ddd;padding:4px 10px;font-size:12px;display:flex;align-items:center;gap:6px">
+      🏷️ <strong>${esc(g.name)}</strong>
+      <button onclick="cpShowGroupModal('${g.id}')" style="background:none;border:none;color:#aaa;cursor:pointer;padding:0 2px" title="Editar Grupo">✏️</button>
+      <button onclick="cpDeleteGroup('${g.id}')" style="background:none;border:none;color:var(--bad);cursor:pointer;padding:0 2px" title="Excluir Grupo">✕</button>
+    </span>
+  `).join('');
+}
+
+function cpRenderProductsTree() {
+  const treeEl = qs('cp_products_tree');
+  if (!treeEl) return;
+  if (!_cpProducts.length) {
+    treeEl.innerHTML = `
+      <div style="border:1px dashed var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--muted)">
+        <div style="font-size:32px;margin-bottom:8px">📦</div>
+        <strong style="font-size:15px;color:#fff">Nenhum produto cadastrado</strong>
+        <p style="font-size:13px;margin:6px 0 16px">Cadastre produtos e seus planos/subprodutos para estruturar o briefing de vendas.</p>
+        <button class="btn primary" onclick="cpShowProductModal()">+ Cadastrar Primeiro Produto</button>
+      </div>`;
+    return;
+  }
+
+  treeEl.innerHTML = _cpProducts.map(p => {
+    const plans = p.plans || [];
+    const funcs = (p.functions || []).map(f => `<span style="background:rgba(100,100,100,0.2);color:#ccc;border-radius:4px;padding:2px 6px;font-size:11px">${esc(f)}</span>`).join(' ');
+    const groupName = p.group ? p.group.name : 'Sem grupo';
+    const kbChars = (p.knowledge || '').length;
+    const kbBadge = kbChars > 0 ? `<span class="badge good" title="${kbChars} caracteres em texto">📄 KB: ${kbChars} chars</span>` : `<span class="badge" style="color:var(--muted);background:#222">📄 Sem KB</span>`;
+
+    return `
+      <div class="card" style="border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--card-bg,#18181b)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <strong style="font-size:17px;color:#fff">${esc(p.name)}</strong>
+              <span class="badge" style="background:#2a2a2a;color:#aaa">${esc(groupName)}</span>
+              ${p.category ? `<span class="badge" style="background:#1e3a8a;color:#93c5fd">${esc(p.category)}</span>` : ''}
+              ${p.active ? '<span class="badge good">Ativo</span>' : '<span class="badge bad">Inativo</span>'}
+            </div>
+            ${p.description ? `<div style="color:var(--muted);font-size:13px;margin-top:4px">${esc(p.description)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn" style="padding:4px 10px;font-size:12px" onclick="cpShowPlanModal('${p.id}')">+ Subproduto/Plano</button>
+            <button class="btn" style="padding:4px 10px;font-size:12px" onclick="cpShowProductModal('${p.id}')">✏️ Editar</button>
+            <button class="btn" style="padding:4px 10px;font-size:12px" onclick="cpShowProductKbModal('${p.id}')">📄 Base KB</button>
+            <button class="btn" style="padding:4px 10px;font-size:12px;color:var(--bad)" onclick="cpDeleteProduct('${p.id}')">🗑️ Excluir</button>
+          </div>
+        </div>
+
+        <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;font-size:12px">
+          ${p.objective ? `<div style="background:#111;padding:8px 10px;border-radius:6px;border:1px solid #222"><strong style="color:var(--pri)">🎯 Posicionamento / Vendas:</strong><br/>${esc(p.objective)}</div>` : ''}
+          ${funcs ? `<div style="background:#111;padding:8px 10px;border-radius:6px;border:1px solid #222"><strong style="color:#aaa">✨ Benefícios / Funções:</strong><br/><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${funcs}</div></div>` : ''}
+          <div style="background:#111;padding:8px 10px;border-radius:6px;border:1px solid #222;display:flex;align-items:center;justify-content:space-between">
+            <span><strong>Base de Conhecimento:</strong> ${kbBadge}</span>
+            <button class="btn" style="padding:2px 8px;font-size:11px" onclick="cpShowProductKbModal('${p.id}')">Upload Doc</button>
+          </div>
+        </div>
+
+        <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--pri)">
+              Planos &amp; Subprodutos (${plans.length})
+            </span>
+            <button class="btn" style="padding:3px 8px;font-size:11px" onclick="cpShowPlanModal('${p.id}')">+ Adicionar Subproduto/Plano</button>
+          </div>
+
+          ${!plans.length ? '<div style="color:var(--muted);font-size:12px;font-style:italic;padding:8px 0">Nenhum subproduto/plano cadastrado para este produto.</div>' : `
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:8px">
+              ${plans.map(pl => {
+                const planFuncs = (pl.functions || []).map(f => `<span style="background:rgba(125,211,252,0.15);color:#7dd3fc;border-radius:4px;padding:1px 5px;font-size:10px">${esc(f)}</span>`).join(' ');
+                const planKbChars = (pl.knowledge || '').length;
+                const planKbBadge = planKbChars > 0 ? `<span class="badge good" style="font-size:10px">📄 KB: ${planKbChars} chars</span>` : '';
+                return `
+                  <div style="background:#0f0f11;border:1px solid #27272a;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between">
+                    <div>
+                      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px">
+                        <strong style="font-size:14px;color:#f4f4f5">🔹 ${esc(pl.name)}</strong>
+                        ${pl.category ? `<span class="badge" style="background:#15803d;color:#bbf7d0;font-size:10px">${esc(pl.category)}</span>` : ''}
+                      </div>
+                      ${pl.description ? `<div style="color:#a1a1aa;font-size:11px;margin-top:3px">${esc(pl.description)}</div>` : ''}
+                      ${pl.objective ? `<div style="color:#e4e4e7;font-size:11px;margin-top:6px;background:#18181b;padding:6px;border-radius:4px">🎯 <em>${esc(pl.objective)}</em></div>` : ''}
+                      ${planFuncs ? `<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:6px">${planFuncs}</div>` : ''}
+                      ${planKbBadge ? `<div style="margin-top:6px">${planKbBadge}</div>` : ''}
+                    </div>
+                    <div style="margin-top:10px;padding-top:6px;border-top:1px solid #222;display:flex;justify-content:space-between;align-items:center;font-size:11px">
+                      <button class="btn" style="padding:2px 6px;font-size:11px" onclick="cpShowPlanKbModal('${pl.id}')">📄 Base KB</button>
+                      <div>
+                        <button class="btn" style="padding:2px 6px;font-size:11px" onclick="cpShowPlanModal('${p.id}','${pl.id}')">✏️ Editar</button>
+                        <button class="btn" style="padding:2px 6px;font-size:11px;color:var(--bad)" onclick="cpDeletePlan('${pl.id}')">🗑️</button>
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function cpCloseForm() {
+  const container = qs('cp_form_container');
+  if (container) container.innerHTML = '';
+}
+
+function cpShowProductModal(productId) {
+  const container = qs('cp_form_container');
+  if (!container) return;
+  const p = productId ? _cpProducts.find(x => x.id === productId) : null;
+
+  const funcsStr = p && p.functions ? p.functions.join(', ') : '';
+
+  container.innerHTML = `
+    <div class="card" style="border:1px solid var(--pri);border-radius:12px;padding:16px;background:#121214">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;color:#fff">${p ? 'Editar Produto' : 'Novo Produto'}</h3>
+        <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label>Nome do Produto *</label>
+          <input id="cpf_prod_name" type="text" value="${esc(p?.name || '')}" placeholder="Ex: Zapping, e-Saúde, Aya" style="width:100%"/>
+        </div>
+        <div>
+          <label>Grupo de Produtos</label>
+          <select id="cpf_prod_group" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+            <option value="">(Sem grupo)</option>
+            ${_cpGroups.map(g => `<option value="${g.id}" ${p && p.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Categoria</label>
+          <input id="cpf_prod_category" type="text" value="${esc(p?.category || '')}" placeholder="Ex: Streaming, Telemedicina, Educação" style="width:100%"/>
+        </div>
+        <div>
+          <label>Website / Página Oficial</label>
+          <input id="cpf_prod_website" type="text" value="${esc(p?.website || '')}" placeholder="https://" style="width:100%"/>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Objetivo Comercial / Posicionamento de Vendas</label>
+          <textarea id="cpf_prod_objective" rows="2" placeholder="Ex: Oferta carro-chefe para clientes de 600MB, foco em entretenimento para a família." style="width:100%;resize:vertical">${esc(p?.objective || '')}</textarea>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Benefícios / Funções (separados por vírgula)</label>
+          <input id="cpf_prod_functions" type="text" value="${esc(funcsStr)}" placeholder="Ex: Mais de 100 canais ao vivo, Replay de 7 dias, Multi-telas" style="width:100%"/>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Descrição Curta / Resumo Comercial</label>
+          <textarea id="cpf_prod_description" rows="2" placeholder="Resumo do produto..." style="width:100%;resize:vertical">${esc(p?.description || '')}</textarea>
+        </div>
+      </div>
+      <div id="cpf_prod_msg" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:14px;gap:8px">
+        <button class="btn primary" onclick="cpSaveProduct('${p?.id || ''}')">${p ? 'Salvar Alterações' : 'Criar Produto'}</button>
+        <button class="btn" onclick="cpCloseForm()">Cancelar</button>
+      </div>
+    </div>
+  `;
+  container.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function cpSaveProduct(productId) {
+  if (!_clienteCurrent) return;
+  const name = qs('cpf_prod_name')?.value.trim();
+  if (!name) { qs('cpf_prod_msg').innerHTML = '<span style="color:var(--bad)">Nome é obrigatório</span>'; return; }
+  const funcsRaw = qs('cpf_prod_functions')?.value || '';
+  const functions = funcsRaw.split(',').map(f => f.trim()).filter(Boolean);
+
+  const body = {
+    name,
+    group_id: qs('cpf_prod_group')?.value || null,
+    category: qs('cpf_prod_category')?.value.trim() || null,
+    website: qs('cpf_prod_website')?.value.trim() || null,
+    objective: qs('cpf_prod_objective')?.value.trim() || null,
+    functions,
+    description: qs('cpf_prod_description')?.value.trim() || null,
+  };
+
+  try {
+    const url = productId
+      ? `/api/companies/${_clienteCurrent.id}/products/${productId}`
+      : `/api/companies/${_clienteCurrent.id}/products`;
+    const method = productId ? 'PUT' : 'POST';
+    await apiFetch(url, { method, body: JSON.stringify(body) });
+    cpCloseForm();
+    await cpLoadCatalogData();
+    toast(productId ? 'Produto atualizado!' : 'Produto criado com sucesso!', 'good');
+  } catch (e) {
+    qs('cpf_prod_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function cpDeleteProduct(productId) {
+  if (!_clienteCurrent || !confirm('Excluir este produto e seus planos?')) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/products/${productId}`, { method: 'DELETE' });
+    await cpLoadCatalogData();
+    toast('Produto excluído.', 'good');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function cpShowPlanModal(defaultProductId, planId) {
+  const container = qs('cp_form_container');
+  if (!container) return;
+
+  let plan = null;
+  let targetProdId = defaultProductId;
+
+  if (planId) {
+    for (const prod of _cpProducts) {
+      const found = (prod.plans || []).find(x => x.id === planId);
+      if (found) { plan = found; targetProdId = prod.id; break; }
+    }
+  }
+
+  const funcsStr = plan && plan.functions ? plan.functions.join(', ') : '';
+
+  container.innerHTML = `
+    <div class="card" style="border:1px solid var(--accent);border-radius:12px;padding:16px;background:#0d1117">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;color:var(--accent)">${plan ? 'Editar Subproduto / Plano' : 'Novo Subproduto / Plano'}</h3>
+        <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label>Produto Pai *</label>
+          <select id="cpf_plan_prod_id" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+            ${_cpProducts.map(p => `<option value="${p.id}" ${targetProdId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Nome do Subproduto / Plano *</label>
+          <input id="cpf_plan_name" type="text" value="${esc(plan?.name || '')}" placeholder="Ex: Zapping Lite, Zapping Full, Pronto Atendimento 24h" style="width:100%"/>
+        </div>
+        <div>
+          <label>Categoria do Plano</label>
+          <input id="cpf_plan_category" type="text" value="${esc(plan?.category || '')}" placeholder="Ex: Pacote Base, Adicional Telecine, Clínica Geral" style="width:100%"/>
+        </div>
+        <div>
+          <label>Website / Link Oficial do Plano</label>
+          <input id="cpf_plan_website" type="text" value="${esc(plan?.website || '')}" placeholder="https://" style="width:100%"/>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Objetivo Comercial / Posicionamento do Subproduto</label>
+          <textarea id="cpf_plan_objective" rows="2" placeholder="Ex: Oferecer como upgrade por R$ 29,90/mês para quem quer futebol ao vivo (Premiere/Telecine)." style="width:100%;resize:vertical">${esc(plan?.objective || '')}</textarea>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Benefícios / Funções do Subproduto (separados por vírgula)</label>
+          <input id="cpf_plan_functions" type="text" value="${esc(funcsStr)}" placeholder="Ex: Telemedicina 24h sem carência, Atendimento pediátrico, Desconto em farmácias" style="width:100%"/>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Descrição do Subproduto / Plano</label>
+          <textarea id="cpf_plan_description" rows="2" placeholder="Descrição do plano..." style="width:100%;resize:vertical">${esc(plan?.description || '')}</textarea>
+        </div>
+      </div>
+      <div id="cpf_plan_msg" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:14px;gap:8px">
+        <button class="btn primary" onclick="cpSavePlan('${plan?.id || ''}')">${plan ? 'Salvar Subproduto' : 'Criar Subproduto'}</button>
+        <button class="btn" onclick="cpCloseForm()">Cancelar</button>
+      </div>
+    </div>
+  `;
+  container.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function cpSavePlan(planId) {
+  if (!_clienteCurrent) return;
+  const productId = qs('cpf_plan_prod_id')?.value;
+  if (!productId) { qs('cpf_plan_msg').innerHTML = '<span style="color:var(--bad)">Selecione um produto pai</span>'; return; }
+  const name = qs('cpf_plan_name')?.value.trim();
+  if (!name) { qs('cpf_plan_msg').innerHTML = '<span style="color:var(--bad)">Nome é obrigatório</span>'; return; }
+  const funcsRaw = qs('cpf_plan_functions')?.value || '';
+  const functions = funcsRaw.split(',').map(f => f.trim()).filter(Boolean);
+
+  const body = {
+    name,
+    category: qs('cpf_plan_category')?.value.trim() || null,
+    website: qs('cpf_plan_website')?.value.trim() || null,
+    objective: qs('cpf_plan_objective')?.value.trim() || null,
+    functions,
+    description: qs('cpf_plan_description')?.value.trim() || null,
+  };
+
+  try {
+    const url = planId
+      ? `/api/companies/${_clienteCurrent.id}/plans/${planId}`
+      : `/api/companies/${_clienteCurrent.id}/products/${productId}/plans`;
+    const method = planId ? 'PUT' : 'POST';
+    await apiFetch(url, { method, body: JSON.stringify(body) });
+    cpCloseForm();
+    await cpLoadCatalogData();
+    toast(planId ? 'Subproduto/Plano atualizado!' : 'Subproduto/Plano criado com sucesso!', 'good');
+  } catch (e) {
+    qs('cpf_plan_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function cpDeletePlan(planId) {
+  if (!_clienteCurrent || !confirm('Excluir este subproduto/plano?')) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/plans/${planId}`, { method: 'DELETE' });
+    await cpLoadCatalogData();
+    toast('Subproduto/Plano excluído.', 'good');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function cpShowGroupModal(groupId) {
+  const container = qs('cp_form_container');
+  if (!container) return;
+  const g = groupId ? _cpGroups.find(x => x.id === groupId) : null;
+
+  container.innerHTML = `
+    <div class="card" style="border:1px solid var(--border);border-radius:12px;padding:16px;background:#18181b">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;color:#fff">${g ? 'Editar Grupo' : 'Novo Grupo de Produtos'}</h3>
+        <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div>
+          <label>Nome do Grupo *</label>
+          <input id="cpf_group_name" type="text" value="${esc(g?.name || '')}" placeholder="Ex: Streaming, Telemedicina, Aplicativos" style="width:100%"/>
+        </div>
+        <div>
+          <label>Descrição do Grupo (opcional)</label>
+          <input id="cpf_group_desc" type="text" value="${esc(g?.description || '')}" placeholder="Descrição..." style="width:100%"/>
+        </div>
+      </div>
+      <div id="cpf_group_msg" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:14px;gap:8px">
+        <button class="btn primary" onclick="cpSaveGroup('${g?.id || ''}')">${g ? 'Salvar Grupo' : 'Criar Grupo'}</button>
+        <button class="btn" onclick="cpCloseForm()">Cancelar</button>
+      </div>
+    </div>
+  `;
+  container.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function cpSaveGroup(groupId) {
+  if (!_clienteCurrent) return;
+  const name = qs('cpf_group_name')?.value.trim();
+  if (!name) { qs('cpf_group_msg').innerHTML = '<span style="color:var(--bad)">Nome é obrigatório</span>'; return; }
+
+  const body = {
+    name,
+    description: qs('cpf_group_desc')?.value.trim() || null,
+  };
+
+  try {
+    const url = groupId
+      ? `/api/companies/${_clienteCurrent.id}/product-groups/${groupId}`
+      : `/api/companies/${_clienteCurrent.id}/product-groups`;
+    const method = groupId ? 'PUT' : 'POST';
+    await apiFetch(url, { method, body: JSON.stringify(body) });
+    cpCloseForm();
+    await cpLoadCatalogData();
+    toast(groupId ? 'Grupo atualizado!' : 'Grupo criado!', 'good');
+  } catch (e) {
+    qs('cpf_group_msg').innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function cpDeleteGroup(groupId) {
+  if (!_clienteCurrent || !confirm('Excluir este grupo?')) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/product-groups/${groupId}`, { method: 'DELETE' });
+    await cpLoadCatalogData();
+    toast('Grupo excluído.', 'good');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function cpShowProductKbModal(productId) {
+  const container = qs('cp_form_container');
+  if (!container) return;
+  const p = _cpProducts.find(x => x.id === productId);
+  if (!p) return;
+
+  const kbText = p.knowledge || '';
+
+  container.innerHTML = `
+    <div class="card" style="border:1px solid var(--pri);border-radius:12px;padding:16px;background:#0d1117">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;color:#fff">📄 Base de Conhecimento: ${esc(p.name)}</h3>
+        <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin:0 0 12px">
+        Envie documentos (PDF, DOCX, TXT, MD, CSV ou imagens de contrato/panfleto) para que a IA extraia todas as funções e fatos reais do produto no briefing.
+      </p>
+
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <input id="cp_kb_file" type="file" accept=".pdf,.docx,.doc,.txt,.md,.csv,image/*" style="font-size:12px"/>
+        <button class="btn primary" onclick="cpUploadProductKb('${p.id}')">📤 Enviar Documento</button>
+      </div>
+
+      <div id="cp_kb_status" style="margin-bottom:10px;font-size:12px"></div>
+
+      ${kbText ? `
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <label style="font-size:12px;color:var(--muted)">Texto Extraído (${kbText.length} caracteres):</label>
+            <button class="btn" style="padding:2px 6px;font-size:11px;color:var(--bad)" onclick="cpClearProductKb('${p.id}')">Limpar Base KB</button>
+          </div>
+          <textarea readonly rows="8" style="width:100%;font-size:11px;font-family:monospace;background:#050505;color:#888;resize:vertical;border:1px solid #222;border-radius:6px;padding:8px">${esc(kbText)}</textarea>
+        </div>
+      ` : '<div style="color:var(--muted);font-size:12px;font-style:italic">Nenhum documento enviado para este produto ainda.</div>'}
+
+      <div style="margin-top:12px">
+        <button class="btn" onclick="cpCloseForm()">Fechar</button>
+      </div>
+    </div>
+  `;
+  container.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function cpUploadProductKb(productId) {
+  if (!_clienteCurrent) return;
+  const fileInput = qs('cp_kb_file');
+  const file = fileInput?.files?.[0];
+  if (!file) { alert('Selecione um arquivo PDF, TXT ou imagem.'); return; }
+
+  const statusEl = qs('cp_kb_status');
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--muted)">Enviando e extraindo texto com IA...</span>';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const headers = {};
+    if (window._apiKey) headers['X-API-Key'] = window._apiKey;
+    const res = await fetch(`/api/companies/${_clienteCurrent.id}/products/${productId}/kb`, {
+      method: 'POST', body: fd, headers,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao enviar arquivo.');
+    await cpLoadCatalogData();
+    cpShowProductKbModal(productId);
+    toast(`Documento '${file.name}' adicionado com sucesso!`, 'good');
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function cpClearProductKb(productId) {
+  if (!_clienteCurrent || !confirm('Limpar toda a base de conhecimento deste produto?')) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/products/${productId}/kb`, { method: 'DELETE' });
+    await cpLoadCatalogData();
+    cpShowProductKbModal(productId);
+    toast('Base KB limpa com sucesso.', 'good');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function cpShowPlanKbModal(planId) {
+  const container = qs('cp_form_container');
+  if (!container) return;
+
+  let plan = null;
+  for (const prod of _cpProducts) {
+    const found = (prod.plans || []).find(x => x.id === planId);
+    if (found) { plan = found; break; }
+  }
+  if (!plan) return;
+
+  const kbText = plan.knowledge || '';
+
+  container.innerHTML = `
+    <div class="card" style="border:1px solid var(--accent);border-radius:12px;padding:16px;background:#0d1117">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;color:var(--accent)">📄 Base KB do Subproduto: ${esc(plan.name)}</h3>
+        <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin:0 0 12px">
+        Envie documentos específicos deste subproduto/plano (ex: grade de canais, cobertura do plano de saúde, termos da oferta) para a IA usar no briefing.
+      </p>
+
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <input id="cp_plan_kb_file" type="file" accept=".pdf,.docx,.doc,.txt,.md,.csv,image/*" style="font-size:12px"/>
+        <button class="btn primary" onclick="cpUploadPlanKb('${plan.id}')">📤 Enviar Documento do Plano</button>
+      </div>
+
+      <div id="cp_plan_kb_status" style="margin-bottom:10px;font-size:12px"></div>
+
+      ${kbText ? `
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <label style="font-size:12px;color:var(--muted)">Texto Extraído (${kbText.length} caracteres):</label>
+            <button class="btn" style="padding:2px 6px;font-size:11px;color:var(--bad)" onclick="cpClearPlanKb('${plan.id}')">Limpar Base KB</button>
+          </div>
+          <textarea readonly rows="8" style="width:100%;font-size:11px;font-family:monospace;background:#050505;color:#888;resize:vertical;border:1px solid #222;border-radius:6px;padding:8px">${esc(kbText)}</textarea>
+        </div>
+      ` : '<div style="color:var(--muted);font-size:12px;font-style:italic">Nenhum documento enviado para este subproduto/plano ainda.</div>'}
+
+      <div style="margin-top:12px">
+        <button class="btn" onclick="cpCloseForm()">Fechar</button>
+      </div>
+    </div>
+  `;
+  container.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function cpUploadPlanKb(planId) {
+  if (!_clienteCurrent) return;
+  const fileInput = qs('cp_plan_kb_file');
+  const file = fileInput?.files?.[0];
+  if (!file) { alert('Selecione um arquivo PDF, TXT ou imagem.'); return; }
+
+  const statusEl = qs('cp_plan_kb_status');
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--muted)">Enviando e extraindo texto com IA...</span>';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const headers = {};
+    if (window._apiKey) headers['X-API-Key'] = window._apiKey;
+    const res = await fetch(`/api/companies/${_clienteCurrent.id}/plans/${planId}/kb`, {
+      method: 'POST', body: fd, headers,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao enviar arquivo.');
+    await cpLoadCatalogData();
+    cpShowPlanKbModal(planId);
+    toast(`Documento do plano '${file.name}' adicionado com sucesso!`, 'good');
+  } catch (e) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
+}
+
+async function cpClearPlanKb(planId) {
+  if (!_clienteCurrent || !confirm('Limpar toda a base de conhecimento deste subproduto/plano?')) return;
+  try {
+    await apiFetch(`/api/companies/${_clienteCurrent.id}/plans/${planId}/kb`, { method: 'DELETE' });
+    await cpLoadCatalogData();
+    cpShowPlanKbModal(planId);
+    toast('Base KB do plano limpa.', 'good');
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+async function cpShowCopyModal() {
+  const container = qs('cp_form_container');
+  if (!container) return;
+
+  try {
+    const res = await apiFetch(`/api/companies/${_clienteCurrent.id}/products/copy-sources`);
+    const sources = res.sources || [];
+
+    if (!sources.length) {
+      container.innerHTML = `
+        <div class="card" style="border:1px solid var(--border);border-radius:12px;padding:16px;background:#18181b">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="margin:0;color:#fff">📋 Copiar Produtos de Outro Cliente</h3>
+            <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+          </div>
+          <div style="color:var(--muted);font-size:13px;padding:10px 0">Nenhum outro cliente possui produtos cadastrados para copiar.</div>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="card" style="border:1px solid var(--pri);border-radius:12px;padding:16px;background:#121214">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0;color:#fff">📋 Copiar Produtos de Outro Cliente</h3>
+          <button class="btn" style="padding:2px 8px" onclick="cpCloseForm()">✕</button>
+        </div>
+        <p style="color:var(--muted);font-size:12px;margin:0 0 12px">
+          Selecione a empresa de origem para duplicar os produtos e seus dados essenciais para ${esc(_clienteCurrent.name)}.
+        </p>
+
+        <div style="margin-bottom:12px">
+          <label>Cliente de Origem:</label>
+          <select id="cp_copy_source_id" style="height:36px;padding:0 8px;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:6px;width:100%">
+            ${sources.map(s => `<option value="${s.company_id}">${esc(s.company_name)} (${s.products.length} produtos)</option>`).join('')}
+          </select>
+        </div>
+
+        <div id="cp_copy_msg" style="margin-top:8px"></div>
+
+        <div class="row" style="margin-top:14px;gap:8px">
+          <button class="btn primary" onclick="cpExecuteCopy()">Copiar Todos os Produtos</button>
+          <button class="btn" onclick="cpCloseForm()">Cancelar</button>
+        </div>
+      </div>
+    `;
+    container.scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    alert('Erro ao carregar lista de origens: ' + e.message);
+  }
+}
+
+async function cpExecuteCopy() {
+  if (!_clienteCurrent) return;
+  const sourceCid = qs('cp_copy_source_id')?.value;
+  if (!sourceCid) return;
+
+  const msgEl = qs('cp_copy_msg');
+  if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted)">Copiando produtos...</span>';
+
+  try {
+    const res = await apiFetch(`/api/companies/${_clienteCurrent.id}/products/copy`, {
+      method: 'POST',
+      body: JSON.stringify({ source_company_id: sourceCid }),
+    });
+    cpCloseForm();
+    await cpLoadCatalogData();
+    toast(`${res.count || 0} produto(s) copiado(s) com sucesso!`, 'good');
+  } catch (e) {
+    if (msgEl) msgEl.innerHTML = `<span style="color:var(--bad)">Erro: ${esc(e.message)}</span>`;
+  }
 }
 
 function clienteRenderGerar(c, el) {
