@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "caripost-*"]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compilar todos os módulos Python
+        run: |
+          python -m compileall -q app scripts tests \
+            -x 'docs/marcos/backups' \
+            && echo "compileall OK"
+
+      - name: Versões em sincronia (main.py / OS / cache-bust)
+        run: python .github/scripts/check_version_sync.py
+
+      - name: Nenhum segredo óbvio versionado
+        run: |
+          ! git ls-files | grep -E '(^|/)(\.env$|.*\.env$|.*\.db$|.*\.sqlite3?$|.*\.zip$)' \
+            || (echo "arquivo sensível versionado" && exit 1)

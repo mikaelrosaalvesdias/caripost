@@ -64,3 +64,12 @@ caripost-os/
 .playwright-cli/
 node-compile-cache/
 node-jiti/
+
+# Artefatos locais e material bruto
+uploads/
+video-porra/
+test-results/
+graphify-out/
+caripost-os/
+*.zip
+.encryption_key.env

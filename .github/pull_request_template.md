@@ -1,22 +1,27 @@
 ## Resumo
 
-- Descreva a mudanca em uma frase.
+<!-- O que muda, em uma frase. -->
 
-## Validacao
+## Motivo
 
-- [ ] `python -m py_compile app/db.py app/main.py`
-- [ ] `node --check app/ui/app.js`
-- [ ] `git diff --check`
-- [ ] Fluxo real validado quando aplicavel
+<!-- Que dor operacional isso resolve. -->
 
-## Versao e Changelog
+## Como foi validado
 
-- [ ] `app/main.py` atualizado
-- [ ] `app/ui/index.html` atualizado
-- [ ] cache bust `app.js?v=...` atualizado
-- [ ] `app/ui/app.js` atualizado
-- [ ] `CHANGELOG.md` atualizado quando aplicavel
+<!-- Comandos rodados e o que você viu. Print/arte gerada quando mexe no motor criativo. -->
 
-## Seguranca
+```
+```
 
-- [ ] Sem `.env`, banco, midia, log, token ou arquivo local no diff
+## Risco em produção
+
+<!-- O que pode quebrar e como reverter. "Nenhum" também é resposta, se for verdade. -->
+
+## Checklist
+
+- [ ] Versões em sincronia (`app/main.py`, `MP_OS_VERSION`, `?v=` do `index.html`)
+- [ ] Cache-bust do `.jsx` alterado
+- [ ] `CHANGELOG.md` e changelog interno (`app/ui/app.js`) atualizados
+- [ ] `python3 docs/marcos/regressao_check.py` rodado antes e depois (se mexeu no motor criativo)
+- [ ] Sem secrets, mídia, banco ou dado de cliente no diff
+- [ ] Deploy confirmado no ar (se já entregue)

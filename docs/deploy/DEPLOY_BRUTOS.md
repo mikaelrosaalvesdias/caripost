@@ -94,7 +94,7 @@ Se algum arquivo estiver ausente, PARE e reporte. O rsync do servidor de origem 
 ## FASE 4 — Criar stack.yml adaptado (sem Traefik)
 
 ```bash
-cat > /root/caripost/stack.brutos.yml << 'EOF'
+cat > /root/caripost/deploy/stack.brutos.yml << 'EOF'
 version: '3.8'
 
 volumes:
@@ -123,8 +123,8 @@ services:
         max_attempts: 3
 EOF
 
-echo "✅ stack.brutos.yml criado"
-cat /root/caripost/stack.brutos.yml
+echo "✅ deploy/stack.brutos.yml criado"
+cat /root/caripost/deploy/stack.brutos.yml
 ```
 
 ---
@@ -153,7 +153,7 @@ tail -40 /tmp/docker-build.log
 cd /root/caripost
 
 # 6.1 Deploy
-docker stack deploy -c stack.brutos.yml caripost
+docker stack deploy -c deploy/stack.brutos.yml caripost
 
 # 6.2 Aguardar inicialização
 sleep 35

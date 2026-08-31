@@ -1,0 +1,29 @@
+name: Melhoria
+description: Nova capacidade ou ajuste de comportamento
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Problema
+      description: Que dor operacional isso resolve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposta
+    attributes:
+      label: Proposta
+    validations:
+      required: true
+  - type: textarea
+    id: impacto
+    attributes:
+      label: Impacto em produção
+      description: Mexe no motor criativo, em migrations, em envs ou em nomes de infra?
+  - type: checkboxes
+    id: check
+    attributes:
+      label: Checagens
+      options:
+        - label: Precisa rodar docs/marcos/regressao_check.py antes e depois
+        - label: Precisa de bump das 3 strings de versão + cache-bust

@@ -1,0 +1,48 @@
+name: Bug
+description: Algo quebrado na plataforma
+labels: ["bug"]
+body:
+  - type: input
+    id: versao
+    attributes:
+      label: Versão
+      description: Canto do Caripost OS ou /health da API (ex.: 1.27.122)
+      placeholder: "1.27.122"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Caripost OS (interface)
+        - Motor criativo (post/story/carrossel)
+        - Vídeo
+        - Clientes / produtos / KB
+        - Publicação e agenda
+        - Mídia, transcrição e legendas
+        - Deploy / infraestrutura
+        - Outra
+    validations:
+      required: true
+  - type: textarea
+    id: passos
+    attributes:
+      label: Como reproduzir
+      placeholder: |
+        1. Abrir ...
+        2. Clicar em ...
+        3. Erro aparece
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: O que era esperado
+    validations:
+      required: true
+  - type: textarea
+    id: evidencia
+    attributes:
+      label: Evidência
+      description: Print, run_id, trecho de log. Não cole chaves nem dados de cliente.
