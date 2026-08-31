@@ -1,4 +1,4 @@
-# 🔍 Diagnóstico Pré-Deploy — MetaPorn (adult-meta)
+# 🔍 Diagnóstico Pré-Deploy — Caripost (caripost)
 
 > Execute todos os blocos abaixo **antes de qualquer deploy**. Não modifique nada na máquina. Apenas leia, inspecione e reporte. O objetivo é mapear se este ambiente suporta o projeto sem conflitar com o que já está rodando.
 
@@ -161,7 +161,7 @@ ss -tlnp | grep LISTEN
 docker volume ls
 
 # Verificar se já existe o volume do projeto
-docker volume inspect adult_meta_data 2>/dev/null && echo "✅ Volume já existe (dados preservados)" || echo "Volume adult_meta_data não existe (será criado no deploy)"
+docker volume inspect caripost_data 2>/dev/null && echo "✅ Volume já existe (dados preservados)" || echo "Volume caripost_data não existe (será criado no deploy)"
 ```
 
 ---
@@ -170,7 +170,7 @@ docker volume inspect adult_meta_data 2>/dev/null && echo "✅ Volume já existe
 
 ```bash
 # Verificar se a imagem já foi buildada
-docker images | grep adult-meta || echo "Imagem adult-meta:latest não encontrada — precisa fazer build"
+docker images | grep caripost || echo "Imagem adult-meta:latest não encontrada — precisa fazer build"
 
 # Espaço total de imagens
 docker system df
@@ -244,11 +244,11 @@ df -h / | tail -1
 ## 14. Conflitos de Nome — Stacks e Serviços
 
 ```bash
-# Verificar se já existe stack 'metaporn'
-docker stack ls | grep metaporn || echo "Stack 'metaporn' não existe (deploy limpo)"
+# Verificar se já existe stack 'caripost'
+docker stack ls | grep caripost || echo "Stack 'caripost' não existe (deploy limpo)"
 
 # Verificar se já existe serviço com esse nome
-docker service ls | grep -E "adult-meta|metaporn" || echo "Nenhum serviço adult-meta/metaporn encontrado"
+docker service ls | grep -E "caripost|caripost" || echo "Nenhum serviço caripost/caripost encontrado"
 
 # Verificar routers Traefik que podem conflitar
 docker service ls --format "{{.Name}}" | while read svc; do
@@ -259,7 +259,7 @@ try:
     for s in data:
         labels = s.get('Spec',{}).get('Labels',{})
         for k,v in labels.items():
-            if 'metaporn' in v.lower() or 'adult' in v.lower():
+            if 'caripost' in v.lower() or 'adult' in v.lower():
                 print(f'  CONFLITO POTENCIAL em $svc: {k}={v}')
 except: pass
   " 2>/dev/null
@@ -302,7 +302,7 @@ Após executar todos os blocos acima, responda:
 | Porta 8765 livre no host? | ✅ / ❌ |
 | MinIO `s3.n8nmikael.com.br` acessível? | ✅ / ❌ |
 | DNS `caripost.n8nmikael.com.br` → IP desta máquina? | ✅ / ❌ |
-| Volume `adult_meta_data` já existe? | ✅ / ❌ (novo) |
+| Volume `caripost_data` já existe? | ✅ / ❌ (novo) |
 | Imagem `adult-meta:latest` já existe? | ✅ / ❌ (precisa build) |
 | Nenhum conflito de nome de serviço/router? | ✅ / ❌ |
 | Disco livre suficiente (>2GB)? | ✅ / ❌ |
@@ -319,4 +319,4 @@ Após executar todos os blocos acima, responda:
 3. **NÃO crie volumes, redes ou secrets.**
 4. Execute cada bloco acima **exatamente como está**, capture a saída e monte o relatório com a tabela de decisão preenchida.
 5. Se algum comando falhar por falta de permissão, reporte isso como item crítico.
-6. Ao final, sintetize em linguagem natural: **"Este ambiente está PRONTO / NÃO ESTÁ PRONTO para o deploy do MetaPorn"**, listando os blockers encontrados.
+6. Ao final, sintetize em linguagem natural: **"Este ambiente está PRONTO / NÃO ESTÁ PRONTO para o deploy do Caripost"**, listando os blockers encontrados.

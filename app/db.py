@@ -11,24 +11,24 @@ from urllib.parse import quote
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "runs.db"
 
 # Allow overriding DB location (for container volumes)
-_env_db = os.environ.get("ADULT_META_DB_PATH")
+_env_db = os.environ.get("CARIPOST_DB_PATH")
 if _env_db:
     DB_PATH = Path(_env_db)
 
 try:
-    SQLITE_TIMEOUT_SEC = max(5.0, float(os.environ.get("ADULT_META_SQLITE_TIMEOUT_SEC", "30").strip()))
+    SQLITE_TIMEOUT_SEC = max(5.0, float(os.environ.get("CARIPOST_SQLITE_TIMEOUT_SEC", "30").strip()))
 except Exception:
     SQLITE_TIMEOUT_SEC = 30.0
 try:
-    SQLITE_BUSY_TIMEOUT_MS = max(5000, int(os.environ.get("ADULT_META_SQLITE_BUSY_TIMEOUT_MS", "30000").strip()))
+    SQLITE_BUSY_TIMEOUT_MS = max(5000, int(os.environ.get("CARIPOST_SQLITE_BUSY_TIMEOUT_MS", "30000").strip()))
 except Exception:
     SQLITE_BUSY_TIMEOUT_MS = 30000
 try:
-    SQLITE_LOCK_RETRIES = max(0, int(os.environ.get("ADULT_META_SQLITE_LOCK_RETRIES", "3").strip()))
+    SQLITE_LOCK_RETRIES = max(0, int(os.environ.get("CARIPOST_SQLITE_LOCK_RETRIES", "3").strip()))
 except Exception:
     SQLITE_LOCK_RETRIES = 3
 try:
-    SQLITE_LOCK_RETRY_SLEEP_SEC = max(0.05, float(os.environ.get("ADULT_META_SQLITE_LOCK_RETRY_SLEEP_SEC", "0.25").strip()))
+    SQLITE_LOCK_RETRY_SLEEP_SEC = max(0.05, float(os.environ.get("CARIPOST_SQLITE_LOCK_RETRY_SLEEP_SEC", "0.25").strip()))
 except Exception:
     SQLITE_LOCK_RETRY_SLEEP_SEC = 0.25
 

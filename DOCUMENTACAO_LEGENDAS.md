@@ -6,7 +6,7 @@ Escopo: transcricao, limpeza, edicao SRT, traducao, preview e queima de legenda 
 
 ## 1. Visao geral
 
-O sistema de legendas do MetaPorn tem cinco etapas principais:
+O sistema de legendas do Caripost tem cinco etapas principais:
 
 1. O video original entra no sistema por upload, arquivo local ou arquivo do servidor.
 2. A transcricao gera texto, segmentos com tempo e SRT.
@@ -503,7 +503,7 @@ Configuracao importante:
 
 ```text
 O fallback no_vad_rescue NAO roda por padrao.
-Ele so roda se ADULT_META_PREMIUM_NO_VAD_RESCUE=true.
+Ele so roda se CARIPOST_PREMIUM_NO_VAD_RESCUE=true.
 ```
 
 Motivo:
@@ -1469,10 +1469,10 @@ Arquivo original corrompido
 
 ```text
 OPENROUTER_STT_MODEL
-ADULT_META_PREMIUM_NO_VAD_RESCUE
+CARIPOST_PREMIUM_NO_VAD_RESCUE
 FFMPEG_BURN_THREADS
-ADULT_META_MEDIA_ROOT
-ADULT_META_MEDIA_TMP_ROOT
+CARIPOST_MEDIA_ROOT
+CARIPOST_MEDIA_TMP_ROOT
 ```
 
 Tokens salvos em Settings:

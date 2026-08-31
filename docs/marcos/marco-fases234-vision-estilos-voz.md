@@ -1,6 +1,6 @@
 # Marco Fases 2–4 — Vision do produto + Estilos virais + Gate por cena + Voz premium (v1.27.16)
 
-Fecha o roadmap de `workflow-video-reestruturado.md`. No ar em `metaporn-new:1.27.16`
+Fecha o roadmap de `workflow-video-reestruturado.md`. No ar em `caripost-new:1.27.16`
 (`caripost.cariap.com.br/os/` em `?v=12716`, serviço converged).
 
 ## Fase 2 — Vision do produto (Estágio A)

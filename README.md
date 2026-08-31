@@ -1,22 +1,25 @@
-# MetaPorn
+# Caripost
 
-Plataforma operacional para agencia de criadores adultos. O projeto centraliza ingestao de midia, analise por IA, transcricao, legendas, aplicacao de logo, criacao de publicacoes, calendario editorial, gestao financeira, DMCA, portal do criador e automacoes de distribuicao.
+Plataforma SaaS de criacao e publicacao de conteudo para redes sociais. O projeto centraliza cadastro de clientes/produtos, base de conhecimento por marca, geracao de posts, stories, carrosseis e videos com IA, agenda editorial, publicacao nas redes e acompanhamento dos resultados.
 
 > Status: aplicacao privada em evolucao ativa. Nao publique `.env`, bancos, arquivos de midia, tokens ou dados de clientes neste repositorio.
 
 ## Visao Geral
 
-O MetaPorn foi desenhado como um painel SaaS interno: rapido para operar, com filas visiveis, logs de processamento, historico de criacoes e controles de seguranca para nao perder rastreabilidade.
+O Caripost e um painel multi-empresa: cada cliente tem sua identidade visual, produtos, planos/subprodutos e base de conhecimento, e o motor criativo usa esses dados para gerar arte e texto no tom da marca.
 
 Principais capacidades:
 
-- Upload e catalogo de videos, imagens e assets de criadores.
-- Criacao de posts a partir de videos brutos, com legenda, logo, teaser e metadados.
-- Transcricao PT-BR com edicao de SRT, traducao e queima de legendas via FFmpeg.
-- Aplicacao de logos com preview e burn mantendo proporcao visual.
-- Exclusao de runs/criacoes com limpeza de jobs, registros relacionados e arquivos seguros.
-- AutoEditor, Video Enhancer, publicador, calendario, tendencias, financeiro e DMCA.
-- Portal React/Vite para criadores acompanharem conteudo, ganhos, perfil e calendario.
+- Cadastro de empresas, produtos, planos/subprodutos, identidade visual e base de conhecimento (PDF/TXT).
+- Motor criativo com IA: post, story, carrossel editorial e video, respeitando briefing e formato.
+- Estudio de imagem por referencia (arte inteira pela IA) e compositor proprio em PIL.
+- Upload e catalogo de midia, transcricao PT-BR, edicao de SRT, traducao e queima de legendas via FFmpeg.
+- Aplicacao de logo com preview, AutoEditor e Video Enhancer.
+- Agenda editorial, publicador para redes sociais, tendencias e financeiro.
+- Caripost OS (`app/os/`): interface principal em JSX; `app/ui/` e o painel legado ainda embutido.
+- Portal React/Vite para o cliente acompanhar conteudo, entregas e calendario.
+
+> Heranca: o projeto nasceu como "MetaPorn/adult-meta", voltado a agencias de conteudo adulto. Nomes de infra (servico `metaporn-new_adult-meta`, imagem `adult-meta`, bucket `metaporn`, volumes e rede) e alguns modulos daquela fase (DMCA, publisher Pornhub, prompts de transcricao adulta) ainda existem e sao mantidos por compatibilidade. Variaveis `ADULT_META_*` continuam aceitas como fallback de `CARIPOST_*` (ver `app/__init__.py`).
 
 ## Arquitetura
 
@@ -82,7 +85,7 @@ Depois do deploy, valide a versao exposta pelo app e o status do container:
 
 ```bash
 curl -s https://caripost.n8nmikael.com.br/ | grep -o "v1\\.[0-9][0-9]\\.[0-9][0-9]" | sort -u
-docker ps --filter name=adult-meta
+docker ps --filter name=caripost
 ```
 
 ## Versao, Changelog e Git
@@ -120,10 +123,10 @@ Nao versionar:
 
 Configure em producao:
 
-- `ADULT_META_API_KEY`
+- `CARIPOST_API_KEY`
 - `AUTH_SESSION_SECRET`
 - `PORTAL_JWT_SECRET`
-- `ADULT_META_MEDIA_URL_SECRET`
+- `CARIPOST_MEDIA_URL_SECRET`
 - credenciais S3/MinIO e tokens de IA via ambiente ou storage seguro.
 
 ## Licenca

@@ -1291,7 +1291,7 @@ def accept_kie_callback(payload: Dict[str, Any]) -> bool:
         _KIE_CALLBACK_COND.notify_all()
     try:
         import time as _tm
-        root = os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db"))
+        root = os.path.dirname(os.environ.get("CARIPOST_DB_PATH", "/data/runs.db"))
         path = os.path.join(root, "kie_callbacks.jsonl")
         os.makedirs(root, exist_ok=True)
         info = data.get("info") if isinstance(data.get("info"), dict) else {}
@@ -1315,7 +1315,7 @@ def accept_kie_callback(payload: Dict[str, Any]) -> bool:
 def _wait_kie_callback(task_id: str, timeout: float) -> Optional[Dict[str, Any]]:
     import time as _tm
     deadline = _tm.monotonic() + timeout
-    root = os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db"))
+    root = os.path.dirname(os.environ.get("CARIPOST_DB_PATH", "/data/runs.db"))
     callback_path = os.path.join(root, f"kie_callback_{task_id}.json")
     while _tm.monotonic() < deadline:
         with _KIE_CALLBACK_COND:
@@ -1347,7 +1347,7 @@ def _kie_ledger(task_id: str, model: str, endpoint: str = "jobs"):
         import json as _json
         import time as _tm
         # no VOLUME /data (junto do runs.db) — /media/_tmp tem varredor de temporários que APAGOU o ledger
-        p = os.path.join(os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")), "kie_tasks.jsonl")
+        p = os.path.join(os.path.dirname(os.environ.get("CARIPOST_DB_PATH", "/data/runs.db")), "kie_tasks.jsonl")
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "a") as f:
             f.write(_json.dumps({"ts": _tm.time(), "task_id": task_id, "model": model, "endpoint": endpoint}) + "\n")

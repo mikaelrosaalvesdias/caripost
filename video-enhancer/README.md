@@ -1,4 +1,4 @@
-# Video Enhancer — Adult Meta
+# Video Enhancer — Caripost
 
 Módulo de melhoria de qualidade de vídeo usando [Video2X](https://github.com/k4yt3x/video2x).
 

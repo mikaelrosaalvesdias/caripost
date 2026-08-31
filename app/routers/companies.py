@@ -493,7 +493,7 @@ async def save_creative_config(company_id: str, request: Request):
 # Logo upload
 # ─────────────────────────────────────────────────────────────────────────────
 
-UPLOAD_DIR = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+UPLOAD_DIR = os.environ.get("CARIPOST_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
 UPLOAD_URL_PREFIX = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
 _MAX_LOGO_UPLOAD_BYTES = 10 * 1024 * 1024
 

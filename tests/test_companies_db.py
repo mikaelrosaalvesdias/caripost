@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 
 _temp_dir = tempfile.TemporaryDirectory()
-os.environ["ADULT_META_DB_PATH"] = os.path.join(_temp_dir.name, "companies-test.db")
+os.environ["CARIPOST_DB_PATH"] = os.path.join(_temp_dir.name, "companies-test.db")
 
 from app import db  # noqa: E402
 from app import db_companies as companies_db  # noqa: E402

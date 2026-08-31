@@ -1,7 +1,7 @@
 # Marco Fase 1 — Personagem consistente + Roteiro estruturado + Editor por cena (v1.27.14)
 
 Implementa os Estágios **B + C + D(parcial)** do `workflow-video-reestruturado.md`. No ar em
-`metaporn-new:1.27.14` (serviço `metaporn-new_adult-meta`, converged; `caripost.cariap.com.br/os/` em `?v=12714`).
+`caripost-new:1.27.14` (serviço `metaporn-new_adult-meta`, converged; `caripost.cariap.com.br/os/` em `?v=12714`).
 
 ## O que mudou tecnicamente
 
@@ -32,7 +32,7 @@ Implementa os Estágios **B + C + D(parcial)** do `workflow-video-reestruturado.
 - Tudo overridável por empresa via `creative_config.briefing` (templates do storyboard).
 
 ## Como testei (custo zero)
-`py_compile` OK + **dry-run no container** (`metaporn-new:1.27.14`) com `complete_ai` stubado: storyboard
+`py_compile` OK + **dry-run no container** (`caripost-new:1.27.14`) com `complete_ai` stubado: storyboard
 de 15s →
 - **2 cenas**; `character_map=True` nas duas;
 - o **acessório-âncora ("brinco pequeno em formato de estrela") aparece nas DUAS cenas** (personagem travado);

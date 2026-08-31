@@ -1173,7 +1173,7 @@ async def _rehost_media(local_url: str, is_video: bool,
 
     # Resolver o caminho local do arquivo a partir da URL
     upload_prefix = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
-    media_root = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+    media_root = os.environ.get("CARIPOST_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
     # Handle full URLs like https://domain.com/uploads/...
     from urllib.parse import unquote, urlparse
     parsed = urlparse(str(local_url or ""))

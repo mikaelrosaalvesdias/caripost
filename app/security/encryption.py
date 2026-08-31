@@ -7,7 +7,8 @@ Usage:
     safe = encrypt("secret_cookies_json")
     original = decrypt(safe)
 
-Set METAPORN_ENCRYPTION_KEY in environment (32-byte base64url key).
+Set CARIPOST_ENCRYPTION_KEY in environment (32-byte base64url key).
+Legado: METAPORN_ENCRYPTION_KEY ainda e aceito como fallback (deploys antigos).
 Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 """
 from __future__ import annotations
@@ -19,7 +20,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_KEY_ENV = "METAPORN_ENCRYPTION_KEY"
+_KEY_ENV = "CARIPOST_ENCRYPTION_KEY"
+# Nome antigo mantido como fallback: a chave em producao ainda esta sob ele e
+# trocar sem fallback tornaria ilegivel tudo que ja foi criptografado.
+_LEGACY_KEY_ENV = "METAPORN_ENCRYPTION_KEY"
 _fernet = None
 
 
@@ -33,22 +37,22 @@ def _get_fernet():
         logger.warning("cryptography package not installed — encryption disabled")
         return None
 
-    raw_key = os.environ.get(_KEY_ENV, "").strip()
+    raw_key = os.environ.get(_KEY_ENV, "").strip() or os.environ.get(_LEGACY_KEY_ENV, "").strip()
     if not raw_key:
         # Derive a deterministic (but weak) key from API_KEY if no dedicated key set
-        api_key = os.environ.get("ADULT_META_API_KEY", "metaporn-default-key-change-me")
+        api_key = os.environ.get("CARIPOST_API_KEY", "caripost-default-key-change-me")
         import hashlib
         digest = hashlib.sha256(api_key.encode()).digest()
         raw_key = base64.urlsafe_b64encode(digest).decode()
         logger.warning(
-            "METAPORN_ENCRYPTION_KEY not set — deriving from API key. "
+            "CARIPOST_ENCRYPTION_KEY not set — deriving from API key. "
             "Set a dedicated key for production security."
         )
     try:
         _fernet = Fernet(raw_key.encode())
         return _fernet
     except Exception as exc:
-        logger.error("Invalid METAPORN_ENCRYPTION_KEY: %s", exc)
+        logger.error("Invalid CARIPOST_ENCRYPTION_KEY: %s", exc)
         return None
 
 

@@ -1,3 +1,7 @@
+# NOTA: os nomes de servico/volume/rede/bucket abaixo (adult-meta, adult_meta_data,
+# metaporn_internal, bucket "metaporn") sao IDENTIFICADORES DE INFRA em producao.
+# O produto se chama Caripost, mas renomea-los aqui cria volumes/rede/bucket novos
+# e derruba dados e uploads. So renomeie junto com uma migracao planejada.
 version: '3.8'
 
 networks:
@@ -21,9 +25,9 @@ services:
       S3_SECRET_ACCESS_KEY: "${S3_SECRET_ACCESS_KEY}"
       S3_BUCKET: "${S3_BUCKET:-metaporn}"
       S3_PUBLIC_BASE_URL: "${S3_PUBLIC_BASE_URL}"
-      ADULT_META_API_KEY: "${ADULT_META_API_KEY}"
-      ADULT_META_MEDIA_ROOT: "/media"
-      ADULT_META_MEDIA_URL_SECRET: "${ADULT_META_MEDIA_URL_SECRET}"
+      CARIPOST_API_KEY: "${CARIPOST_API_KEY}"
+      CARIPOST_MEDIA_ROOT: "/media"
+      CARIPOST_MEDIA_URL_SECRET: "${CARIPOST_MEDIA_URL_SECRET}"
       METAPORN_ENCRYPTION_KEY: "${METAPORN_ENCRYPTION_KEY}"
       PORTAL_JWT_SECRET: "${PORTAL_JWT_SECRET}"
       AUTH_SESSION_SECRET: "${AUTH_SESSION_SECRET}"

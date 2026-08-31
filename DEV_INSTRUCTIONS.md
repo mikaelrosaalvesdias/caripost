@@ -1,4 +1,4 @@
-# Instruções de Desenvolvimento — Adult Meta
+# Instruções de Desenvolvimento — Caripost
 
 > Este arquivo deve ser consultado ANTES de qualquer alteração no código.
 
@@ -66,7 +66,7 @@ curl -s -X POST https://caripost.n8nmikael.com.br/api/ENDPOINT \
 curl -s https://caripost.n8nmikael.com.br/ | grep -o "v1\.[0-9][0-9]\.[0-9]" | sort -u
 
 # Verificar versão no container
-CONTAINER=$(docker ps --filter name=adult-meta --format '{{.ID}}' | head -1)
+CONTAINER=$(docker ps --filter name=caripost --format '{{.ID}}' | head -1)
 docker exec $CONTAINER python3 -c "from app.main import app; print(app.version)"
 ```
 
@@ -77,7 +77,7 @@ docker exec $CONTAINER python3 -c "from app.main import app; print(app.version)"
 O deploy **não deve ser executado automaticamente** a não ser que o usuário autorize explicitamente. Quando autorizado:
 
 ```bash
-cd /var/www/adult-meta && docker build -t adult-meta:latest . && docker service update --force metaporn_adult-meta
+cd /var/www/caripost && docker build -t adult-meta:latest . && docker service update --force metaporn_adult-meta
 ```
 
 Antes de buildar, validar que os 4 lugares da versão estão consistentes (ver seção 3).

@@ -73,7 +73,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Adult Meta (internal)", version="1.27.122")
+app = FastAPI(title="Caripost (internal)", version="1.27.122")
 
 
 @app.middleware("http")
@@ -156,7 +156,7 @@ app.include_router(notify_router)
 app.include_router(billing_router)
 app.include_router(template_video_router)
 
-API_KEY = os.environ.get("ADULT_META_API_KEY")
+API_KEY = os.environ.get("CARIPOST_API_KEY")
 # Fail-closed: if the API key is ever absent (e.g. a stack redeploy that omits
 # the env), do NOT silently reopen the API. Open access requires an explicit
 # opt-in for local dev. Valid browser sessions always pass regardless of this.
@@ -167,6 +167,7 @@ S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "https://s3.n8nmikael.com.br
 S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 S3_ACCESS_KEY_ID = os.environ.get("S3_ACCESS_KEY_ID")
 S3_SECRET_ACCESS_KEY = os.environ.get("S3_SECRET_ACCESS_KEY")
+# Nome legado do bucket no MinIO — identificador real de storage, nao renomear.
 S3_BUCKET = os.environ.get("S3_BUCKET", "metaporn")
 S3_PUBLIC_BASE_URL = os.environ.get("S3_PUBLIC_BASE_URL", "https://s3.n8nmikael.com.br")
 S3_SINGLE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024 * 1024
@@ -174,15 +175,15 @@ S3_SINGLE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024 * 1024
 SUPPORTED_PROVIDER_NAMES = {"openai", "deepseek", "ollama", "openrouter", "grok", "gemini"}
 OBJECT_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/\-]{0,511}$")
 LOCAL_MEDIA_ROOT = (
-    os.environ.get("ADULT_META_MEDIA_ROOT", "").strip()
-    or ("/media" if os.path.isdir("/media") else os.path.join(os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")), "media"))
+    os.environ.get("CARIPOST_MEDIA_ROOT", "").strip()
+    or ("/media" if os.path.isdir("/media") else os.path.join(os.path.dirname(os.environ.get("CARIPOST_DB_PATH", "/data/runs.db")), "media"))
 )
 LOCAL_MEDIA_TMP_ROOT = (
-    os.environ.get("ADULT_META_MEDIA_TMP_ROOT", "").strip()
+    os.environ.get("CARIPOST_MEDIA_TMP_ROOT", "").strip()
     or os.path.join(LOCAL_MEDIA_ROOT, "_tmp")
 )
 try:
-    TMP_CLEANUP_MAX_AGE_HOURS = max(1, min(int(os.environ.get("ADULT_META_TMP_CLEANUP_MAX_AGE_HOURS", "18").strip()), 24 * 30))
+    TMP_CLEANUP_MAX_AGE_HOURS = max(1, min(int(os.environ.get("CARIPOST_TMP_CLEANUP_MAX_AGE_HOURS", "18").strip()), 24 * 30))
 except Exception:
     TMP_CLEANUP_MAX_AGE_HOURS = 18
 LOCAL_MEDIA_PREFIX = "local:"
@@ -193,8 +194,9 @@ MAX_LOGO_OVERLAYS = 6
 GOOGLE_DRIVE_SERVICE_ACCOUNT_SETTINGS_KEY = "google_drive:service_account_json"
 GOOGLE_DRIVE_FOLDER_SETTINGS_KEY = "google_drive:folder_id"
 LOCAL_MEDIA_URL_SECRET = (
-    os.environ.get("ADULT_META_MEDIA_URL_SECRET", "").strip()
+    os.environ.get("CARIPOST_MEDIA_URL_SECRET", "").strip()
     or API_KEY
+    # Fallback legado: trocar invalidaria URLs de midia ja assinadas.
     or "adult-meta-local-media"
 )
 
@@ -1391,13 +1393,13 @@ _LOCAL_WHISPER_MODEL_SIZE = "small"  # 465MB, bom custo-benefício no CPU
 # Modelo premium — cache separado, carregado sob demanda
 _premium_whisper_model = None
 _premium_whisper_model_name = ""
-_LOCAL_WHISPER_PREMIUM_MODEL = os.environ.get("ADULT_META_PREMIUM_WHISPER_MODEL", "large-v3").strip() or "large-v3"
+_LOCAL_WHISPER_PREMIUM_MODEL = os.environ.get("CARIPOST_PREMIUM_WHISPER_MODEL", "large-v3").strip() or "large-v3"
 
 def _get_local_whisper():
     global _local_whisper_model
     if _local_whisper_model is None:
         from faster_whisper import WhisperModel
-        db_path = os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")
+        db_path = os.environ.get("CARIPOST_DB_PATH", "/data/runs.db")
         model_dir = os.path.join(os.path.dirname(db_path), "models", "faster-whisper")
         os.makedirs(model_dir, exist_ok=True)
         _local_whisper_model = WhisperModel(
@@ -1486,7 +1488,7 @@ def _get_premium_whisper():
     global _premium_whisper_model, _premium_whisper_model_name
     if _premium_whisper_model is None:
         from faster_whisper import WhisperModel
-        db_path = os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")
+        db_path = os.environ.get("CARIPOST_DB_PATH", "/data/runs.db")
         model_dir = os.path.join(os.path.dirname(db_path), "models", "faster-whisper")
         os.makedirs(model_dir, exist_ok=True)
         requested = _LOCAL_WHISPER_PREMIUM_MODEL
@@ -1779,7 +1781,7 @@ def _transcribe_premium(
     model = _get_premium_whisper()
     expected_lang = _norm_lang_code(language) or "pt"
     attempts = _premium_vad_attempts()
-    if str(os.environ.get("ADULT_META_PREMIUM_NO_VAD_RESCUE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+    if str(os.environ.get("CARIPOST_PREMIUM_NO_VAD_RESCUE", "")).strip().lower() in {"1", "true", "yes", "on"}:
         attempts.append((
             "no_vad_rescue",
             {
@@ -2160,7 +2162,7 @@ async def _post_process_with_llm(
     """
     if not segments:
         return segments, {"status": "skipped", "reason": "no_segments"}
-    if str(os.environ.get("ADULT_META_TRANSCRIPT_LLM_POST", "1")).strip().lower() in {"0", "false", "no", "off"}:
+    if str(os.environ.get("CARIPOST_TRANSCRIPT_LLM_POST", "1")).strip().lower() in {"0", "false", "no", "off"}:
         return segments, {"status": "skipped", "reason": "disabled"}
     if _norm_lang_code(expected_lang) != "pt":
         return segments, {"status": "skipped", "reason": "non_pt_language"}
@@ -2494,7 +2496,7 @@ async def _translate_segments_llm(
             "Authorization": f"Bearer {openrouter_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://caripost.n8nmikael.com.br",
-            "X-Title": "MetaPorn Translation",
+            "X-Title": "Caripost Translation",
         }
         for or_model in or_models:
             result = await _try_provider(
@@ -4829,7 +4831,7 @@ async def _openrouter_stt_request(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://caripost.n8nmikael.com.br/",
-        "X-Title": "MetaPorn Admin",
+        "X-Title": "Caripost Admin",
     }
     response = await client.post(
         "https://openrouter.ai/api/v1/audio/transcriptions",
@@ -5404,11 +5406,11 @@ def _require_api_key(req: Request) -> Optional[dict]:
 # Serve legacy admin UI under /ui (kept for reference)
 app.mount("/ui", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "ui"), html=True), name="ui")
 
-# Serve MetaPorn OS design under /os
+# Serve Caripost OS design under /os
 app.mount("/os", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "os"), html=True), name="os")
 
 # Serve company uploads (logos, mood board references)
-_uploads_dir = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "data", "uploads"))
+_uploads_dir = os.environ.get("CARIPOST_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "data", "uploads"))
 os.makedirs(_uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
 
@@ -11132,7 +11134,7 @@ async def transcribe(req: TranscribeRequest, request: Request):
     # model repeat those instructions as subtitles, so we intentionally never
     # forward req.prompt to the transcription engine.
 
-    with tempfile.TemporaryDirectory(prefix="metaporn-", dir=_preferred_tmpdir_root("transcribe")) as td:
+    with tempfile.TemporaryDirectory(prefix="caripost-", dir=_preferred_tmpdir_root("transcribe")) as td:
         in_path      = os.path.join(td, "input")
         out_audio_wav = os.path.join(td, "audio.wav")
         out_audio_aac = os.path.join(td, "audio.m4a")
@@ -11150,7 +11152,7 @@ async def transcribe(req: TranscribeRequest, request: Request):
         if provider == "auto":
             configured_auto = [
                 c.strip().lower()
-                for c in str(os.environ.get("ADULT_META_TRANSCRIBE_AUTO_CANDIDATES", "")).split(",")
+                for c in str(os.environ.get("CARIPOST_TRANSCRIBE_AUTO_CANDIDATES", "")).split(",")
                 if c.strip()
             ]
             candidates = configured_auto or ["local", "whisper_sync", "openrouter"]
@@ -12333,7 +12335,7 @@ async def _openrouter_vision_chat_json(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://caripost.n8nmikael.com.br",
-        "X-Title": "MetaPorn Vision",
+        "X-Title": "Caripost Vision",
     }
     attempts: List[Dict[str, Any]] = []
 
@@ -13413,7 +13415,7 @@ async def telegram_test_webhook(request: Request):
     webhook_url = _tg_n8n_webhook_url()
     if not webhook_url:
         return JSONResponse({"error": "webhook_not_configured"}, status_code=400)
-    result = await _tg_call_n8n_webhook(webhook_url, {"test": True, "source": "adult-meta"})
+    result = await _tg_call_n8n_webhook(webhook_url, {"test": True, "source": "caripost"})
     return result
 
 

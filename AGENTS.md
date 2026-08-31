@@ -2,7 +2,7 @@
 
 Escopo: todo o repositorio.
 
-Este arquivo e a instrucao principal para qualquer IA ou desenvolvedor que atualize o MetaPorn.
+Este arquivo e a instrucao principal para qualquer IA ou desenvolvedor que atualize o Caripost.
 
 ## Regra Central
 

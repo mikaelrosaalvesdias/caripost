@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 _S3_ENDPOINT = os.environ.get("S3_ENDPOINT_URL", "https://s3.n8nmikael.com.br")
 _S3_KEY = os.environ.get("S3_ACCESS_KEY_ID")
 _S3_SECRET = os.environ.get("S3_SECRET_ACCESS_KEY")
+# Nome legado do bucket no MinIO — identificador real de storage, nao renomear.
 _S3_BUCKET = os.environ.get("S3_BUCKET", "metaporn")
 _S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 
@@ -101,7 +102,7 @@ async def run_publish_pipeline(job_id: str) -> None:
     n_platforms = max(1, len(platforms))
 
     # Download video to temp file
-    with tempfile.TemporaryDirectory(prefix="metaporn_pub_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="caripost_pub_") as tmpdir:
         video_ext = Path(video_key).suffix or ".mp4"
         video_local = os.path.join(tmpdir, f"video{video_ext}")
 

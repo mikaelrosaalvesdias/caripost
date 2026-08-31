@@ -4,6 +4,7 @@
 
   const STORAGE_KEY = 'mp_session_token';
   const LEGACY_SESSION_KEY = 'mp_session';
+  // Chave legada no localStorage — mantida para nao deslogar quem ja tinha sessao.
   const LEGACY_API_KEY = 'adult_meta_api_key';
   let _loginShown = false;
   let _isOpen = null;

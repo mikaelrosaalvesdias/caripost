@@ -22,7 +22,7 @@ por isso o botão ainda aparecia "Gerar roteiro do assunto" **sem** o sufixo "·
 - Nenhuma mudança de lógica/motor. Só cache-busting + versão.
 
 ## Deploy (no ar)
-- Build overlay `FROM metaporn-new:1.27.9` + `COPY app /app/app` → `metaporn-new:1.27.10` (evita 429 do Docker Hub).
+- Build overlay `FROM caripost-new:1.27.9` + `COPY app /app/app` → `caripost-new:1.27.10` (evita 429 do Docker Hub).
 - `docker service update --image metaporn-new:1.27.10 --update-order start-first metaporn-new_adult-meta` → **converged**.
 - Verificado ao vivo: `caripost.cariap.com.br/os/index.html` serve `apps-conteudo.jsx?v=12710`,
   e esse arquivo contém `const _vsecEff = ...` + label "· 15s". Zero tokens 12702/12790 sobrando.

@@ -20,10 +20,10 @@ Mantenha fora do Git:
 
 Variaveis obrigatorias em producao devem ser configuradas no ambiente ou em secret manager:
 
-- `ADULT_META_API_KEY`
+- `CARIPOST_API_KEY`
 - `AUTH_SESSION_SECRET`
 - `PORTAL_JWT_SECRET`
-- `ADULT_META_MEDIA_URL_SECRET`
+- `CARIPOST_MEDIA_URL_SECRET`
 - `S3_ACCESS_KEY_ID`
 - `S3_SECRET_ACCESS_KEY`
 - `S3_ENDPOINT_URL`

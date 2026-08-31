@@ -1,4 +1,4 @@
-/* MetaPorn OS — Modo Automático (fullscreen) + Assistente (wizard) */
+/* Caripost OS — Modo Automático (fullscreen) + Assistente (wizard) */
 
 const PIPE = [
   { k: 'upload',  ic: 'upload',     label: 'Upload' },

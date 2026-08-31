@@ -1,4 +1,4 @@
-# MetaPorn — Documentação do Projeto
+# Caripost — Documentação do Projeto
 
 > Ferramenta interna de automação de conteúdo adulto: desde a pesquisa de referências no XVideos até a geração de texto com IA, edição de vídeo e agendamento de publicação.
 
@@ -6,7 +6,7 @@
 
 ## Visão Geral
 
-O MetaPorn é uma aplicação web full-stack que centraliza o fluxo de criação de conteúdo adulto. Ele integra scraping de vídeos de referência, geração de textos/metadados por IA, transcrição de áudio, edição de vídeo (legendas, logo, teaser), armazenamento em nuvem e agendamento de posts.
+O Caripost é uma aplicação web full-stack que centraliza o fluxo de criação de conteúdo adulto. Ele integra scraping de vídeos de referência, geração de textos/metadados por IA, transcrição de áudio, edição de vídeo (legendas, logo, teaser), armazenamento em nuvem e agendamento de posts.
 
 **URL de produção:** `https://caripost.n8nmikael.com.br`
 
@@ -44,7 +44,7 @@ O MetaPorn é uma aplicação web full-stack que centraliza o fluxo de criação
 | Tecnologia | Papel |
 |---|---|
 | **Docker** | Containerização da aplicação |
-| **Docker Swarm** | Orquestração (stack `metaporn`) |
+| **Docker Swarm** | Orquestração (stack `caripost`) |
 | **Traefik** | Reverse proxy + TLS automático (Let's Encrypt) |
 | **MinIO** | Storage S3-compatible auto-hospedado (`s3.n8nmikael.com.br`) |
 | **Debian Slim** | Base do container (`python:3.12-slim`) |
@@ -67,7 +67,7 @@ O MetaPorn é uma aplicação web full-stack que centraliza o fluxo de criação
 ## Arquitetura dos Arquivos
 
 ```
-adult-meta/
+caripost/
 ├── Dockerfile               # Build da imagem Docker
 ├── requirements.txt         # Dependências Python
 ├── stack.yml                # Docker Swarm stack definition
@@ -300,7 +300,7 @@ Internet → Traefik (TLS/HTTPS) → Docker Swarm → Container adult-meta:lates
 ```
 
 - **Rede Docker:** `n8nmikaelnet` (externa, compartilhada com outros serviços)
-- **Volume:** `adult_meta_data` → mapeado para `/data` (SQLite + modelos Whisper)
+- **Volume:** `caripost_data` → mapeado para `/data` (SQLite + modelos Whisper)
 - **Memória:** limite 2 GB, reserva 128 MB
 - **Porta interna:** 8765
 - **Healthcheck:** GET `/health` a cada 10s
@@ -309,10 +309,10 @@ Internet → Traefik (TLS/HTTPS) → Docker Swarm → Container adult-meta:lates
 
 ```bash
 # Build
-docker build -t adult-meta:latest /root/clawd/adult-meta/
+docker build -t adult-meta:latest /root/clawd/caripost/
 
 # Deploy (primeira vez)
-docker stack deploy -c stack.yml metaporn
+docker stack deploy -c stack.yml caripost
 
 # Atualizar serviço em produção
 docker service update --force metaporn_adult-meta

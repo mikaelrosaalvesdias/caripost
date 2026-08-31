@@ -1,6 +1,6 @@
 # Marco 0 — Fundação: runner de migrations + fechar dev-mode
 
-**Versão:** v1.27.32 · **Deploy:** `metaporn-new:1.27.32` no serviço `metaporn-new_adult-meta` (convergido) · **Data:** 2026-07-01
+**Versão:** v1.27.32 · **Deploy:** `caripost-new:1.27.32` no serviço `metaporn-new_adult-meta` (convergido) · **Data:** 2026-07-01
 
 > Revisão pós-auditoria do Codex: adicionado **auth fail-closed** (v1.27.32) — ver seção 3.
 
@@ -20,9 +20,9 @@ Preparar a base para os marcos seguintes (que vão adicionar colunas `flow_id`, 
 As três inits (`init_db`, `init_agency_db`, `init_companies_db`) passaram a rodar **dentro de `schema_lock()`**, seguidas de `run_migrations(_locked=True)`. Uma só aquisição de lock por boot; sem self-deadlock.
 
 ### 3. Dev-mode fechado — agora **fail-closed** (v1.27.32)
-`ADULT_META_API_KEY` setado no serviço via `docker service update --env-add`. Ambas as funções de auth (`_require_api_key` main.py, `require_api_key` main_utils.py) **aceitam `X-Session-Token`** → sessões logadas e o OS seguem funcionando sem mudança no front.
+`CARIPOST_API_KEY` setado no serviço via `docker service update --env-add`. Ambas as funções de auth (`_require_api_key` main.py, `require_api_key` main_utils.py) **aceitam `X-Session-Token`** → sessões logadas e o OS seguem funcionando sem mudança no front.
 
-**Correção crítica (auditoria Codex):** antes, sem `ADULT_META_API_KEY` o código **abria** a API (`return None`) — se um redeploy dropasse o env, a plataforma reabria sozinha. Agora é **fail-closed**: sem chave e sem sessão válida → **rejeita**; acesso aberto só com opt-in explícito `ALLOW_OPEN_ACCESS=1` (dev). Sessão válida sempre passa (checada antes). Endpoints públicos legítimos (`/health`, `/runs/{id}/light`, OAuth `social /callback`) são **isentos** (não chamam a função de auth) → seguem abertos. Verificado no ar: `/runs/{id}/light` responde 200 sem chave; `/runs` sem chave → `unauthorized`, com chave → 200.
+**Correção crítica (auditoria Codex):** antes, sem `CARIPOST_API_KEY` o código **abria** a API (`return None`) — se um redeploy dropasse o env, a plataforma reabria sozinha. Agora é **fail-closed**: sem chave e sem sessão válida → **rejeita**; acesso aberto só com opt-in explícito `ALLOW_OPEN_ACCESS=1` (dev). Sessão válida sempre passa (checada antes). Endpoints públicos legítimos (`/health`, `/runs/{id}/light`, OAuth `social /callback`) são **isentos** (não chamam a função de auth) → seguem abertos. Verificado no ar: `/runs/{id}/light` responde 200 sem chave; `/runs` sem chave → `unauthorized`, com chave → 200.
 
 ## Auditoria (gate antes de fechar)
 Evidência empírica do `/data/open_access_audit.log` no container: **2 entradas** (1 browser + 1 teste curl manual). **Nenhuma integração automática** dependia do acesso aberto. Serviços internos (scheduler, publish-pipeline) usam chamadas **in-process** (sem HTTP); n8n é **outbound**; `/health` é isento. Risco de fechar: ~zero.

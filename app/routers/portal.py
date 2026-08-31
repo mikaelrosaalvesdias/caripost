@@ -25,7 +25,9 @@ from ..models.creator import CreatorPortalBrandingPublic
 
 router = APIRouter(prefix="/api/portal", tags=["portal"])
 
-_JWT_SECRET = os.environ.get("PORTAL_JWT_SECRET", os.environ.get("ADULT_META_API_KEY", "metaporn-portal-secret"))
+# Fallback legado de dev: em producao PORTAL_JWT_SECRET/CARIPOST_API_KEY estao setados;
+# trocar o literal invalidaria tokens emitidos sem env.
+_JWT_SECRET = os.environ.get("PORTAL_JWT_SECRET", os.environ.get("CARIPOST_API_KEY", "metaporn-portal-secret"))
 _JWT_EXPIRE_HOURS = 24
 
 

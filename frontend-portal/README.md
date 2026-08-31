@@ -1,4 +1,4 @@
-# MetaPorn Creator Portal
+# Caripost Creator Portal
 
 Portal separado para criadores, feito em React + Vite + Tailwind.
 
@@ -27,7 +27,7 @@ npm run build
 
 ```bash
 docker build \
-  --build-arg VITE_METAPORN_API_BASE=https://caripost.n8nmikael.com.br \
+  --build-arg VITE_CARIPOST_API_BASE=https://caripost.n8nmikael.com.br \
   -t frontend-portal:latest \
   ./frontend-portal
 ```

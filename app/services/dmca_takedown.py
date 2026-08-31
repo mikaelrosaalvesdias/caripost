@@ -39,7 +39,7 @@ Please send confirmation of compliance to: {contact_email}
 
 Respectfully,
 {creator_name}
-MetaPorn Agency — Content Protection Division
+Caripost — Content Protection
 Date: {date}
 """
 
@@ -82,7 +82,7 @@ async def send_takedown(infringement_id: str, contact_email: str = "dmca@caripos
             to=recipients,
             subject=f"DMCA Takedown Notice — {infringing_site}",
             text_body=notice_body,
-            from_name="MetaPorn DMCA Team",
+            from_name="Caripost DMCA Team",
         )
         if result.get("success"):
             dmca_update_status(infringement_id, "takedown_sent")

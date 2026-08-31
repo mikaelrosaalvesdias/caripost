@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 UPLOAD_DIR = os.environ.get(
-    "ADULT_META_MEDIA_ROOT",
+    "CARIPOST_MEDIA_ROOT",
     os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"),
 )
 UPLOAD_URL_PREFIX = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")

@@ -32,7 +32,7 @@ import os
 import uuid as _uuid
 from urllib.parse import unquote, urlparse
 
-UPLOAD_DIR = os.environ.get("ADULT_META_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+UPLOAD_DIR = os.environ.get("CARIPOST_MEDIA_ROOT", os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
 UPLOAD_URL_PREFIX = os.environ.get("UPLOAD_URL_PREFIX", "/uploads")
 
 
@@ -2381,7 +2381,7 @@ async def kie_recover(request: Request):
     ids = [str(x).strip() for x in (body.get("task_ids") or []) if str(x).strip()]
     minutes = int(body.get("minutes") or 180)
     if not ids:
-        led = os.path.join(os.path.dirname(os.environ.get("ADULT_META_DB_PATH", "/data/runs.db")), "kie_tasks.jsonl")
+        led = os.path.join(os.path.dirname(os.environ.get("CARIPOST_DB_PATH", "/data/runs.db")), "kie_tasks.jsonl")
         try:
             cut = _tm.time() - minutes * 60
             with open(led) as f:

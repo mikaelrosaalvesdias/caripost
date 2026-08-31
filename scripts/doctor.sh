@@ -3,7 +3,7 @@ set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-metaporn_adult-meta}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:8765}"
-MEDIA_HOST_ROOT="${ADULT_META_MEDIA_HOST_ROOT:-/var/www2/adult-meta-media}"
+MEDIA_HOST_ROOT="${CARIPOST_MEDIA_HOST_ROOT:-/var/www2/adult-meta-media}"
 
 say() {
   printf '\n== %s ==\n' "$1"

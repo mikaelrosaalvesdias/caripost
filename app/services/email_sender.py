@@ -21,7 +21,7 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@caripost.n8nmikael.com.br")
-SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "MetaPorn Agency")
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Caripost")
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
@@ -137,7 +137,7 @@ async def send_briefing_email(creator: Dict, briefing: Dict) -> Dict[str, Any]:
     html_body = f"""<!DOCTYPE html>
 <html><body style="font-family:Arial,sans-serif;background:#111;color:#fff;padding:24px;max-width:640px;margin:auto">
 <div style="text-align:center;margin-bottom:24px">
-  <h1 style="color:#ff1744">MetaPorn Agency</h1>
+  <h1 style="color:#ff1744">Caripost</h1>
   <p style="color:#888">Briefing Semanal de Tendências</p>
 </div>
 <p>Olá, <strong>{name}</strong>!</p>
@@ -150,7 +150,7 @@ async def send_briefing_email(creator: Dict, briefing: Dict) -> Dict[str, Any]:
 <ul style="color:#ccc">{avoid_list}</ul>
 <hr style="border-color:#333;margin:24px 0">
 <p style="color:#555;font-size:12px;text-align:center">
-  MetaPorn Agency — Conteúdo automatizado com IA<br>
+  Caripost — Conteúdo automatizado com IA<br>
   <a href="https://caripost.n8nmikael.com.br" style="color:#ff1744">caripost.n8nmikael.com.br</a>
 </p>
 </body></html>"""
@@ -159,7 +159,7 @@ async def send_briefing_email(creator: Dict, briefing: Dict) -> Dict[str, Any]:
         to=to,
         subject=f"📊 Briefing Semanal de Tendências — {name}",
         html_body=html_body,
-        from_name="MetaPorn Agency",
+        from_name="Caripost",
     )
 
 
@@ -177,7 +177,7 @@ async def send_monthly_report_email(creator: Dict, report: Dict) -> Dict[str, An
 
     html_body = f"""<!DOCTYPE html>
 <html><body style="font-family:Arial,sans-serif;background:#111;color:#fff;padding:24px;max-width:600px;margin:auto">
-<h1 style="color:#ff1744">MetaPorn Agency</h1>
+<h1 style="color:#ff1744">Caripost</h1>
 <h2>Relatório Mensal — {month}</h2>
 <p>Olá, <strong>{name}</strong>! Aqui está o resumo financeiro do mês:</p>
 <table style="width:100%;border-collapse:collapse;margin:16px 0">
@@ -194,7 +194,7 @@ async def send_monthly_report_email(creator: Dict, report: Dict) -> Dict[str, An
     <td style="padding:10px;border:1px solid #333">{views:,}</td>
   </tr>
 </table>
-<p style="color:#555;font-size:12px">MetaPorn Agency · <a href="https://caripost.n8nmikael.com.br" style="color:#ff1744">caripost.n8nmikael.com.br</a></p>
+<p style="color:#555;font-size:12px">Caripost · <a href="https://caripost.n8nmikael.com.br" style="color:#ff1744">caripost.n8nmikael.com.br</a></p>
 </body></html>"""
 
     return await send_email(

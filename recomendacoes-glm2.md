@@ -61,7 +61,7 @@ Mistura 23/24/30 no mesmo deploy. Década de quebração: browser vai cachear JS
 ### 2026-06-30 · issue #5 — Esconda UsersPanel do Marco 4 prematuro (alta · escopo)
 `UsersPanel` (`app/os/apps-manage.jsx:769-816`) chama `/auth/users`, `/auth/me`, `/auth/users/:id` (CRUD). O plano coloca auth real + papéis em **Marco 4** (multi-cliente). Expor esse painel agora, **com dev-mode aberto**, é perigoso: qualquer um cria usuário admin no sistema sem chave. O endpoint `/auth/users` provavelmente já exige role=admin no backend — confirmar; se não, é falha de segurança ativa.
 
-**Correção sugerida**: (a) confirmar que `/auth/users` exige role=admin e rejeita se `ADULT_META_API_KEY` vazio; (b) se não, **não subir** `UsersPanel` antes do Marco 0 fechar dev-mode; (c)理想 só revelar a aba "Usuários" no Settings quando `whoami().role === 'admin'` (já tem `meId`, falta checar role).
+**Correção sugerida**: (a) confirmar que `/auth/users` exige role=admin e rejeita se `CARIPOST_API_KEY` vazio; (b) se não, **não subir** `UsersPanel` antes do Marco 0 fechar dev-mode; (c)理想 só revelar a aba "Usuários" no Settings quando `whoami().role === 'admin'` (já tem `meId`, falta checar role).
 
 ### 2026-06-30 · issue #6 — `kie.credits` aprendido mas sem enforcement (média · coleta de débito)
 `generate_image_kie` (`ai.py`) aprende o custo real (`kie.credits.<model>`) e salva no `settings`. Bom. Mas o plano explicita: "**Billing com enforcement antes da geração, não só log de custo**". Hoje `generate_image_with_cost` chama `generate_image_kie` sem checar saldo — apenas aprende o custo depois. Não débita, não bloqueia. Isso é exatamente o que o plano avisa como futuro débito no Marco 4, mas o código está cimentando o padrão "log-only" que terá que ser refatorado depois.
@@ -101,7 +101,7 @@ Antes: `Tuple[int, int]` (n_cenas, per). Agora: `Tuple[int, List[int]]` (n_cenas
 - `ensure_column`/`ensure_index` helpers prontos para os Marcos 2/3 — e tolerante a "duplicate column name" (defensivo contra race residual).
 - Completou o doc `docs/marcos/marco-0-fundacao.md` descrevendo testes de idempotência e concorrência cross-process (8 processos → 1 aplica).
 - Wiring no `_startup()` em app/main.py:5449 — `init_db/init_agency_db/init_companies_db` rodam **dentro** de `schema_lock()`, depois `run_migrations(_locked=True)` (uma só aquisição de lock, sem self-deadlock). ✅
-- Doc afirma deploy real (`metaporn-new:1.27.31`, serviço `metaporn-new_adult-meta`) e validação in-prod (`/health=1.27.31`, `schema_migrations=[(1,'baseline')]`, sem chave → `unauthorized` com dado retido).
+- Doc afirma deploy real (`caripost-new:1.27.31`, serviço `metaporn-new_adult-meta`) e validação in-prod (`/health=1.27.31`, `schema_migrations=[(1,'baseline')]`, sem chave → `unauthorized` com dado retido).
 
 ### issue #9 — Versão UI NÃO foi bumpada em todos os pontos (alta · viola AGENTS.md/CLAUDE.md)
 Apesar do doc de Marco 0 afirmar deploy em 1.27.31 e `main.py`/`apps-manage.jsx`/`os/index.html` estarem em 12731, **três grupos continuam em 1.27.24**:
@@ -122,7 +122,7 @@ Consequência: usuário do OS público (`app/ui/`) e do shell de boot verá v1.2
 ```
 ## v1.27.31 - 2026-07-01 · Marco 0 — fundação
 - **feat: runner único de migrations** (`app/migrations.py`) — `schema_lock()` (fcntl.flock) + `BEGIN IMMEDIATE`, idempotente, cross-process. Base para `flow_id`/`layout_variant`/`company_credits`/`usage_log`.
-- **feat: dev-mode fechado** — `ADULT_META_API_KEY` setado no serviço; sem chave → dado retido.
+- **feat: dev-mode fechado** — `CARIPOST_API_KEY` setado no serviço; sem chave → dado retido.
 - **fix: auditoria de acesso aberto** (read-only) em `/data/open_access_audit.log` (mantida p/ diagnóstico).
 - Versão: main.py 1.27.31, OS/UI cache bust v=12731.
 ```

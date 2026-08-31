@@ -143,7 +143,7 @@ class RehostMediaSecurityTests(unittest.IsolatedAsyncioTestCase):
                 _UploadResponse("https://tmpfiles.org/abc/post.jpg"), calls,
             )
             with patch.dict(os.environ, {
-                "ADULT_META_MEDIA_ROOT": root,
+                "CARIPOST_MEDIA_ROOT": root,
                 "UPLOAD_URL_PREFIX": "/uploads",
             }, clear=False), \
                  patch.object(composio_provider, "_setting_value", return_value="https://media.example:8443"), \
@@ -181,7 +181,7 @@ class RehostMediaSecurityTests(unittest.IsolatedAsyncioTestCase):
                 _UploadResponse("https://evil.example/abc/post.jpg"), [],
             )
             with patch.dict(os.environ, {
-                "ADULT_META_MEDIA_ROOT": root,
+                "CARIPOST_MEDIA_ROOT": root,
                 "UPLOAD_URL_PREFIX": "/uploads",
             }, clear=False), patch("httpx.AsyncClient", return_value=client):
                 with self.assertLogs("caripost.social", level="ERROR"):

@@ -1,6 +1,6 @@
 # CLAUDE.md — LEIA ANTES DE TOCAR EM QUALQUER COISA
 
-Você (Claude Code) vai integrar o **MetaPorn OS** — um frontend de desktop que **JÁ ESTÁ 100% PRONTO E FUNCIONANDO**.
+Você (Claude Code) vai integrar o **Caripost OS** — um frontend de desktop que **JÁ ESTÁ 100% PRONTO E FUNCIONANDO**.
 
 ## ⛔ A REGRA DE OURO (o motivo de ter quebrado antes)
 

@@ -1,11 +1,11 @@
-# 🚀 Deploy MetaPorn — Brutos-Server (Rocky Linux 9.6)
+# 🚀 Deploy Caripost — Brutos-Server (Rocky Linux 9.6)
 
 > **Contexto pré-confirmado pelo diagnóstico:**
 > - Rocky Linux 9.6 | Apache HTTPD nas portas 80/443 | Docker NÃO instalado
 > - Certbot 3.1.0 instalado | 34 domínios SSL já ativos | mod_proxy/ssl/rewrite ✅
 > - ssl.conf global está desabilitado — cada domínio tem seu próprio bloco SSL ✅
 > - Projeto copiado via rsync do servidor de origem (213.199.32.244)
-> - **Migração com dados** — banco SQLite (76MB) copiado de `/tmp/metaporn_runs_backup.db`
+> - **Migração com dados** — banco SQLite (76MB) copiado de `/tmp/caripost_runs_backup.db`
 >
 > **Estratégia:** Docker Swarm single-node + container porta 8765 (127.0.0.1 apenas) + VirtualHost Apache proxy
 
@@ -19,12 +19,12 @@
 ```bash
 # Copiar projeto
 rsync -avz --exclude='.git' --exclude='__pycache__' \
-  /root/clawd/adult-meta/ \
-  root@177.104.176.165:/root/adult-meta/
+  /root/clawd/caripost/ \
+  root@177.104.176.165:/root/caripost/
 
 # Backup e envio do banco SQLite
-cp /var/lib/docker/volumes/metaporn_adult_meta_data/_data/runs.db /tmp/metaporn_runs_backup.db
-scp /tmp/metaporn_runs_backup.db root@177.104.176.165:/tmp/
+cp /var/lib/docker/volumes/caripost_caripost_data/_data/runs.db /tmp/caripost_runs_backup.db
+scp /tmp/caripost_runs_backup.db root@177.104.176.165:/tmp/
 
 echo "✅ Pronto para continuar no Brutos-Server"
 ```
@@ -81,10 +81,10 @@ docker info | grep -A3 "Swarm"
 
 ```bash
 # Verificar integridade dos arquivos (rsync já foi feito no servidor de origem)
-ls -la /root/adult-meta/
-test -f /root/adult-meta/Dockerfile && echo "✅ Dockerfile OK" || echo "❌ Dockerfile ausente"
-test -f /root/adult-meta/app/main.py && echo "✅ app/main.py OK" || echo "❌ main.py ausente"
-test -f /tmp/metaporn_runs_backup.db && echo "✅ Banco SQLite recebido ($(du -sh /tmp/metaporn_runs_backup.db | cut -f1))" || echo "❌ Banco não encontrado em /tmp/"
+ls -la /root/caripost/
+test -f /root/caripost/Dockerfile && echo "✅ Dockerfile OK" || echo "❌ Dockerfile ausente"
+test -f /root/caripost/app/main.py && echo "✅ app/main.py OK" || echo "❌ main.py ausente"
+test -f /tmp/caripost_runs_backup.db && echo "✅ Banco SQLite recebido ($(du -sh /tmp/caripost_runs_backup.db | cut -f1))" || echo "❌ Banco não encontrado em /tmp/"
 ```
 
 Se algum arquivo estiver ausente, PARE e reporte. O rsync do servidor de origem precisa ser refeito.
@@ -94,24 +94,24 @@ Se algum arquivo estiver ausente, PARE e reporte. O rsync do servidor de origem 
 ## FASE 4 — Criar stack.yml adaptado (sem Traefik)
 
 ```bash
-cat > /root/adult-meta/stack.brutos.yml << 'EOF'
+cat > /root/caripost/stack.brutos.yml << 'EOF'
 version: '3.8'
 
 volumes:
-  adult_meta_data:
+  caripost_data:
 
 services:
-  adult-meta:
+  caripost:
     image: adult-meta:latest
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
-      - adult_meta_data:/data
+      - caripost_data:/data
     environment:
       S3_ENDPOINT_URL: "https://s3.n8nmikael.com.br"
       S3_ACCESS_KEY_ID: "0e1fb1161ed4f7c0a41b0fa7"
       S3_SECRET_ACCESS_KEY: "64ac389164e77eb46ef7bc9bb3791fd5a0803abdb51cc52a"
-      S3_BUCKET: "metaporn"
+      S3_BUCKET: "caripost"
       S3_PUBLIC_BASE_URL: "https://s3.n8nmikael.com.br"
       BURN_MAX_PARALLEL: "1"
       FFMPEG_BURN_THREADS: "0"
@@ -124,7 +124,7 @@ services:
 EOF
 
 echo "✅ stack.brutos.yml criado"
-cat /root/adult-meta/stack.brutos.yml
+cat /root/caripost/stack.brutos.yml
 ```
 
 ---
@@ -134,10 +134,10 @@ cat /root/adult-meta/stack.brutos.yml
 > O build instala ffmpeg, Python deps e leva ~5–10 min na primeira vez.
 
 ```bash
-cd /root/adult-meta
+cd /root/caripost
 docker build -t adult-meta:latest . 2>&1 | tee /tmp/docker-build.log
 echo "Exit code do build: $?"
-docker images | grep adult-meta
+docker images | grep caripost
 ```
 
 Se falhar:
@@ -150,10 +150,10 @@ tail -40 /tmp/docker-build.log
 ## FASE 6 — Deploy do Stack
 
 ```bash
-cd /root/adult-meta
+cd /root/caripost
 
 # 6.1 Deploy
-docker stack deploy -c stack.brutos.yml metaporn
+docker stack deploy -c stack.brutos.yml caripost
 
 # 6.2 Aguardar inicialização
 sleep 35
@@ -185,11 +185,11 @@ PARE e reporte. Não avance para a Fase 7 sem este teste passar.
 
 ```bash
 # 7.1 Encontrar o mountpoint do volume criado pelo deploy
-VOLUME_PATH=$(docker volume inspect metaporn_adult_meta_data --format '{{.Mountpoint}}' 2>/dev/null)
+VOLUME_PATH=$(docker volume inspect caripost_caripost_data --format '{{.Mountpoint}}' 2>/dev/null)
 echo "Volume path: $VOLUME_PATH"
 
 # Se o nome estiver diferente, buscar:
-docker volume ls | grep adult_meta
+docker volume ls | grep caripost
 ```
 
 ```bash
@@ -201,7 +201,7 @@ sleep 8
 cp "$VOLUME_PATH/runs.db" "$VOLUME_PATH/runs.db.empty_backup" 2>/dev/null || echo "Banco vazio não encontrado (ok)"
 
 # 7.4 Copiar banco do servidor de origem
-cp /tmp/metaporn_runs_backup.db "$VOLUME_PATH/runs.db"
+cp /tmp/caripost_runs_backup.db "$VOLUME_PATH/runs.db"
 ls -lh "$VOLUME_PATH/runs.db"
 
 # 7.5 Restart do container
@@ -220,7 +220,7 @@ docker service logs metaporn_adult-meta --tail 10
 ## FASE 8 — Configurar VirtualHost Apache
 
 > **Pré-condição:** Fase 6 concluída e `/health` retornando OK.
-> Este passo cria um NOVO arquivo `/etc/httpd/conf.d/metaporn.conf`.
+> Este passo cria um NOVO arquivo `/etc/httpd/conf.d/caripost.conf`.
 > **Nenhum arquivo existente será modificado.**
 
 ### 8.1 Verificar módulos (confirmação final)
@@ -231,7 +231,7 @@ httpd -M | grep -E "proxy_module|proxy_http_module|ssl_module|rewrite_module"
 
 ### 8.2 Criar VirtualHost HTTP (sem SSL por enquanto)
 ```bash
-cat > /etc/httpd/conf.d/metaporn.conf << 'EOF'
+cat > /etc/httpd/conf.d/caripost.conf << 'EOF'
 <VirtualHost *:80>
     ServerName caripost.n8nmikael.com.br
 
@@ -299,8 +299,8 @@ fi
 certbot --apache -d caripost.n8nmikael.com.br --non-interactive --agree-tos -m admin@n8nmikael.com.br
 
 # 9.3 Verificar o que certbot criou
-cat /etc/httpd/conf.d/metaporn.conf
-ls /etc/httpd/conf.d/ | grep metaporn
+cat /etc/httpd/conf.d/caripost.conf
+ls /etc/httpd/conf.d/ | grep caripost
 ls /etc/letsencrypt/live/caripost.n8nmikael.com.br/
 ```
 
@@ -308,7 +308,7 @@ ls /etc/letsencrypt/live/caripost.n8nmikael.com.br/
 
 ```bash
 # Criar bloco SSL manualmente (só se necessário)
-cat > /etc/httpd/conf.d/metaporn-ssl.conf << 'EOF'
+cat > /etc/httpd/conf.d/caripost-ssl.conf << 'EOF'
 <VirtualHost *:443>
     ServerName caripost.n8nmikael.com.br
 
@@ -356,7 +356,7 @@ curl -sv https://caripost.n8nmikael.com.br/health 2>&1 | grep -E "SSL|HTTP|statu
 docker service logs metaporn_adult-meta --tail 20 2>&1 | grep -Ev "GET /health|GET /ui"
 
 # 10.6 Verificar banco migrado (deve ter registros)
-VOLUME_PATH=$(docker volume inspect metaporn_adult_meta_data --format '{{.Mountpoint}}')
+VOLUME_PATH=$(docker volume inspect caripost_caripost_data --format '{{.Mountpoint}}')
 docker exec $(docker ps -q --filter name=metaporn_adult-meta) \
   python3 -c "import sqlite3; c=sqlite3.connect('/data/runs.db'); print('Tabelas:', [r[0] for r in c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()]); print('Runs:', c.execute('SELECT COUNT(*) FROM runs').fetchone()[0])" \
   2>/dev/null || echo "Verificar banco manualmente"

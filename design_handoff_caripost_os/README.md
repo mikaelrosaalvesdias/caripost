@@ -1,11 +1,11 @@
-# Handoff: MetaPorn OS — Frontend Desktop (pronto e funcionando)
+# Handoff: Caripost OS — Frontend Desktop (pronto e funcionando)
 
 ## ⚡ TL;DR (leia isto primeiro)
 
-Este pacote contém o **frontend completo do MetaPorn OS, já funcionando**. Não é pra recriar do zero.
+Este pacote contém o **frontend completo do Caripost OS, já funcionando**. Não é pra recriar do zero.
 A integração anterior quebrou porque foi **reescrita**. Aqui a ordem é: **servir como está + ligar ao backend.**
 
-1. Abra `MetaPorn-OS-REFERENCIA-standalone.html` no navegador. **Tudo funciona** (menu, janelas, notificações, ações de vídeo). Esse é o alvo: tem que continuar assim.
+1. Abra `Caripost-OS-REFERENCIA-standalone.html` no navegador. **Tudo funciona** (menu, janelas, notificações, ações de vídeo). Esse é o alvo: tem que continuar assim.
 2. Dê o arquivo **`CLAUDE.md`** para o Claude Code. Ele tem as regras e o mapa de integração. **A regra nº 1 é: não reescreva os botões.**
 3. Os arquivos-fonte editáveis estão em **`app/`**.
 
@@ -13,7 +13,7 @@ A integração anterior quebrou porque foi **reescrita**. Aqui a ordem é: **ser
 
 ## Visão geral
 
-MetaPorn OS é um **sistema operacional de desktop no navegador** para a operação da agência:
+Caripost OS é um **sistema operacional de desktop no navegador** para a operação da agência:
 ingestão de mídia, AutoEditor (cortes com Grok Vision), legenda, logo, teaser, thumbnail,
 publicação, Telegram, gestão de criadores, financeiro e DMCA — cada função abre como um
 "app" em janela própria, com barra de tarefas, menu Iniciar, notificações e um Modo Automático
@@ -31,7 +31,7 @@ Você tem dois caminhos válidos:
 - **Caminho A — servir como está (mais rápido, menor risco).** O app é 100% client-side
   (React 18 via CDN + Babel). Sirva a pasta `app/` no seu servidor e ele roda. Seu trabalho
   passa a ser só **ligar os dados/ações ao backend** (ver `CLAUDE.md`).
-- **Caminho B — portar para o seu stack.** Se você precisa do MetaPorn OS dentro de um app
+- **Caminho B — portar para o seu stack.** Se você precisa do Caripost OS dentro de um app
   React/Vue/etc já existente, **recrie tela a tela usando os arquivos como referência exata**,
   mantendo classes/estrutura. Mais trabalho, mais risco de quebrar — só faça se necessário.
 
@@ -119,10 +119,10 @@ Fontes vêm do Google Fonts (já no `<head>` do `index.html`).
 ## Arquivos deste pacote
 
 ```
-design_handoff_metaporn_os/
+design_handoff_caripost_os/
 ├── README.md                              ← este arquivo
 ├── CLAUDE.md                              ← REGRAS p/ o Claude Code (dê este a ele)
-├── MetaPorn-OS-REFERENCIA-standalone.html ← abra no navegador: prova que tudo funciona (offline)
+├── Caripost-OS-REFERENCIA-standalone.html ← abra no navegador: prova que tudo funciona (offline)
 └── app/                                   ← FONTE editável (sirva esta pasta)
     ├── index.html      ← carrega tudo na ordem certa
     ├── os.css          ← todo o visual + tokens

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 async def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["ADULT_META_DB_PATH"] = os.path.join(tmp, "runs.db")
+        os.environ["CARIPOST_DB_PATH"] = os.path.join(tmp, "runs.db")
         os.environ["SOCIAL_PROVIDER"] = "mock"
 
         from app.db import init_db

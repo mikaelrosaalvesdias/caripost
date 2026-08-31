@@ -1,6 +1,6 @@
 # Infraestrutura da Transcrição via OpenRouter STT
 
-Documento técnico sobre a opção **OpenRouter STT** usada na plataforma MetaPorn para transcrição de vídeos adultos em português brasileiro.
+Documento técnico sobre a opção **OpenRouter STT** usada na plataforma Caripost para transcrição de vídeos adultos em português brasileiro.
 
 ## Resumo Executivo
 
@@ -125,7 +125,7 @@ Headers enviados:
 Authorization: Bearer {token}
 Content-Type: application/json
 HTTP-Referer: https://caripost.n8nmikael.com.br/
-X-Title: MetaPorn Admin
+X-Title: Caripost Admin
 ```
 
 ## Prompt Usado

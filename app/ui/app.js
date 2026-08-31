@@ -884,61 +884,61 @@ const CHANGELOG = [
   {
     version: 'v1.19.13', date: '2026-06-15',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: o tour automatico deixa de bloquear cliques nas areas de upload, permitindo selecionar videos no Analyzer e nos fluxos com upload mesmo com o tutorial visivel.' },
+      { type: 'fix', text: 'Caripost OS: o tour automatico deixa de bloquear cliques nas areas de upload, permitindo selecionar videos no Analyzer e nos fluxos com upload mesmo com o tutorial visivel.' },
     ],
   },
   {
     version: 'v1.19.12', date: '2026-06-14',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: routers modulares agora aceitam o mesmo X-Session-Token do login, liberando AutoEditor, Enhancer, Publicar, Criadores, DMCA, Agenda, Tendencias e Financeiro apos autenticar.' },
+      { type: 'fix', text: 'Caripost OS: routers modulares agora aceitam o mesmo X-Session-Token do login, liberando AutoEditor, Enhancer, Publicar, Criadores, DMCA, Agenda, Tendencias e Financeiro apos autenticar.' },
     ],
   },
   {
     version: 'v1.19.11', date: '2026-06-14',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: upload agora aguarda o login no overlay e retoma o mesmo arquivo selecionado, com uma nova tentativa quando a sessao expira.' },
+      { type: 'fix', text: 'Caripost OS: upload agora aguarda o login no overlay e retoma o mesmo arquivo selecionado, com uma nova tentativa quando a sessao expira.' },
     ],
   },
   {
     version: 'v1.19.10', date: '2026-06-13',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: a checagem inicial de auth preserva a abertura visual anterior e deixa o login aparecer somente quando uma ação protegida exigir credencial.' },
+      { type: 'fix', text: 'Caripost OS: a checagem inicial de auth preserva a abertura visual anterior e deixa o login aparecer somente quando uma ação protegida exigir credencial.' },
     ],
   },
   {
     version: 'v1.19.9', date: '2026-06-13',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: checagem de autenticacao agora reconhece `missing_or_invalid_api_key` mesmo quando o backend responde HTTP 200, forçando login antes do upload.' },
+      { type: 'fix', text: 'Caripost OS: checagem de autenticacao agora reconhece `missing_or_invalid_api_key` mesmo quando o backend responde HTTP 200, forçando login antes do upload.' },
     ],
   },
   {
     version: 'v1.19.8', date: '2026-06-13',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: upload via `/uploads/local-stream` agora tambem envia a `X-API-Key` salva pela UI antiga, evitando `missing_or_invalid_api_key` em ambientes com API key obrigatoria.' },
+      { type: 'fix', text: 'Caripost OS: upload via `/uploads/local-stream` agora tambem envia a `X-API-Key` salva pela UI antiga, evitando `missing_or_invalid_api_key` em ambientes com API key obrigatoria.' },
     ],
   },
   {
     version: 'v1.19.7', date: '2026-06-13',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: upload de video passa a usar `/uploads/local-stream`, evitando falha de CORS/domínio no PUT direto do storage apos a migracao para CariPost.' },
+      { type: 'fix', text: 'Caripost OS: upload de video passa a usar `/uploads/local-stream`, evitando falha de CORS/domínio no PUT direto do storage apos a migracao para CariPost.' },
     ],
   },
   {
     version: 'v1.19.6', date: '2026-06-10',
     items: [
-      { type: 'fix', text: 'Arquivos: primeiras capas da grade agora sao carregadas imediatamente no render, mesmo quando a lista fica abaixo da dobra dentro da janela do MetaPorn OS.' },
+      { type: 'fix', text: 'Arquivos: primeiras capas da grade agora sao carregadas imediatamente no render, mesmo quando a lista fica abaixo da dobra dentro da janela do Caripost OS.' },
     ],
   },
   {
     version: 'v1.19.5', date: '2026-06-10',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: login do desktop agora respeita /auth/check; quando a autenticação está ativa, o login acontece no OS e a sessão é compartilhada com os módulos antigos embutidos.' },
+      { type: 'fix', text: 'Caripost OS: login do desktop agora respeita /auth/check; quando a autenticação está ativa, o login acontece no OS e a sessão é compartilhada com os módulos antigos embutidos.' },
     ],
   },
   {
     version: 'v1.19.4', date: '2026-06-10',
     items: [
-      { type: 'fix', text: 'MetaPorn OS: janelas do desktop passam a abrir os módulos reais antigos em /ui/?embed=1, restaurando uploads, runs, criação, burn, teaser, settings e demais handlers sem trocar o visual do desktop.' },
+      { type: 'fix', text: 'Caripost OS: janelas do desktop passam a abrir os módulos reais antigos em /ui/?embed=1, restaurando uploads, runs, criação, burn, teaser, settings e demais handlers sem trocar o visual do desktop.' },
       { type: 'fix', text: 'Visual: ícones do desktop aumentados e distribuição centralizada no topo da tela.' },
     ],
   },
@@ -951,19 +951,19 @@ const CHANGELOG = [
   {
     version: 'v1.18.21', date: '2026-06-02',
     items: [
-      { type: 'fix', text: 'Visual: corrigida a tela inicial para seguir o desktop do pacote Claude Designer, com boot/login MetaPorn OS, grupos de apps completos e janela oculta por padrão quando não há rota direta.' },
+      { type: 'fix', text: 'Visual: corrigida a tela inicial para seguir o desktop do pacote Claude Designer, com boot/login Caripost OS, grupos de apps completos e janela oculta por padrão quando não há rota direta.' },
     ],
   },
   {
     version: 'v1.18.20', date: '2026-06-02',
     items: [
-      { type: 'fix', text: 'Visual: corrigida a entrega do redesign do Claude Designer com login em MetaPorn OS, desktop de apps agrupados, start menu real, taskbar e janela principal sem alterar rotas, endpoints ou loaders existentes.' },
+      { type: 'fix', text: 'Visual: corrigida a entrega do redesign do Claude Designer com login em Caripost OS, desktop de apps agrupados, start menu real, taskbar e janela principal sem alterar rotas, endpoints ou loaders existentes.' },
     ],
   },
   {
     version: 'v1.18.19', date: '2026-06-02',
     items: [
-      { type: 'feat', text: 'Visual: aplicado o shell MetaPorn OS desenhado no pacote do Claude Designer, com launcher em blocos, janela principal em vidro escuro e barra inferior de atalhos, preservando rotas e funções existentes.' },
+      { type: 'feat', text: 'Visual: aplicado o shell Caripost OS desenhado no pacote do Claude Designer, com launcher em blocos, janela principal em vidro escuro e barra inferior de atalhos, preservando rotas e funções existentes.' },
     ],
   },
   {
@@ -2504,7 +2504,7 @@ function mpOsSvgIcon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 }
 
-function paintMetaPornOsIcons() {
+function paintCaripostOsIcons() {
   document.querySelectorAll('a[data-route]').forEach(a => {
     const iconName = a.dataset.osIcon || MP_OS_ROUTE_ICONS[a.dataset.route];
     if (!iconName) return;
@@ -2534,7 +2534,7 @@ function osToggleStart(force) {
   menu.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
   document.body.classList.toggle('os-start-open', shouldOpen);
   if (shouldOpen) {
-    paintMetaPornOsIcons();
+    paintCaripostOsIcons();
     setTimeout(() => document.getElementById('osStartSearch')?.focus(), 40);
   }
 }
@@ -13156,7 +13156,7 @@ async function main() {
 
   // Step 3: interface
   _pageLoader.step(3);
-  paintMetaPornOsIcons();
+  paintCaripostOsIcons();
   initRouting();
   initTabs();
   initButtons();
@@ -13190,7 +13190,7 @@ const helpContent = {
           <div class="warning">
             <p><strong>⚠️ Importante:</strong> Esta key é diferente das tokens de API dos provedores de IA. Ela serve para proteger o acesso à aplicação.</p>
           </div>
-          <p><strong>Como obter:</strong> A API Key deve ser configurada na variável de ambiente <span class="help-code">ADULT_META_API_KEY</span> no servidor.</p>
+          <p><strong>Como obter:</strong> A API Key deve ser configurada na variável de ambiente <span class="help-code">CARIPOST_API_KEY</span> no servidor.</p>
         `
       },
       {
@@ -14819,8 +14819,8 @@ const TAB_GROUPS = {
 function updateTopbarContext(name) {
   const titleEl = qs('currentPageTitle');
   const eyebrowEl = qs('currentPageEyebrow');
-  if (titleEl) titleEl.textContent = TAB_LABELS[name] || 'MetaPorn';
-  if (eyebrowEl) eyebrowEl.textContent = TAB_GROUPS[name] || 'Painel MetaPorn';
+  if (titleEl) titleEl.textContent = TAB_LABELS[name] || 'Caripost';
+  if (eyebrowEl) eyebrowEl.textContent = TAB_GROUPS[name] || 'Painel Caripost';
 }
 
 function applySidebarNavFilters() {
@@ -15060,7 +15060,7 @@ document.addEventListener('click', e => {
   if (!link) return;
   const name = link.dataset.route || link.dataset.startRoute;
   if (!name) return;
-  paintMetaPornOsIcons();
+  paintCaripostOsIcons();
   osCloseStart();
   if ((location.hash || '#analyze') === `#${name}`) routeTo(name);
 });
@@ -15480,7 +15480,7 @@ function _updateCreatorPortalPreview() {
     wrap.style.boxShadow = `0 18px 40px ${branding.secondary_color}22`;
   }
   if (brand) {
-    brand.textContent = branding.brand_name || 'MetaPorn Agency';
+    brand.textContent = branding.brand_name || 'Caripost Agency';
     brand.style.color = branding.primary_color;
   }
   if (headline) {
@@ -15591,7 +15591,7 @@ async function creatorsShowDetail(id) {
           <div style="display:flex;align-items:center;gap:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;background:linear-gradient(135deg, ${pb.surface_color}, ${pb.secondary_color}22 60%, ${pb.primary_color}16)">
             ${pb.logo_b64 ? `<img src="${esc(pb.logo_b64)}" alt="Logo portal" style="width:58px;height:58px;object-fit:contain;border-radius:14px;background:rgba(255,255,255,.05);padding:8px;border:1px solid ${pb.primary_color}55">` : ''}
             <div style="min-width:0">
-              <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:${pb.primary_color}">${esc(pb.brand_name || 'MetaPorn Agency')}</div>
+              <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:${pb.primary_color}">${esc(pb.brand_name || 'Caripost Agency')}</div>
               <div style="font-size:22px;font-weight:700;color:${pb.text_color || '#fff'};margin-top:4px">${esc(pb.headline || 'Creator Portal')}</div>
               <div style="font-size:13px;color:${pb.text_color || '#cbd5e1'};opacity:.82;margin-top:6px">${esc(pb.tagline || 'Portal personalizado do criador.')}</div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">

@@ -207,7 +207,7 @@ Passos: Cliente → Briefing → Criação → Aprovação → Agendamento.
 
 ## 8. Versões / Deploy
 
-- Deploy: `docker build -t metaporn-new:<v> .` + `docker service update --image metaporn-new:<v> metaporn-new_adult-meta`. NUNCA `deploy.sh`.
+- Deploy: `docker build -t caripost-new:<v> .` + `docker service update --image metaporn-new:<v> metaporn-new_adult-meta`. NUNCA `deploy.sh`.
 - **3 strings de versão** (bump com regex que casa qualquer valor, senão falha em silêncio): `app/main.py` `version=`; `app/os/apps-manage.jsx` `MP_OS_VERSION` (aparece em Settings); `app/os/index.html` `?v=NNNNN` (cache-bust dos .jsx).
 - Origem servida direto por uvicorn, `cache-control: no-cache`, **sem CDN**. Conferir pós-deploy: `GET https://caripost.cariap.com.br/os/index.html`.
 

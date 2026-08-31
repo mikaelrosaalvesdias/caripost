@@ -72,7 +72,7 @@ Ao concluir CADA marco (ver `/root/.claude/plans/peaceful-juggling-donut.md`), a
 
 1. **Testar eu mesmo primeiro.** `py_compile` no mínimo; quando der, executar o fluxo de verdade (ex.: `compose_carousel_slide` com foto placeholder via PIL local — grátis) e **olhar a imagem**. Nunca pedir teste de algo que eu não verifiquei.
 2. **Mudar a versão do app** — as 3 strings: `app/main.py` `version=`, `app/os/apps-manage.jsx` `MP_OS_VERSION`, `app/os/index.html` `?v=`.
-3. **DEPLOYAR DE VERDADE ANTES DE PEDIR TESTE.** `docker build -t metaporn-new:<v> .` + `docker service update --image metaporn-new:<v> metaporn-new_adult-meta` (NUNCA `deploy.sh`), e **confirmar no ar** (`https://caripost.cariap.com.br/os/index.html` com o novo `?v=`). É **PROIBIDO** mandar o usuário testar algo que não está aplicado no sistema. Serviço: `metaporn-new_adult-meta`.
+3. **DEPLOYAR DE VERDADE ANTES DE PEDIR TESTE.** `docker build -t caripost-new:<v> .` + `docker service update --image metaporn-new:<v> metaporn-new_adult-meta` (NUNCA `deploy.sh`), e **confirmar no ar** (`https://caripost.cariap.com.br/os/index.html` com o novo `?v=`). É **PROIBIDO** mandar o usuário testar algo que não está aplicado no sistema. Serviço: `metaporn-new_adult-meta`.
 4. **Gerar o .md de entrega** em `docs/marcos/marco-<N>-<slug>.md`: o que mudou tecnicamente (arquivos/funções/por quê) e como atinge o objetivo do marco.
 5. **Explicar simples como testar** — e a avaliação pedida ao usuário deve conter **SÓ o que ESTE marco realmente entrega**. NUNCA pedir pra ele avaliar algo adiado pra um marco futuro (ex.: não pedir "mesma família/coesão de foto" num marco que não trata disso).
 

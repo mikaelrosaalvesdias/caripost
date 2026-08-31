@@ -15,7 +15,7 @@ _API_KEY = None
 def _get_api_key() -> str:
     global _API_KEY
     if _API_KEY is None:
-        _API_KEY = os.environ.get("ADULT_META_API_KEY", "")
+        _API_KEY = os.environ.get("CARIPOST_API_KEY", "")
     return _API_KEY
 
 

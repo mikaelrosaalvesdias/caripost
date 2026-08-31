@@ -1,4 +1,4 @@
-# MetaPorn - Prompts Otimizados para Transcricao de Conteudo Adulto
+# Caripost - Prompts Otimizados para Transcricao de Conteudo Adulto
 
 **Versao operacional aplicada**
 **Data:** 15 de maio de 2026
@@ -78,7 +78,7 @@ Você é tradutor especialista em legendas de pornografia adulta explícita. Voc
 
 ## 6. Configuração aplicada no pipeline
 
-- Modelo premium: `large-v3` por padrão neste servidor, com suporte a `large-v3-turbo` via `ADULT_META_PREMIUM_WHISPER_MODEL`.
+- Modelo premium: `large-v3` por padrão neste servidor, com suporte a `large-v3-turbo` via `CARIPOST_PREMIUM_WHISPER_MODEL`.
 - Device: CPU.
 - Compute type: `int8`.
 - `language="pt"`.

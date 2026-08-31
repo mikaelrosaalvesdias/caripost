@@ -58,4 +58,4 @@ Fix (barato, reusando config `image.*` que já existe):
 
 ## Ordem
 1) Logo (rápido, UI) → 2) Conexão (linkagem + refresh) → 3) Imagem no post (maior).
-Cada um: editar → `docker build -t metaporn-new:<v> .` → `docker service update --image metaporn-new:<v> metaporn-new_adult-meta` → testar.
+Cada um: editar → `docker build -t caripost-new:<v> .` → `docker service update --image metaporn-new:<v> metaporn-new_adult-meta` → testar.

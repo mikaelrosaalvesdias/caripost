@@ -1,4 +1,4 @@
-/* MetaPorn OS — Estúdio: AutoEditor, Video Enhancer, Criação, Referência */
+/* Caripost OS — Estúdio: AutoEditor, Video Enhancer, Criação, Referência */
 
 /* collapsible card section */
 function Acc({ title, open, children }) {

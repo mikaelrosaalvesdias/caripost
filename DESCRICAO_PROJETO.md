@@ -1,7 +1,7 @@
-# Adult Meta - Documentacao Tecnica do Projeto
+# Caripost - Documentacao Tecnica do Projeto
 
 ## 1. Resumo
-O **Adult Meta** e uma plataforma web interna para operacao de conteudo adulto, cobrindo o fluxo completo de:
+O **Caripost** e uma plataforma web interna para operacao de conteudo adulto, cobrindo o fluxo completo de:
 
 1. upload de video,
 2. transcricao,
@@ -88,7 +88,7 @@ A API principal esta em `app/main.py` e expoe rotas para:
 ## 4. Arquitetura de Pastas
 
 ```text
-adult-meta/
+caripost/
 ├── app/
 │   ├── main.py            # API FastAPI e regras de negocio
 │   ├── db.py              # Camada SQLite
@@ -191,7 +191,7 @@ adult-meta/
   - `GET /settings/tokens`
 - Grava token:
   - `POST /settings/tokens`
-- Autenticacao opcional por `X-API-Key` (controlada por `ADULT_META_API_KEY`)
+- Autenticacao opcional por `X-API-Key` (controlada por `CARIPOST_API_KEY`)
 
 ---
 
@@ -230,8 +230,8 @@ Tabelas criadas em `init_db()`:
 ---
 
 ## 8. Variaveis de Ambiente Principais
-- `ADULT_META_API_KEY`
-- `ADULT_META_DB_PATH`
+- `CARIPOST_API_KEY`
+- `CARIPOST_DB_PATH`
 - `S3_ENDPOINT_URL`
 - `S3_REGION`
 - `S3_ACCESS_KEY_ID`
@@ -261,7 +261,7 @@ Tabelas criadas em `init_db()`:
 - `POST /settings/tokens` atualmente aceita apenas `openai`, `deepseek` e `openrouter`, embora a UI mostre outros provedores.
 - Tokens sao armazenados em texto puro no SQLite (ha TODO no codigo para criptografia at-rest).
 - O estado de jobs assinc (`_burn_jobs`, `_teaser_jobs`) e em memoria de processo.
-- CORS da app esta aberto (`allow_origins=["*"]`) e a autenticacao depende da configuracao de `ADULT_META_API_KEY`.
+- CORS da app esta aberto (`allow_origins=["*"]`) e a autenticacao depende da configuracao de `CARIPOST_API_KEY`.
 
 ---
 
