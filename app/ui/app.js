@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.122', date: '2026-08-31',
+    items: [
+      { type: 'feat', text: 'Itens À la carte agora são subprodutos completos, com descrição, objetivo, benefícios, site, redes, cores, logos, fotos e base de conhecimento próprias.' },
+      { type: 'feat', text: 'A criação de post, story, carrossel e vídeo permite escolher o plano e os adicionais exatos e usa a identidade e o conteúdo desses subprodutos nas artes.' },
+      { type: 'fix', text: 'A seleção de adicionais deixou de incluir automaticamente todos os itens do produto e passa a respeitar exatamente o que foi marcado.' },
+    ],
+  },
+  {
     version: 'v1.27.121', date: '2026-08-28',
     items: [
       { type: 'feat', text: 'Cadastro completo de subprodutos/planos com objetivo comercial, benefícios, categoria, link oficial e base de conhecimento KB por documento/OCR.' },

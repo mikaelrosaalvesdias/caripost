@@ -11,6 +11,7 @@ os.environ["ADULT_META_DB_PATH"] = os.path.join(_temp_dir.name, "companies-test.
 
 from app import db  # noqa: E402
 from app import db_companies as companies_db  # noqa: E402
+from app import migrations as schema_migrations  # noqa: E402
 
 
 db.init_db()
@@ -234,6 +235,251 @@ class BrandKitPersistenceTests(unittest.TestCase):
         self.assertEqual(stored["knowledge"], "Instalação grátis sujeita à viabilidade técnica.")
         self.assertEqual(stored["web_brief"], "Oferta confirmada no site oficial.")
         self.assertEqual(stored["web_brief_at"], "2026-08-07T12:00:00+00:00")
+
+    def test_solution_round_trips_complete_profile_and_owns_its_assets(self):
+        company = self.create_company("Catálogo de adicionais completo")
+        other = self.create_company("Outro dono de adicionais")
+        product = companies_db.product_create(company["id"], {"name": "Zapping"})
+        solution = companies_db.solution_create(product["id"], {
+            "name": "Telecine",
+            "description": "Pacote com canais e catálogo Telecine.",
+            "category": "Cinema",
+            "website": "https://example.com/telecine",
+            "socials": {"instagram": "@telecine"},
+            "colors": {"primary": "#112233", "accent": "#FF9900"},
+            "objective": "Vender entretenimento premium.",
+            "functions": ["Filmes", "Canais ao vivo"],
+            "knowledge": "Disponível como adicional do Zapping.",
+            "web_brief": "Informações conferidas no site.",
+            "web_brief_at": "2026-08-31T12:00:00+00:00",
+            "links": ["https://example.com/assine"],
+            "active": False,
+        })
+
+        self.assertEqual(solution["description"], "Pacote com canais e catálogo Telecine.")
+        self.assertEqual(solution["socials"], {"instagram": "@telecine"})
+        self.assertEqual(solution["colors"]["accent"], "#FF9900")
+        self.assertEqual(solution["functions"], ["Filmes", "Canais ao vivo"])
+        self.assertEqual(solution["links"], ["https://example.com/assine"])
+        self.assertFalse(solution["active"])
+
+        logo = companies_db.asset_create(company["id"], {
+            "product_id": product["id"],
+            "solution_id": solution["id"],
+            "url": "/uploads/telecine-logo.png",
+            "meta": {"role": "logo"},
+        })
+        photo = companies_db.asset_create(company["id"], {
+            "solution_id": solution["id"],
+            "url": "/uploads/telecine-photo.png",
+            "meta": {"role": "photo"},
+        })
+
+        # A mídia do adicional nunca vaza para a marca da empresa nem para o produto pai.
+        self.assertIsNone(logo["product_id"])
+        self.assertEqual(companies_db.asset_list_logos(company["id"]), [])
+        self.assertEqual(companies_db.asset_list_logos(company["id"], product["id"]), [])
+        self.assertEqual(companies_db.asset_list_photos(company["id"], product["id"]), [])
+        self.assertEqual(
+            {asset["id"] for asset in companies_db.asset_list_solution_assets(
+                company["id"], solution["id"],
+            )},
+            {logo["id"], photo["id"]},
+        )
+        with self.assertRaisesRegex(ValueError, "não pertence"):
+            companies_db.asset_create(other["id"], {
+                "solution_id": solution["id"],
+                "url": "/uploads/wrong-owner.png",
+                "meta": {"role": "logo"},
+            })
+
+        updated = companies_db.solution_update(solution["id"], {
+            "active": True, "colors": {"primary": "#ABCDEF"}, "functions": ["Streaming"],
+        })
+        self.assertTrue(updated["active"])
+        self.assertEqual(updated["colors"], {"primary": "#ABCDEF"})
+        self.assertEqual(updated["functions"], ["Streaming"])
+        self.assertTrue(companies_db.solution_delete(solution["id"]))
+        self.assertIsNone(companies_db.asset_get(logo["id"]))
+        self.assertIsNone(companies_db.asset_get(photo["id"]))
+
+    def test_catalog_schema_is_available_after_companies_init(self):
+        with db.get_conn() as conn:
+            tables = {
+                str(row[0]) for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            product_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(products)").fetchall()
+            }
+            plan_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(product_plans)").fetchall()
+            }
+            solution_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(solutions)").fetchall()
+            }
+            asset_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(company_assets)").fetchall()
+            }
+
+        self.assertTrue({
+            "product_groups", "product_plans", "company_catalog_links",
+        }.issubset(tables))
+        self.assertIn("group_id", product_columns)
+        self.assertTrue({"features", "sort_order"}.issubset(plan_columns))
+        self.assertTrue({
+            "description", "category", "website", "socials", "colors", "objective",
+            "functions", "knowledge", "web_brief", "web_brief_at", "active",
+        }.issubset(solution_columns))
+        self.assertIn("solution_id", asset_columns)
+
+    def test_catalog_hierarchy_validates_ownership_and_copy_maps_group(self):
+        source = self.create_company("Catálogo origem hierarquia")
+        target = self.create_company("Catálogo destino hierarquia")
+        other = self.create_company("Catálogo terceiro hierarquia")
+        streaming = companies_db.product_group_create(source["id"], {
+            "name": "Streaming", "description": "Entretenimento", "active": True,
+        })
+        other_group = companies_db.product_group_create(other["id"], {"name": "Saúde"})
+
+        product = companies_db.product_create(source["id"], {
+            "name": "Zapping", "group_id": streaming["id"],
+        })
+        self.assertEqual(product["group_id"], streaming["id"])
+        listed = next(row for row in companies_db.product_list(source["id"])
+                      if row["id"] == product["id"])
+        self.assertEqual(listed["group_id"], streaming["id"])
+
+        with self.assertRaises(ValueError):
+            companies_db.product_create(source["id"], {
+                "name": "Produto inválido", "group_id": other_group["id"],
+            })
+        with self.assertRaises(ValueError):
+            companies_db.product_update(product["id"], {"group_id": other_group["id"]})
+
+        self.assertIsNone(companies_db.product_update(product["id"], {"group_id": None})["group_id"])
+        companies_db.product_update(product["id"], {"group_id": streaming["id"]})
+        plan = companies_db.product_plan_create(product["id"], {
+            "name": "Full", "description": "Plano completo",
+            "features": ["Canais ao vivo", "Replay"], "sort_order": 2,
+        })
+        self.assertEqual(plan["company_id"], source["id"])
+        self.assertEqual(plan["features"], ["Canais ao vivo", "Replay"])
+        self.assertEqual(plan["sort_order"], 2)
+        updated_plan = companies_db.product_plan_update(plan["id"], {
+            "features": ["Canais ao vivo"], "sort_order": 1, "active": False,
+        })
+        self.assertEqual(updated_plan["features"], ["Canais ao vivo"])
+        self.assertEqual(updated_plan["sort_order"], 1)
+        self.assertFalse(updated_plan["active"])
+
+        copied = companies_db.product_copy(product["id"], target["id"])
+        copied_group = companies_db.product_group_get(copied["group_id"])
+        self.assertNotEqual(copied["group_id"], streaming["id"])
+        self.assertEqual(copied_group["company_id"], target["id"])
+        self.assertEqual(copied_group["name"], streaming["name"])
+
+    def test_catalog_links_validate_ownership_and_block_referenced_deletes(self):
+        source = self.create_company("Catálogo compartilhado")
+        target = self.create_company("Cliente com catálogo")
+        other = self.create_company("Outro catálogo")
+        group = companies_db.product_group_create(source["id"], {"name": "Streaming"})
+        product = companies_db.product_create(source["id"], {
+            "name": "Zapping", "group_id": group["id"],
+        })
+        plan = companies_db.product_plan_create(product["id"], {
+            "name": "Lite+", "features": ["TV ao vivo"],
+        })
+        solution = companies_db.solution_create(product["id"], {"name": "Telecine"})
+        other_product = companies_db.product_create(other["id"], {"name": "e-Saúde"})
+        other_plan = companies_db.product_plan_create(other_product["id"], {"name": "Clínica"})
+        other_solution = companies_db.solution_create(other_product["id"], {"name": "Aya"})
+
+        with self.assertRaises(ValueError):
+            companies_db.catalog_link_create(target["id"], {
+                "source_company_id": other["id"], "product_id": product["id"],
+            })
+        with self.assertRaises(ValueError):
+            companies_db.catalog_link_create(target["id"], {
+                "source_company_id": source["id"], "product_id": product["id"],
+                "plan_id": other_plan["id"],
+            })
+        with self.assertRaises(ValueError):
+            companies_db.catalog_link_create(target["id"], {
+                "source_company_id": source["id"], "product_id": product["id"],
+                "plan_id": plan["id"], "solution_ids": [other_solution["id"]],
+            })
+
+        link = companies_db.catalog_link_create(target["id"], {
+            "source_company_id": source["id"], "product_id": product["id"],
+            "plan_id": plan["id"], "solution_ids": [solution["id"], solution["id"]],
+            "notes": "Oferta contratada", "active": True,
+        })
+        self.assertEqual(link["solution_ids"], [solution["id"]])
+        self.assertTrue(link["active"])
+        self.assertEqual(companies_db.catalog_link_list(target["id"])[0]["id"], link["id"])
+        self.assertTrue(companies_db.catalog_link_references_product(product["id"]))
+        self.assertTrue(companies_db.catalog_link_references_plan(plan["id"]))
+        self.assertTrue(companies_db.catalog_link_references_solution(solution["id"]))
+        self.assertFalse(companies_db.product_plan_delete(plan["id"]))
+        self.assertFalse(companies_db.solution_delete(solution["id"]))
+        self.assertFalse(companies_db.product_delete(product["id"]))
+        self.assertFalse(companies_db.product_group_delete(group["id"]))
+        with self.assertRaisesRegex(ValueError, "Catálogo vinculado"):
+            companies_db.company_delete(source["id"])
+
+        self.assertTrue(companies_db.catalog_link_delete(link["id"]))
+        self.assertFalse(companies_db.catalog_link_references_product(product["id"]))
+        self.assertFalse(companies_db.catalog_link_references_plan(plan["id"]))
+        self.assertFalse(companies_db.catalog_link_references_solution(solution["id"]))
+        self.assertTrue(companies_db.product_plan_delete(plan["id"]))
+        self.assertTrue(companies_db.solution_delete(solution["id"]))
+        self.assertTrue(companies_db.product_delete(product["id"]))
+        self.assertTrue(companies_db.product_group_delete(group["id"]))
+
+    def test_product_catalog_migrations_are_versioned_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as legacy_dir:
+            legacy_path = Path(legacy_dir) / "catalog-legacy.db"
+            with patch.object(db, "DB_PATH", legacy_path), patch.object(
+                schema_migrations, "DB_PATH", legacy_path,
+            ):
+                with db.get_conn() as conn:
+                    conn.execute(
+                        "CREATE TABLE companies (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
+                    )
+                    conn.execute(
+                        "CREATE TABLE products (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, "
+                        "name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                    )
+                    conn.execute("CREATE TABLE app_users (user_id TEXT PRIMARY KEY)")
+
+                first = schema_migrations.run_migrations()
+                second = schema_migrations.run_migrations()
+                with db.get_conn() as conn:
+                    versions = {
+                        int(row[0]) for row in conn.execute(
+                            "SELECT version FROM schema_migrations"
+                        ).fetchall()
+                    }
+                    product_columns = {
+                        str(row[1]) for row in conn.execute("PRAGMA table_info(products)").fetchall()
+                    }
+                    solution_columns = {
+                        str(row[1]) for row in conn.execute("PRAGMA table_info(solutions)").fetchall()
+                    }
+                    asset_columns = {
+                        str(row[1]) for row in conn.execute("PRAGMA table_info(company_assets)").fetchall()
+                    }
+
+                self.assertIn(6, first)
+                self.assertIn(7, first)
+                self.assertEqual(second, [])
+                self.assertIn(6, versions)
+                self.assertIn(7, versions)
+                self.assertIn("group_id", product_columns)
+                self.assertIn("knowledge", solution_columns)
+                self.assertIn("solution_id", asset_columns)
 
 
 if __name__ == "__main__":

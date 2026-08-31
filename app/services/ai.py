@@ -3256,6 +3256,100 @@ def build_video_prompt(company: Dict[str, Any], theme: str, video_prompt: str = 
     return (video_prompt or theme or "cena publicitária premium").strip()
 
 
+def _catalog_text_list(value: Any) -> List[str]:
+    """Normalize flexible JSON/text catalog fields without leaking raw storage syntax."""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            value = parsed if isinstance(parsed, list) else [value]
+        except (TypeError, ValueError):
+            value = [value]
+    if not isinstance(value, list):
+        value = [value] if value else []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _catalog_colors_text(value: Any) -> str:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return value.strip()
+    if isinstance(value, dict):
+        return ", ".join(f"{key}: {color}" for key, color in value.items() if color)
+    return ""
+
+
+def selected_offer_context(product: Dict[str, Any], *, knowledge_limit: int = 7000,
+                           web_limit: int = 2500) -> str:
+    """Serialize the exact selected product/plan/add-ons for creative prompts.
+
+    ``_resolve_offer_refs`` has already enforced tenant and ownership boundaries.  Keeping
+    this formatter centralized prevents one generator from silently dropping the richer
+    fields of a selected plan or à-la-carte item.
+    """
+    def _item(kind: str, item: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(item, dict):
+            return ""
+        name = str(item.get("name") or item.get("title") or "").strip()
+        parts = [f"Nome: {name}" if name else ""]
+        category = str(item.get("category") or "").strip()
+        description = str(item.get("description") or "").strip()
+        objective = str(item.get("objective") or "").strip()
+        website = str(item.get("website") or "").strip()
+        socials = item.get("socials") if isinstance(item.get("socials"), dict) else {}
+        links = _catalog_text_list(item.get("links"))
+        functions = _catalog_text_list(item.get("functions"))
+        features = _catalog_text_list(item.get("features"))
+        knowledge = str(item.get("knowledge") or "").strip()
+        web = str(item.get("web_brief") or "").strip()
+        colors = _catalog_colors_text(item.get("colors"))
+        if category:
+            parts.append("Categoria: " + category[:300])
+        if description:
+            parts.append("Descrição: " + description[:1800])
+        if objective:
+            parts.append("Objetivo comercial: " + objective[:1800])
+        if website:
+            parts.append("Link oficial: " + website[:500])
+        if socials:
+            social_text = ", ".join(
+                f"{network}: {str(handle).strip()}" for network, handle in socials.items() if str(handle).strip()
+            )
+            if social_text:
+                parts.append("Canais oficiais: " + social_text[:700])
+        if links:
+            parts.append("Links cadastrados: " + "; ".join(links)[:1000])
+        if functions:
+            parts.append("Funções/benefícios: " + "; ".join(functions)[:2200])
+        if features:
+            parts.append("Características do plano: " + "; ".join(features)[:2200])
+        if knowledge and knowledge_limit:
+            parts.append("Base de conhecimento: " + knowledge[:knowledge_limit])
+        if web and web_limit:
+            parts.append("Pesquisa web validada: " + web[:web_limit])
+        if colors:
+            parts.append("Cores próprias cadastradas: " + colors[:700])
+        logos = item.get("_logos") or item.get("logos") or []
+        photos = item.get("_photos") or item.get("photos") or []
+        assets = []
+        if logos:
+            assets.append("logo oficial disponível")
+        if photos:
+            assets.append("foto/imagem real disponível")
+        if assets:
+            parts.append("Assets visuais: " + ", ".join(assets))
+        return f"{kind}: " + " | ".join(part for part in parts if part)
+
+    blocks = [_item("Produto pai", product)]
+    plan = product.get("_selected_plan") or product.get("plan")
+    if plan:
+        blocks.append(_item("Plano/subproduto selecionado", plan))
+    for solution in (product.get("solutions") or []):
+        blocks.append(_item("À la carte/adicional selecionado", solution))
+    return " || ".join(block for block in blocks if block)
+
+
 def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
     """Contexto REAL de produto/app pro vídeo — MESMA fonte que a ARTE usa (product_list + funções/objetivo/
     knowledge/web_brief), filtrado pelos apps citados no tema. SÓ LEITURA: não dispara refresh, não toca no
@@ -3281,39 +3375,11 @@ def _video_brief_context(company: Dict[str, Any], theme: str) -> str:
     focus = [p for p in prods if _norm(p.get("name")) and _norm(p.get("name")) in tnorm] or prods[:2]
     blocks = []
     for p in focus[:3]:
-        fns = p.get("functions") or []
-        if isinstance(fns, str):
-            try:
-                import json as _j
-                fns = _j.loads(fns)
-            except Exception:
-                fns = [fns] if fns else []
-        fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:800]
-        desc = (p.get("description") or "").strip()
-        obj = (p.get("objective") or "").strip()
-        kb = (p.get("knowledge") or "").strip()
-        web = (p.get("web_brief") or "").strip()
-        sols = [
-            (s.get("name") or s.get("title") or s.get("description") or "").strip()
-            for s in (p.get("solutions") or []) if isinstance(s, dict)
-        ]
-        seg = []
-        if p.get("_source_company_name"):
-            seg.append("Catálogo de origem: " + str(p.get("_source_company_name"))[:160])
-        if desc:
-            seg.append("Descrição: " + desc[:800])
-        if obj:
-            seg.append("Objetivo: " + obj)
-        if fns_t:
-            seg.append("Funções: " + fns_t)
-        if sols:
-            seg.append("Soluções: " + "; ".join(v for v in sols if v)[:800])
-        if kb:
-            seg.append("Fatos (use SÓ o que está aqui, não invente recursos): " + kb[:2500])
-        if web:
-            seg.append("Web: " + web[:1000])
-        if seg:
-            blocks.append(f"[{p.get('name')}] " + " | ".join(seg))
+        detail = selected_offer_context(p, knowledge_limit=2500, web_limit=1000)
+        source = ("Catálogo de origem: " + str(p.get("_source_company_name"))[:160] + " | "
+                  if p.get("_source_company_name") else "")
+        if detail:
+            blocks.append(f"[{p.get('name')}] " + source + detail)
     if not blocks:
         return ""
     return ("PRODUTO/APP REAL EM FOCO (baseie a CENA e a locução NESTES fatos — específico, NÃO genérico): "
@@ -3420,11 +3486,14 @@ def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: in
     if voice:
         bi.append("Tom de voz: " + voice)
     brand_identity = (". ".join(bi) + ".") if bi else "Sem identidade visual cadastrada — use paleta sóbria e premium."
-    try:
-        from ..db_companies import product_list as _pl
-        prods = _pl(company.get("id")) or []
-    except Exception:
-        prods = []
+    if company.get("_offer_products_explicit"):
+        prods = list(company.get("_offer_products_override") or [])
+    else:
+        try:
+            from ..db_companies import product_list as _pl
+            prods = _pl(company.get("id")) or []
+        except Exception:
+            prods = []
     import unicodedata as _ud
 
     def _norm(s):
@@ -3436,29 +3505,22 @@ def _video_template_vars(company: Dict[str, Any], theme: str, target_seconds: in
     pid, pkb, logos = [], [], []
     for p in focus[:3]:
         nm = (p.get("name") or "").strip()
-        obj = (p.get("objective") or "").strip()
-        fns = p.get("functions") or []
-        if isinstance(fns, str):
-            try:
-                import json as _j
-                fns = _j.loads(fns)
-            except Exception:
-                fns = [fns] if fns else []
-        fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:500]
-        seg = ([nm] if nm else []) + ([f"objetivo: {obj}"] if obj else []) + ([f"funções: {fns_t}"] if fns_t else [])
-        if seg:
-            pid.append(" — ".join(seg))
-        kb = (p.get("knowledge") or "").strip()                  # base local (cadastro)
-        web = (p.get("web_brief") or "").strip()                 # busca web (cache) — ANTES era ignorada no vídeo
-        facts = "  ".join(x for x in (kb[:1500], web[:1500]) if x)
-        if facts:
-            pkb.append(f"[{nm}] " + facts)
+        detail = selected_offer_context(p, knowledge_limit=0, web_limit=0)
+        if detail:
+            pid.append(detail[:2800])
+        factual = selected_offer_context(p, knowledge_limit=1500, web_limit=1500)
+        if factual:
+            pkb.append(f"[{nm}] " + factual[:4200])
     try:
         from ..db_companies import asset_list_logos as _all
         if _all(company.get("id")):
             logos.append(company.get("name") or "empresa")
         for p in focus[:3]:
-            if _all(company.get("id"), p.get("id")):
+            if company.get("_offer_products_explicit"):
+                for group in (p.get("_offer_logo_groups") or []):
+                    if group.get("assets"):
+                        logos.append((group.get("name") or p.get("name") or "oferta").strip())
+            elif _all(company.get("id"), p.get("id")):
                 logos.append((p.get("name") or "").strip())
     except Exception:
         pass
@@ -4504,7 +4566,8 @@ def generate_post_copy(company: Dict[str, Any], briefing: str, networks: List[st
         )
         user_parts.append(
             _product_intro
-            + "; ".join(f"{p.get('name')}: {(p.get('description') or '')[:120]}" + (f" [objetivo: {(p.get('objective') or '')[:150]}]" if p.get('objective') else "") for p in _prods[:25])
+            + "; ".join(selected_offer_context(p, knowledge_limit=2200, web_limit=900)
+                        for p in _prods[:25])[:12000]
         )
     user_parts.append(f"Briefing do post: {briefing}")
     user = "\n".join(user_parts)
@@ -5120,34 +5183,11 @@ def generate_carousel(company: Dict[str, Any], theme: str, n_slides: int = 0, in
     # BASE DE CONHECIMENTO: junta site(functions) + objetivo + docs(knowledge) dos apps EM FOCO (citados no tema)
     # → briefing PROFUNDO e específico, baseado em fatos REAIS (não raso, não inventado).
     def _app_brief(p):
-        fns = p.get("functions") or []
-        if isinstance(fns, str):
-            try:
-                import json as _j; fns = _j.loads(fns)
-            except Exception:
-                fns = [fns] if fns else []
-        fns_t = "; ".join(str(f).strip() for f in fns if str(f).strip())[:2000]
-        kb = (p.get("knowledge") or "").strip()
-        obj = (p.get("objective") or "").strip()
-        desc = (p.get("description") or "").strip()
-        sols = [
-            (s.get("name") or s.get("title") or s.get("description") or "").strip()
-            for s in (p.get("solutions") or []) if isinstance(s, dict)
-        ]
-        seg = []
+        detail = selected_offer_context(p, knowledge_limit=8000, web_limit=0)
         if p.get("_source_company_name"):
-            seg.append("Catálogo de origem: " + str(p.get("_source_company_name"))[:160])
-        if desc:
-            seg.append("Descrição: " + desc[:1600])
-        if obj:
-            seg.append("Objetivo: " + obj)
-        if fns_t:
-            seg.append("Funções: " + fns_t)
-        if sols:
-            seg.append("Soluções: " + "; ".join(v for v in sols if v)[:1600])
-        if kb:
-            seg.append("Base de conhecimento (fatos REAIS — use SÓ o que está aqui, não invente recursos):\n" + kb[:8000])
-        return (p.get("name"), " | ".join(seg)) if seg else None
+            detail = ("Catálogo de origem: " + str(p.get("_source_company_name"))[:160]
+                      + " | " + detail)
+        return (p.get("name"), detail) if detail else None
     _focus = list(_prods) if _focus_names else [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tnorm]
     _kb_blocks = [b for b in (_app_brief(p) for p in _focus) if b]
     kb_line = (("CONHECIMENTO REAL DAS OFERTAS EM FOCO — produtos/serviços/procedimentos (baseie o conteúdo NESTES fatos — específico e profundo, "

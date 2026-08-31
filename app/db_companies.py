@@ -265,6 +265,7 @@ def init_companies_db() -> None:
                 id          TEXT PRIMARY KEY,
                 company_id  TEXT NOT NULL,
                 product_id  TEXT,
+                solution_id TEXT,
                 post_id     TEXT,
                 kind        TEXT NOT NULL DEFAULT 'IMAGE',
                 source      TEXT NOT NULL DEFAULT 'UPLOADED',
@@ -278,7 +279,9 @@ def init_companies_db() -> None:
         # Ensure the column exists before indexing it (older DBs created company_assets
         # before product_id was introduced — indexing first would crash on those).
         _ensure_column("company_assets", "product_id", "product_id TEXT")
+        _ensure_column("company_assets", "solution_id", "solution_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_product ON company_assets(product_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_solution ON company_assets(solution_id)")
 
         # ── Influencers (POR EMPRESA) — cadastro + dados; o banco de imagem fica em company_assets
         #    (kind='INFLUENCER_PHOTO', meta.influencer_id) → reusa o mesmo storage/upload das logos. ──
@@ -356,6 +359,15 @@ def init_companies_db() -> None:
                 product_id  TEXT NOT NULL,
                 name        TEXT NOT NULL,
                 description TEXT,
+                category    TEXT,
+                website     TEXT,
+                socials     TEXT NOT NULL DEFAULT '{}',
+                colors      TEXT NOT NULL DEFAULT '{}',
+                objective   TEXT,
+                functions   TEXT NOT NULL DEFAULT '[]',
+                knowledge   TEXT,
+                web_brief   TEXT,
+                web_brief_at TEXT,
                 links       TEXT NOT NULL DEFAULT '[]',
                 active      INTEGER NOT NULL DEFAULT 1,
                 created_at  TEXT NOT NULL,
@@ -363,6 +375,15 @@ def init_companies_db() -> None:
                 FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
             )
         """)
+        _ensure_column("solutions", "category", "category TEXT")
+        _ensure_column("solutions", "website", "website TEXT")
+        _ensure_column("solutions", "socials", "socials TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column("solutions", "colors", "colors TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column("solutions", "objective", "objective TEXT")
+        _ensure_column("solutions", "functions", "functions TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column("solutions", "knowledge", "knowledge TEXT")
+        _ensure_column("solutions", "web_brief", "web_brief TEXT")
+        _ensure_column("solutions", "web_brief_at", "web_brief_at TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_solutions_product ON solutions(product_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_solutions_company ON solutions(company_id)")
 
@@ -1137,12 +1158,35 @@ def asset_create(company_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     aid = _uuid()
     now = _now()
     meta = json.dumps(data.get("meta") or {})
+    solution_id = str(data.get("solution_id") or "").strip() or None
+    product_id = None if solution_id else data.get("product_id")
     with get_conn() as conn:
+        if solution_id:
+            solution = conn.execute(
+                "SELECT company_id FROM solutions WHERE id = ?", (solution_id,),
+            ).fetchone()
+            if not solution or str(solution["company_id"]) != str(company_id):
+                raise ValueError("Solução não pertence a esta empresa.")
         conn.execute("""
-            INSERT INTO company_assets (id, company_id, product_id, post_id, kind, source, url, meta, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (aid, company_id, data.get("product_id"), data.get("post_id"), data.get("kind", "IMAGE"), data.get("source", "UPLOADED"), data.get("url", ""), meta, now))
-    return {"id": aid, "company_id": company_id, "product_id": data.get("product_id"), "kind": data.get("kind", "IMAGE"), "source": data.get("source", "UPLOADED"), "url": data.get("url", ""), "meta": data.get("meta") or {}}
+            INSERT INTO company_assets (
+                id, company_id, product_id, solution_id, post_id, kind, source, url, meta, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            aid, company_id, product_id, solution_id, data.get("post_id"),
+            data.get("kind", "IMAGE"), data.get("source", "UPLOADED"), data.get("url", ""), meta, now,
+        ))
+    return {
+        "id": aid,
+        "company_id": company_id,
+        "product_id": product_id,
+        "solution_id": solution_id,
+        "post_id": data.get("post_id"),
+        "kind": data.get("kind", "IMAGE"),
+        "source": data.get("source", "UPLOADED"),
+        "url": data.get("url", ""),
+        "meta": data.get("meta") or {},
+        "created_at": now,
+    }
 
 
 @_sqlite_retry
@@ -1177,13 +1221,15 @@ def asset_list_logos(company_id: str, product_id: Optional[str] = None) -> List[
         if product_id:
             rows = conn.execute("""
                 SELECT * FROM company_assets
-                WHERE company_id = ? AND product_id = ? AND json_extract(meta, '$.role') = 'logo'
+                WHERE company_id = ? AND product_id = ? AND solution_id IS NULL
+                  AND json_extract(meta, '$.role') = 'logo'
                 ORDER BY created_at DESC
             """, (company_id, product_id)).fetchall()
         else:
             rows = conn.execute("""
                 SELECT * FROM company_assets
-                WHERE company_id = ? AND product_id IS NULL AND json_extract(meta, '$.role') = 'logo'
+                WHERE company_id = ? AND product_id IS NULL AND solution_id IS NULL
+                  AND json_extract(meta, '$.role') = 'logo'
                 ORDER BY created_at DESC
             """, (company_id,)).fetchall()
         results = []
@@ -1201,12 +1247,14 @@ def asset_clear_primary(company_id: str, product_id: Optional[str] = None) -> No
         if product_id:
             rows = conn.execute("""
                 SELECT id, meta FROM company_assets
-                WHERE company_id = ? AND product_id = ? AND json_extract(meta, '$.role') = 'logo'
+                WHERE company_id = ? AND product_id = ? AND solution_id IS NULL
+                  AND json_extract(meta, '$.role') = 'logo'
             """, (company_id, product_id)).fetchall()
         else:
             rows = conn.execute("""
                 SELECT id, meta FROM company_assets
-                WHERE company_id = ? AND product_id IS NULL AND json_extract(meta, '$.role') = 'logo'
+                WHERE company_id = ? AND product_id IS NULL AND solution_id IS NULL
+                  AND json_extract(meta, '$.role') = 'logo'
             """, (company_id,)).fetchall()
         for r in rows:
             meta = json.loads(r["meta"] or "{}")
@@ -1224,7 +1272,7 @@ def asset_set_primary_logo(
         conn.execute("BEGIN IMMEDIATE")
         target = conn.execute(
             """SELECT * FROM company_assets
-               WHERE id = ? AND company_id = ? AND product_id IS NULL
+               WHERE id = ? AND company_id = ? AND product_id IS NULL AND solution_id IS NULL
                  AND json_extract(meta, '$.role') = 'logo'""",
             (asset_id, company_id),
         ).fetchone()
@@ -1236,7 +1284,7 @@ def asset_set_primary_logo(
                    CASE WHEN json_valid(meta) THEN meta ELSE '{}' END,
                    '$.is_primary', CASE WHEN id = ? THEN 1 ELSE 0 END
                )
-               WHERE company_id = ? AND product_id IS NULL
+               WHERE company_id = ? AND product_id IS NULL AND solution_id IS NULL
                  AND json_extract(meta, '$.role') = 'logo'""",
             (asset_id, company_id),
         )
@@ -1261,7 +1309,7 @@ def asset_claim_primary_logo_if_empty(company_id: str, asset_id: str, brand_sour
         conn.execute("BEGIN IMMEDIATE")
         target = conn.execute(
             """SELECT url FROM company_assets
-               WHERE id = ? AND company_id = ? AND product_id IS NULL
+               WHERE id = ? AND company_id = ? AND product_id IS NULL AND solution_id IS NULL
                  AND json_extract(meta, '$.role') = 'logo'""",
             (asset_id, company_id),
         ).fetchone()
@@ -1269,7 +1317,7 @@ def asset_claim_primary_logo_if_empty(company_id: str, asset_id: str, brand_sour
             return False
         primary = conn.execute(
             """SELECT 1 FROM company_assets
-               WHERE company_id = ? AND product_id IS NULL
+               WHERE company_id = ? AND product_id IS NULL AND solution_id IS NULL
                  AND json_extract(meta, '$.role') = 'logo'
                  AND COALESCE(json_extract(meta, '$.is_primary'), 0) = 1 LIMIT 1""",
             (company_id,),
@@ -1302,7 +1350,8 @@ def asset_list_photos(company_id: str, product_id: str) -> List[Dict[str, Any]]:
     with get_conn() as conn:
         rows = conn.execute("""
             SELECT * FROM company_assets
-            WHERE company_id = ? AND product_id = ? AND json_extract(meta, '$.role') = 'photo'
+            WHERE company_id = ? AND product_id = ? AND solution_id IS NULL
+              AND json_extract(meta, '$.role') = 'photo'
             ORDER BY created_at DESC
         """, (company_id, product_id)).fetchall()
         out = []
@@ -1311,6 +1360,34 @@ def asset_list_photos(company_id: str, product_id: str) -> List[Dict[str, Any]]:
             row["meta"] = json.loads(row.get("meta") or "{}")
             out.append(row)
         return out
+
+
+@_sqlite_retry
+def asset_list_solution_assets(
+    company_id: str, solution_id: str, role: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List assets owned by one à-la-carte/subproduct, optionally filtered by role."""
+    with get_conn() as conn:
+        params: List[Any] = [company_id, solution_id]
+        role_filter = ""
+        if role:
+            role_filter = " AND json_extract(meta, '$.role') = ?"
+            params.append(role)
+        rows = conn.execute(
+            "SELECT * FROM company_assets "
+            "WHERE company_id = ? AND solution_id = ?" + role_filter
+            + " ORDER BY created_at DESC",
+            params,
+        ).fetchall()
+        results = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["meta"] = json.loads(item.get("meta") or "{}")
+            except (TypeError, ValueError):
+                item["meta"] = {}
+            results.append(item)
+        return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2257,14 +2334,41 @@ def product_delete(product_id: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Solutions (Cliente → Produto → Solução)
+# Solutions / à-la-carte subproducts
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _solution_list_value(value: Any, field: str) -> List[Any]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} deve ser uma lista.")
+    return value
+
+
+def _solution_dict_value(value: Any, field: str) -> Dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} deve ser um objeto.")
+    return value
+
+
 def _serialize_solution(row: Dict[str, Any]) -> Dict[str, Any]:
-    row = dict(row)
-    row["links"] = json.loads(row.get("links") or "[]")
-    row["active"] = bool(row.get("active", 1))
-    return row
+    item = dict(row)
+    for field in ("links", "functions"):
+        try:
+            value = json.loads(item.get(field) or "[]")
+        except (TypeError, ValueError):
+            value = []
+        item[field] = value if isinstance(value, list) else []
+    for field in ("socials", "colors"):
+        try:
+            value = json.loads(item.get(field) or "{}")
+        except (TypeError, ValueError):
+            value = {}
+        item[field] = value if isinstance(value, dict) else {}
+    item["active"] = bool(item.get("active", 1))
+    return item
 
 
 @_sqlite_retry
@@ -2293,14 +2397,29 @@ def solution_create(product_id: str, data: Dict[str, Any]) -> Optional[Dict[str,
     product = product_get(product_id)
     if not product:
         return None
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("name é obrigatório")
     sid = _uuid()
     now = _now()
-    links = json.dumps(data.get("links") or [])
+    links = _solution_list_value(data.get("links"), "links")
+    functions = _solution_list_value(data.get("functions"), "functions")
+    socials = _solution_dict_value(data.get("socials"), "socials")
+    colors = _solution_dict_value(data.get("colors"), "colors")
     with get_conn() as conn:
         conn.execute("""
-            INSERT INTO solutions (id, company_id, product_id, name, description, links, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-        """, (sid, product["company_id"], product_id, data.get("name", ""), data.get("description"), links, now, now))
+            INSERT INTO solutions (
+                id, company_id, product_id, name, description, category, website, socials, colors,
+                objective, functions, knowledge, web_brief, web_brief_at, links, active,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            sid, product["company_id"], product_id, name, data.get("description"),
+            data.get("category"), data.get("website"), json.dumps(socials), json.dumps(colors),
+            data.get("objective"), json.dumps(functions), data.get("knowledge"),
+            data.get("web_brief"), data.get("web_brief_at"), json.dumps(links),
+            1 if data.get("active", True) else 0, now, now,
+        ))
     return solution_get(sid)
 
 
@@ -2309,13 +2428,25 @@ def solution_update(solution_id: str, data: Dict[str, Any]) -> Optional[Dict[str
     now = _now()
     fields: List[str] = []
     values: List[Any] = []
-    for key in ("name", "description"):
+    for key in (
+        "name", "description", "category", "website", "objective", "knowledge", "web_brief",
+        "web_brief_at",
+    ):
         if key in data:
+            if key == "name":
+                data[key] = str(data.get(key) or "").strip()
+                if not data[key]:
+                    raise ValueError("name é obrigatório")
             fields.append(f"{key} = ?")
             values.append(data[key])
-    if "links" in data:
-        fields.append("links = ?")
-        values.append(json.dumps(data["links"] or []))
+    for key in ("links", "functions"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(json.dumps(_solution_list_value(data.get(key), key)))
+    for key in ("socials", "colors"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(json.dumps(_solution_dict_value(data.get(key), key)))
     if "active" in data:
         fields.append("active = ?")
         values.append(1 if data["active"] else 0)
@@ -2334,6 +2465,7 @@ def solution_delete(solution_id: str) -> bool:
     if catalog_link_references_solution(solution_id):
         return False
     with get_conn() as conn:
+        conn.execute("DELETE FROM company_assets WHERE solution_id = ?", (solution_id,))
         cur = conn.execute("DELETE FROM solutions WHERE id = ?", (solution_id,))
         return cur.rowcount > 0
 

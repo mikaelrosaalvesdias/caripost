@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.122 - 2026-08-31
+
+- **feat(clientes): subprodutos e itens a la carte completos.** Cada adicional passa a ter descricao, categoria, site, redes, objetivo, beneficios/funcoes, paleta, logos, imagens e base de conhecimento proprios, com edicao e exclusao no cadastro do produto.
+- **feat(conteudo): plano e adicionais exatos dentro das artes.** O briefing permite selecionar plano e subprodutos por ID, e post, story, carrossel e video recebem seus dados, identidade visual, imagens e conhecimento sem incluir adicionais nao marcados.
+- **fix(compatibilidade): referencias antigas preservadas.** Conteudos existentes continuam funcionando, enquanto novas selecoes distinguem explicitamente nenhum adicional de um ou mais adicionais escolhidos.
+- Versao: main.py/UI/OS 1.27.122, cache bust `app.js?v=127122` e OS `v=127122`.
+
 ## v1.27.121 - 2026-08-28
 
 - **feat(clientes): cadastro completo de subprodutos e planos.** Planos/subprodutos passam a ter todos os campos e recursos de produtos: objetivo comercial/posicionamento, lista de benefícios/funções, categoria, link oficial, paleta de cores, redes sociais e base de conhecimento (KB).

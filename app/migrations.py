@@ -135,12 +135,144 @@ def _m5_company_lifecycle(conn: sqlite3.Connection) -> None:
     ensure_index(conn, "idx_companies_lifecycle", "companies", "lifecycle_stage")
 
 
+def _m6_product_catalog(conn: sqlite3.Connection) -> None:
+    """Hierarchical catalog and explicit links from clients to shared offers."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS product_groups ("
+        "id TEXT PRIMARY KEY, "
+        "company_id TEXT NOT NULL, "
+        "name TEXT NOT NULL, "
+        "description TEXT, "
+        "active INTEGER NOT NULL DEFAULT 1, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE)"
+    )
+    ensure_index(conn, "idx_product_groups_company", "product_groups", "company_id")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_product_groups_company_name "
+        "ON product_groups(company_id, name COLLATE NOCASE)"
+    )
+
+    ensure_column(
+        conn, "products", "group_id",
+        "group_id TEXT REFERENCES product_groups(id) ON DELETE RESTRICT",
+    )
+    ensure_index(conn, "idx_products_group", "products", "group_id")
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS product_plans ("
+        "id TEXT PRIMARY KEY, "
+        "company_id TEXT NOT NULL, "
+        "product_id TEXT NOT NULL, "
+        "name TEXT NOT NULL, "
+        "description TEXT, "
+        "features TEXT NOT NULL DEFAULT '[]', "
+        "active INTEGER NOT NULL DEFAULT 1, "
+        "sort_order INTEGER NOT NULL DEFAULT 0, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE, "
+        "FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE)"
+    )
+    # Defensive for databases initialized by a short-lived pre-release schema.
+    ensure_column(conn, "product_plans", "features", "features TEXT NOT NULL DEFAULT '[]'")
+    ensure_column(conn, "product_plans", "sort_order", "sort_order INTEGER NOT NULL DEFAULT 0")
+    ensure_index(conn, "idx_product_plans_company", "product_plans", "company_id")
+    ensure_index(conn, "idx_product_plans_product", "product_plans", "product_id")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_product_plans_product_name "
+        "ON product_plans(product_id, name COLLATE NOCASE)"
+    )
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS company_catalog_links ("
+        "id TEXT PRIMARY KEY, "
+        "company_id TEXT NOT NULL, "
+        "source_company_id TEXT NOT NULL, "
+        "product_id TEXT NOT NULL, "
+        "plan_id TEXT, "
+        "solution_ids TEXT NOT NULL DEFAULT '[]', "
+        "notes TEXT, "
+        "active INTEGER NOT NULL DEFAULT 1, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE, "
+        "FOREIGN KEY (source_company_id) REFERENCES companies(id) ON DELETE RESTRICT, "
+        "FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT, "
+        "FOREIGN KEY (plan_id) REFERENCES product_plans(id) ON DELETE RESTRICT)"
+    )
+    ensure_index(conn, "idx_catalog_links_company", "company_catalog_links", "company_id")
+    ensure_index(conn, "idx_catalog_links_source", "company_catalog_links", "source_company_id")
+    ensure_index(conn, "idx_catalog_links_product", "company_catalog_links", "product_id")
+    ensure_index(conn, "idx_catalog_links_plan", "company_catalog_links", "plan_id")
+
+
+def _m7_solution_catalog_profile(conn: sqlite3.Connection) -> None:
+    """Promote à-la-carte solutions to complete, asset-backed catalog entries."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS solutions ("
+        "id TEXT PRIMARY KEY, "
+        "company_id TEXT NOT NULL, "
+        "product_id TEXT NOT NULL, "
+        "name TEXT NOT NULL, "
+        "description TEXT, "
+        "category TEXT, "
+        "website TEXT, "
+        "socials TEXT NOT NULL DEFAULT '{}', "
+        "colors TEXT NOT NULL DEFAULT '{}', "
+        "objective TEXT, "
+        "functions TEXT NOT NULL DEFAULT '[]', "
+        "knowledge TEXT, "
+        "web_brief TEXT, "
+        "web_brief_at TEXT, "
+        "links TEXT NOT NULL DEFAULT '[]', "
+        "active INTEGER NOT NULL DEFAULT 1, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE)"
+    )
+    for column, ddl in (
+        ("category", "category TEXT"),
+        ("website", "website TEXT"),
+        ("socials", "socials TEXT NOT NULL DEFAULT '{}'"),
+        ("colors", "colors TEXT NOT NULL DEFAULT '{}'"),
+        ("objective", "objective TEXT"),
+        ("functions", "functions TEXT NOT NULL DEFAULT '[]'"),
+        ("knowledge", "knowledge TEXT"),
+        ("web_brief", "web_brief TEXT"),
+        ("web_brief_at", "web_brief_at TEXT"),
+    ):
+        ensure_column(conn, "solutions", column, ddl)
+    ensure_index(conn, "idx_solutions_product", "solutions", "product_id")
+    ensure_index(conn, "idx_solutions_company", "solutions", "company_id")
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS company_assets ("
+        "id TEXT PRIMARY KEY, "
+        "company_id TEXT NOT NULL, "
+        "product_id TEXT, "
+        "solution_id TEXT, "
+        "post_id TEXT, "
+        "kind TEXT NOT NULL DEFAULT 'IMAGE', "
+        "source TEXT NOT NULL DEFAULT 'UPLOADED', "
+        "url TEXT NOT NULL, "
+        "meta TEXT NOT NULL DEFAULT '{}', "
+        "created_at TEXT NOT NULL, "
+        "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE)"
+    )
+    ensure_column(conn, "company_assets", "solution_id", "solution_id TEXT")
+    ensure_index(conn, "idx_assets_solution", "company_assets", "solution_id")
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline", _m1_baseline),
     (2, "billing", _m2_billing),
     (3, "tenancy", _m3_tenancy),
     (4, "agency", _m4_agency),
     (5, "company_lifecycle", _m5_company_lifecycle),
+    (6, "product_catalog", _m6_product_catalog),
+    (7, "solution_catalog_profile", _m7_solution_catalog_profile),
 ]
 
 

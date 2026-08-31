@@ -406,10 +406,62 @@ function CompanyProspectFlow({ company }) {
   </div>;
 }
 
+function catalogItemActive(item) {
+  return !item || ![false, 0, '0'].includes(item.active);
+}
+
+function catalogProductGroupId(product) {
+  return product.group_id || product.product_group_id || (product.group && product.group.id) || '';
+}
+
+function catalogNormalizeHex(value) {
+  const raw = String(value || '').trim();
+  const tools = window.mpPalette;
+  if (tools && tools.normalizeHex) return tools.normalizeHex(raw) || '';
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(raw)) {
+    return ('#' + raw.slice(1).split('').map(char => char + char).join('')).toUpperCase();
+  }
+  return '';
+}
+
+function catalogCleanColors(colors, previous) {
+  const result = { ...(previous || {}) };
+  ['primary', 'secondary', 'accent'].forEach(key => {
+    const normalized = catalogNormalizeHex((colors || {})[key]);
+    if (normalized) result[key] = normalized;
+    else delete result[key];
+  });
+  return result;
+}
+
+function CatalogColorFields({ colors, onChange, labelPrefix }) {
+  const labels = { primary: 'Principal', secondary: 'Secundária', accent: 'Destaque' };
+  return <div className="grid3" style={{ gap: 8 }}>
+    {['primary', 'secondary', 'accent'].map(key => {
+      const value = (colors && colors[key]) || '';
+      return <Field key={key} label={(labelPrefix ? labelPrefix + ' · ' : '') + labels[key]}>
+        <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'nowrap' }}>
+          <input type="color" aria-label={'Seletor da cor ' + labels[key].toLowerCase()} value={catalogNormalizeHex(value) || '#000000'}
+            onChange={event => onChange({ ...(colors || {}), [key]: event.target.value.toUpperCase() })}
+            style={{ width: 42, height: 38, padding: 0, border: '1px solid var(--line)', borderRadius: 7, background: 'transparent', cursor: 'pointer', flex: 'none' }} />
+          <input className="inp mono" value={value} onChange={event => onChange({ ...(colors || {}), [key]: event.target.value })}
+            onBlur={event => {
+              const normalized = catalogNormalizeHex(event.target.value);
+              onChange({ ...(colors || {}), [key]: normalized });
+            }} placeholder="#RRGGBB" aria-label={'Hexadecimal da cor ' + labels[key].toLowerCase()} />
+        </div>
+      </Field>;
+    })}
+  </div>;
+}
+
 function CompanyProdutos({ company }) {
   const [products, setProducts] = React.useState([]);
+  const [groups, setGroups] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [newName, setNewName] = React.useState('');
+  const [newGroupId, setNewGroupId] = React.useState('');
   const [msg, setMsg] = React.useState('');
   const [copyOpen, setCopyOpen] = React.useState(false);
   const enrichment = company?.brand_kit?.extras?.enrichment || {};
@@ -418,8 +470,17 @@ function CompanyProdutos({ company }) {
   const load = React.useCallback(() => {
     if (!window.mpApi) return;
     setLoading(true);
-    window.mpApi.listProducts(company.id)
-      .then(p => { setProducts(p || []); setLoading(false); })
+    Promise.all([window.mpApi.listProducts(company.id), window.mpApi.listProductGroups(company.id)])
+      .then(([p, g]) => {
+        setProducts(p || []);
+        setGroups(g || []);
+        setNewGroupId(current => {
+          if (current && (g || []).some(item => catalogItemActive(item) && String(item.id) === String(current))) return current;
+          const firstActive = (g || []).find(catalogItemActive);
+          return (firstActive && firstActive.id) || '';
+        });
+        setLoading(false);
+      })
       .catch(e => { setMsg('Erro: ' + e.message); setLoading(false); });
   }, [company.id]);
 
@@ -427,22 +488,381 @@ function CompanyProdutos({ company }) {
 
   async function addProduct() {
     if (!newName.trim()) { setMsg('Informe o nome do produto.'); return; }
-    try { await window.mpApi.createProduct(company.id, { name: newName.trim() }); setNewName(''); setMsg(''); load(); }
+    try {
+      await window.mpApi.createProduct(company.id, { name: newName.trim(), group_id: newGroupId || null });
+      setNewName(''); setMsg(''); load();
+    }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
 
+  const sections = groups.map(group => ({
+    ...group,
+    products: products.filter(product => String(catalogProductGroupId(product)) === String(group.id)),
+  }));
+  const ungrouped = products.filter(product => !groups.some(group => String(group.id) === String(catalogProductGroupId(product))));
+  if (ungrouped.length) sections.push({ id: '', name: 'Sem grupo', description: 'Produtos antigos ou ainda não organizados.', products: ungrouped });
+
   return <div className="stack">
-    <div className="hint">Produtos, serviços e procedimentos são <b>fonte de conteúdo</b> para o briefing. Não são selecionados na geração — a IA busca aqui as infos do que você cadastrar.</div>
+    <div className="panel stack" style={{ borderColor: 'var(--cyan)' }}>
+      <div className="sec cy"><Icon name="layers" />Catálogo próprio</div>
+      <div className="hint">Organize em <b>grupo → produto → plano</b>. À la carte e subprodutos ficam separados do plano: por exemplo, Streaming → Zapping → Full/Lite, com Telecine e Premiere vinculados à parte.</div>
+      <ProductGroupsEditor company={company} groups={groups} products={products} onChanged={load} onCreated={id => setNewGroupId(id)} />
+    </div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-      <input className="inp" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nome do produto (ex.: Look Diesel)" onKeyDown={e => e.key === 'Enter' && addProduct()} />
+      <select className="inp" value={newGroupId} onChange={e => setNewGroupId(e.target.value)} style={{ maxWidth: 260 }}>
+        <option value="">Sem grupo</option>
+        {groups.filter(catalogItemActive).map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
+      </select>
+      <input className="inp" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nome do produto (ex.: Zapping)" onKeyDown={e => e.key === 'Enter' && addProduct()} />
       <button className="btn pri" onClick={addProduct}><Icon name="plus" />Adicionar produto</button>
       <button className="btn" onClick={() => setCopyOpen(true)}><Icon name="copy" />Copiar de outro cliente</button>
     </div>
     {copyOpen && <CopyProductsModal company={company} onClose={() => setCopyOpen(false)} onDone={(n) => { setCopyOpen(false); setMsg(n ? `${n} produto(s) copiado(s).` : 'Nada copiado.'); load(); }} />}
     {loading && <div className="hint">Carregando produtos…</div>}
     {!loading && !products.length && <div className="hint">Nenhum produto ainda. Adicione os produtos que a empresa trabalha.</div>}
-    {products.map(p => <ProductCard key={p.id} company={company} product={p} onChanged={load} />)}
+    {!loading && sections.map(section => <details key={section.id || '__ungrouped'} className="panel" open>
+      <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <div><b>{section.name}</b>{section.description && <div className="hint" style={{ marginTop: 3 }}>{section.description}</div>}</div>
+          <Pill kind={section.id ? 'cy' : 'warn'}>{section.products.length} produto(s)</Pill>
+        </div>
+      </summary>
+      <div className="stack" style={{ marginTop: 12 }}>
+        {!section.products.length && <div className="hint">Nenhum produto neste grupo.</div>}
+        {section.products.map(product => <ProductCard key={product.id} company={company} product={product} groups={groups} onChanged={load} />)}
+      </div>
+    </details>)}
+    <CompanyCatalogLinks company={company} />
+  </div>;
+}
+
+function ProductGroupsEditor({ company, groups, products, onChanged, onCreated }) {
+  const [name, setName] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+
+  async function create() {
+    if (!name.trim()) { setMsg('Informe o nome do grupo.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const group = await window.mpApi.createProductGroup(company.id, {
+        name: name.trim(), description: description.trim(), active: true,
+      });
+      setName(''); setDescription('');
+      setMsg('Grupo criado.');
+      if (group && onCreated) onCreated(group.id);
+      onChanged();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="stack">
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    {!!groups.length && <div className="grid2">
+      {groups.map(group => <ProductGroupEditor key={group.id} company={company} group={group}
+        productCount={products.filter(product => String(catalogProductGroupId(product)) === String(group.id)).length}
+        onChanged={onChanged} />)}
+    </div>}
+    {!groups.length && <div className="hint">Nenhum grupo cadastrado. Crie o primeiro para começar a organizar o catálogo.</div>}
+    <div className="split" style={{ gap: 8 }}>
+      <input className="inp" value={name} onChange={e => setName(e.target.value)} placeholder="Novo grupo (ex.: Streaming)" onKeyDown={e => e.key === 'Enter' && create()} />
+      <input className="inp" value={description} onChange={e => setDescription(e.target.value)} placeholder="Descrição opcional" onKeyDown={e => e.key === 'Enter' && create()} />
+    </div>
+    <div className="row"><button className="btn sm" disabled={busy} onClick={create}><Icon name="plus" />{busy ? 'Criando…' : 'Criar grupo'}</button></div>
+  </div>;
+}
+
+function ProductGroupEditor({ company, group, productCount, onChanged }) {
+  const [name, setName] = React.useState(group.name || '');
+  const [description, setDescription] = React.useState(group.description || '');
+  const [active, setActive] = React.useState(catalogItemActive(group));
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+
+  React.useEffect(() => {
+    setName(group.name || '');
+    setDescription(group.description || '');
+    setActive(catalogItemActive(group));
+  }, [group.id, group.name, group.description, group.active]);
+
+  async function save() {
+    if (!name.trim()) { setMsg('Erro: informe o nome do grupo.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.updateProductGroup(company.id, group.id, {
+        name: name.trim(), description: description.trim(), active,
+      });
+      setMsg('Grupo salvo.'); onChanged();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function remove() {
+    if (productCount) { setMsg('Erro: mova os produtos deste grupo antes de excluí-lo.'); return; }
+    if (!window.confirm('Excluir o grupo "' + group.name + '"?')) return;
+    setBusy(true); setMsg('');
+    try { await window.mpApi.deleteProductGroup(company.id, group.id); onChanged(); }
+    catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
+  }
+
+  return <div className="litem" style={{ padding: 10, alignItems: 'flex-start' }}>
+    <div className="li-main stack" style={{ gap: 7 }}>
+      <input className="inp" value={name} onChange={e => setName(e.target.value)} aria-label="Nome do grupo" />
+      <input className="inp" value={description} onChange={e => setDescription(e.target.value)} placeholder="Descrição do grupo" aria-label="Descrição do grupo" />
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label className="hint row" style={{ gap: 6, cursor: 'pointer' }}>
+          <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} /> Ativo
+        </label>
+        <Pill kind={productCount ? 'cy' : ''}>{productCount} produto(s)</Pill>
+        <button className="btn sm pri" disabled={busy} onClick={save}>Salvar</button>
+        <button className="btn sm ghost" disabled={busy || !!productCount} title={productCount ? 'Mova os produtos antes de excluir' : 'Excluir grupo'} onClick={remove}><Icon name="trash" /></button>
+      </div>
+      {msg && <small className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</small>}
+    </div>
+  </div>;
+}
+
+function catalogModalGroups(catalog) {
+  const products = (catalog && catalog.products) || [];
+  const candidates = [
+    ...(((catalog && catalog.groups) || [])),
+    ...products.map(product => product.group).filter(Boolean),
+  ];
+  const seen = new Set();
+  const groups = candidates.filter(group => {
+    const id = String((group && group.id) || '');
+    if (!id || seen.has(id) || !catalogItemActive(group)) return false;
+    seen.add(id);
+    return products.some(product => String(catalogProductGroupId(product)) === id && catalogItemActive(product));
+  });
+  if (products.some(product => !catalogProductGroupId(product) && catalogItemActive(product))) {
+    groups.push({ id: '__ungrouped', name: 'Sem grupo' });
+  }
+  return groups;
+}
+
+function catalogModalProducts(catalog, groupId) {
+  const products = ((catalog && catalog.products) || []).filter(catalogItemActive);
+  if (groupId === '__ungrouped') return products.filter(product => !catalogProductGroupId(product));
+  return products.filter(product => String(catalogProductGroupId(product)) === String(groupId || ''));
+}
+
+function CompanyCatalogLinks({ company }) {
+  const [links, setLinks] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    return window.mpApi.listCatalogLinks(company.id)
+      .then(items => { setLinks(items || []); setLoading(false); setMsg(''); return items || []; })
+      .catch(e => { setMsg('Erro: ' + e.message); setLoading(false); return []; });
+  }, [company.id]);
+
+  React.useEffect(() => { if (window.mpApi) load(); }, [load]);
+
+  async function remove(link) {
+    const productName = (link.product && link.product.name) || 'esta oferta';
+    if (!window.confirm('Remover o vínculo com "' + productName + '"?')) return;
+    setBusy(link.id); setMsg('');
+    try {
+      await window.mpApi.deleteCatalogLink(company.id, link.id);
+      await load();
+      setMsg('Vínculo removido.');
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(''); }
+  }
+
+  return <div className="panel stack" style={{ borderColor: 'var(--pri)' }}>
+    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div>
+        <div className="sec pri" style={{ margin: 0 }}><Icon name="link" />Vínculos de catálogo</div>
+        <div className="hint" style={{ marginTop: 5 }}>Registre quais ofertas de outra empresa este cliente possui. O vínculo permanece salvo e não cria uma cópia do produto.</div>
+      </div>
+      <button className="btn pri" onClick={() => setCreateOpen(true)}><Icon name="plus" />Vincular oferta</button>
+    </div>
+    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+    {loading && <div className="hint">Carregando vínculos…</div>}
+    {!loading && !links.length && <div className="hint">Nenhuma oferta de catálogo vinculada a {company.name}.</div>}
+    {!loading && links.map(link => {
+      const group = link.group || {};
+      const product = link.product || {};
+      const plan = link.plan || {};
+      const additions = link.solutions || [];
+      const path = [group.name, product.name, plan.name].filter(Boolean);
+      return <div key={link.id} className="litem" style={{ padding: 11, alignItems: 'flex-start' }}>
+        <span className="li-ic"><Icon name="layers" /></span>
+        <div className="li-main">
+          <b>{link.source_company_name || 'Catálogo externo'}</b>
+          <small>{path.length ? path.join(' → ') : 'Oferta indisponível'}</small>
+          {!!additions.length && <div className="row" style={{ gap: 5, flexWrap: 'wrap', marginTop: 7 }}>
+            {additions.map(item => <Pill key={item.id || item.name} kind="cy">+ {item.name}</Pill>)}
+          </div>}
+          {link.notes && <div className="hint" style={{ marginTop: 6 }}>{link.notes}</div>}
+        </div>
+        {!catalogItemActive(link) && <Pill kind="warn">inativo</Pill>}
+        <button className="btn sm ghost" disabled={busy === link.id} onClick={() => remove(link)} title="Remover vínculo"><Icon name="trash" /></button>
+      </div>;
+    })}
+    {createOpen && <CatalogLinkModal company={company} onClose={() => setCreateOpen(false)} onSaved={async () => {
+      setCreateOpen(false);
+      await load();
+      setMsg('Oferta vinculada.');
+    }} />}
+  </div>;
+}
+
+function CatalogLinkModal({ company, onClose, onSaved }) {
+  const [catalogs, setCatalogs] = React.useState(null);
+  const [catalogId, setCatalogId] = React.useState('');
+  const [groupId, setGroupId] = React.useState('');
+  const [productId, setProductId] = React.useState('');
+  const [planId, setPlanId] = React.useState('');
+  const [solutionIds, setSolutionIds] = React.useState([]);
+  const [notes, setNotes] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+
+  function selectCatalog(id, availableCatalogs = catalogs || []) {
+    const selectedCatalog = availableCatalogs.find(item => String(item.company_id) === String(id));
+    const nextGroups = catalogModalGroups(selectedCatalog);
+    const nextGroupId = (nextGroups[0] && nextGroups[0].id) || '';
+    const nextProducts = catalogModalProducts(selectedCatalog, nextGroupId);
+    const nextProduct = nextProducts[0] || null;
+    const nextPlans = ((nextProduct && nextProduct.plans) || []).filter(catalogItemActive);
+    setCatalogId((selectedCatalog && selectedCatalog.company_id) || '');
+    setGroupId(nextGroupId);
+    setProductId((nextProduct && nextProduct.id) || '');
+    setPlanId((nextPlans[0] && nextPlans[0].id) || '');
+    setSolutionIds([]);
+  }
+
+  React.useEffect(() => {
+    let cancelled = false;
+    window.mpApi.catalogLinkOptions(company.id)
+      .then(items => {
+        if (cancelled) return;
+        const available = (items || []).filter(catalog => catalog && catalog.company_id && String(catalog.company_id) !== String(company.id));
+        setCatalogs(available);
+        const first = available.find(catalog => catalogModalGroups(catalog).some(group => catalogModalProducts(catalog, group.id).length));
+        if (first) selectCatalog(first.company_id, available);
+      })
+      .catch(e => { if (!cancelled) { setCatalogs([]); setMsg('Erro: ' + e.message); } });
+    return () => { cancelled = true; };
+  }, [company.id]);
+
+  const catalog = (catalogs || []).find(item => String(item.company_id) === String(catalogId));
+  const groups = catalogModalGroups(catalog);
+  const products = catalogModalProducts(catalog, groupId);
+  const product = products.find(item => String(item.id) === String(productId));
+  const plans = ((product && product.plans) || []).filter(catalogItemActive);
+  const solutions = ((product && product.solutions) || []).filter(catalogItemActive);
+  const plan = plans.find(item => String(item.id) === String(planId));
+
+  function selectGroup(id) {
+    const nextProducts = catalogModalProducts(catalog, id);
+    const nextProduct = nextProducts[0] || null;
+    const nextPlans = ((nextProduct && nextProduct.plans) || []).filter(catalogItemActive);
+    setGroupId(id);
+    setProductId((nextProduct && nextProduct.id) || '');
+    setPlanId((nextPlans[0] && nextPlans[0].id) || '');
+    setSolutionIds([]);
+  }
+
+  function selectProduct(id) {
+    const nextProduct = products.find(item => String(item.id) === String(id));
+    const nextPlans = ((nextProduct && nextProduct.plans) || []).filter(catalogItemActive);
+    setProductId(id);
+    setPlanId((nextPlans[0] && nextPlans[0].id) || '');
+    setSolutionIds([]);
+  }
+
+  function toggleSolution(id) {
+    setSolutionIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  }
+
+  async function save() {
+    if (!catalog || !product) { setMsg('Erro: selecione um catálogo, grupo e produto.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.createCatalogLink(company.id, {
+        source_company_id: catalog.company_id,
+        product_id: product.id,
+        plan_id: planId || null,
+        solution_ids: solutionIds,
+        notes: notes.trim(),
+        active: true,
+      });
+      await onSaved();
+    } catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
+  }
+
+  const summary = [catalog && catalog.company_name, groups.find(item => String(item.id) === String(groupId))?.name, product && product.name, plan && plan.name].filter(Boolean);
+
+  return <div onClick={() => !busy && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 9100, background: 'rgba(0,0,0,.58)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+    <div className="panel stack" style={{ maxWidth: 680, width: '100%', maxHeight: '88vh', overflowY: 'auto', background: 'var(--bg2)' }} onClick={e => e.stopPropagation()}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+        <div><b>Vincular oferta a {company.name}</b><div className="hint" style={{ marginTop: 4 }}>Siga a hierarquia do catálogo e escolha os à la carte / subprodutos separadamente.</div></div>
+        <button className="btn sm ghost" disabled={busy} onClick={onClose}><Icon name="x" /></button>
+      </div>
+      {msg && <div className="err">{msg}</div>}
+      {catalogs === null && <div className="hint">Carregando catálogos disponíveis…</div>}
+      {catalogs !== null && !catalogs.length && <div className="hint">Nenhuma outra empresa possui um catálogo disponível para vínculo.</div>}
+      {catalogs !== null && !!catalogs.length && <>
+        <Field label="1. Catálogo de origem">
+          <select className="inp" value={catalogId} onChange={e => selectCatalog(e.target.value)}>
+            <option value="">Selecione o catálogo</option>
+            {catalogs.map(item => <option key={item.company_id} value={item.company_id}>{item.company_name}</option>)}
+          </select>
+        </Field>
+        <div className="split">
+          <Field label="2. Grupo">
+            <select className="inp" value={groupId} disabled={!groups.length} onChange={e => selectGroup(e.target.value)}>
+              {!groups.length && <option value="">Nenhum grupo com produtos</option>}
+              {groups.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </Field>
+          <Field label="3. Produto ou serviço">
+            <select className="inp" value={productId} disabled={!products.length} onChange={e => selectProduct(e.target.value)}>
+              {!products.length && <option value="">Nenhum produto neste grupo</option>}
+              {products.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </Field>
+        </div>
+        <Field label="4. Plano">
+          <select className="inp" value={planId} disabled={!product} onChange={e => setPlanId(e.target.value)}>
+            <option value="">Produto inteiro / sem plano específico</option>
+            {plans.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          {product && !plans.length && <div className="hint">Este produto ainda não possui planos; o vínculo será feito no produto.</div>}
+        </Field>
+        <Field label="5. À la carte / subprodutos (opcionais e independentes do plano)">
+          {!solutions.length && <div className="hint">Este produto não possui à la carte / subprodutos cadastrados.</div>}
+          {!!solutions.length && <div className="grid2">
+            {solutions.map(item => <label key={item.id} className="litem" style={{ padding: 9, cursor: 'pointer', gap: 8 }}>
+              <input type="checkbox" checked={solutionIds.includes(item.id)} onChange={() => toggleSolution(item.id)} />
+              <div className="li-main"><b>{item.name}</b>{item.description && <small>{item.description}</small>}</div>
+            </label>)}
+          </div>}
+        </Field>
+        <Field label="Observações do vínculo">
+          <textarea className="inp" rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Ex.: plano contratado na campanha de agosto" style={{ resize: 'vertical' }} />
+        </Field>
+        {!!summary.length && <div className="panel" style={{ padding: 10 }}>
+          <div className="hint">Vínculo selecionado</div>
+          <b>{summary.join(' → ')}</b>
+          {!!solutionIds.length && <div className="hint" style={{ marginTop: 5 }}>+ {solutions.filter(item => solutionIds.includes(item.id)).map(item => item.name).join(', ')}</div>}
+        </div>}
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancelar</button>
+          <button className="btn pri" disabled={busy || !product} onClick={save}><Icon name="link" />{busy ? 'Vinculando…' : 'Salvar vínculo'}</button>
+        </div>
+      </>}
+    </div>
   </div>;
 }
 
@@ -479,7 +899,7 @@ function CopyProductsModal({ company, onClose, onDone }) {
         <b>Copiar produtos de outro cliente</b>
         <button className="btn sm ghost" onClick={onClose}><Icon name="x" /></button>
       </div>
-      <div className="hint" style={{ marginTop: 6 }}>As cópias ficam independentes — editar aqui não muda o cliente de origem. Não traz logos/fotos (só o texto e a base de conhecimento que alimentam o briefing).</div>
+      <div className="hint" style={{ marginTop: 6 }}>As cópias ficam independentes — editar aqui não muda o cliente de origem. O grupo é recriado no destino; planos, à la carte/subprodutos, logos e fotos não são copiados.</div>
       {msg && <div className="err">{msg}</div>}
       {sources === null && <div className="hint">Carregando clientes…</div>}
       {sources !== null && !sources.length && <div className="hint">Nenhum outro cliente com produtos cadastrados.</div>}
@@ -773,16 +1193,20 @@ function EventCard({ company, ev, onChanged }) {
   </div>;
 }
 
-function ProductCard({ company, product, onChanged }) {
+function ProductCard({ company, product, groups, onChanged }) {
   const [name, setName] = React.useState(product.name || '');
+  const [groupId, setGroupId] = React.useState(catalogProductGroupId(product));
   const [description, setDescription] = React.useState(product.description || '');
   const [website, setWebsite] = React.useState(product.website || '');
   const [instagram, setInstagram] = React.useState((product.socials || {}).instagram || '');
   const [objective, setObjective] = React.useState(product.objective || '');
   const [functions, setFunctions] = React.useState((product.functions || []).join('\n'));
-  const [solName, setSolName] = React.useState('');
+  const [planName, setPlanName] = React.useState('');
+  const [planDescription, setPlanDescription] = React.useState('');
+  const [planFeatures, setPlanFeatures] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
+  const plans = product.plans || [];
   const solutions = product.solutions || [];
   const logos = product.logos || [];
   const photos = product.photos || [];
@@ -825,7 +1249,7 @@ function ProductCard({ company, product, onChanged }) {
     setBusy(true); setMsg('');
     try {
       await window.mpApi.updateProduct(company.id, product.id, {
-        name, description, website, objective,
+        name, group_id: groupId || null, description, website, objective,
         functions: functions.split('\n').map(s => s.trim()).filter(Boolean),
         socials: { ...(product.socials || {}), instagram },
       });
@@ -856,14 +1280,21 @@ function ProductCard({ company, product, onChanged }) {
     try { await window.mpApi.deleteProduct(company.id, product.id); onChanged(); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
-  async function addSolution() {
-    if (!solName.trim()) return;
-    try { await window.mpApi.createSolution(company.id, product.id, { name: solName.trim() }); setSolName(''); onChanged(); }
-    catch (e) { setMsg('Erro: ' + e.message); }
-  }
-  async function removeSolution(id) {
-    try { await window.mpApi.deleteSolution(company.id, id); onChanged(); }
-    catch (e) { setMsg('Erro: ' + e.message); }
+  async function addPlan() {
+    if (!planName.trim()) { setMsg('Erro: informe o nome do plano.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.createProductPlan(company.id, product.id, {
+        name: planName.trim(),
+        description: planDescription.trim(),
+        features: planFeatures.split('\n').map(item => item.trim()).filter(Boolean),
+        active: true,
+        sort_order: plans.length,
+      });
+      setPlanName(''); setPlanDescription(''); setPlanFeatures('');
+      setMsg('Plano adicionado.'); onChanged();
+    } catch (e) { setMsg('Erro: ' + e.message); }
+    finally { setBusy(false); }
   }
   async function uploadLogo(files) {
     const list = Array.from(files || []).filter(Boolean);
@@ -900,15 +1331,26 @@ function ProductCard({ company, product, onChanged }) {
 
   return <div className="panel stack">
     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-      <div className="row" style={{ gap: 8, alignItems: 'center' }}><span className="li-ic"><Icon name="layers" /></span><b>{product.name}</b></div>
+      <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className="li-ic"><Icon name="layers" /></span><b>{product.name}</b>
+        <Pill kind="cy">{plans.length} plano(s)</Pill><Pill>{solutions.length} à la carte</Pill>
+      </div>
       <button className="btn sm" onClick={remove}><Icon name="trash" />Excluir</button>
     </div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <div className="split">
       <Field label="Nome"><input className="inp" value={name} onChange={e => setName(e.target.value)} /></Field>
-      <Field label="Site"><input className="inp" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://" /></Field>
+      <Field label="Grupo">
+        <select className="inp" value={groupId} onChange={e => setGroupId(e.target.value)}>
+          <option value="">Sem grupo</option>
+          {(groups || []).map(group => <option key={group.id} value={group.id}>{group.name}{catalogItemActive(group) ? '' : ' (inativo)'}</option>)}
+        </select>
+      </Field>
     </div>
-    <Field label="Instagram"><input className="inp" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@produto" /></Field>
+    <div className="split">
+      <Field label="Site"><input className="inp" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://" /></Field>
+      <Field label="Instagram"><input className="inp" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@produto" /></Field>
+    </div>
     <div className="row">
       <button className="btn sm" disabled={busy} onClick={enrich}><Icon name="sparkles" />{busy ? 'Puxando…' : 'Puxar do site e logo'}</button>
       <small className="hint" style={{ alignSelf: 'center' }}>Só preenche fatos encontrados no site e cores reais da logo; campos sem evidência ficam vazios.</small>
@@ -958,19 +1400,397 @@ function ProductCard({ company, product, onChanged }) {
       </div>
     </>}
 
-    <div className="sec mut" style={{ marginTop: 4 }}>À la carte (entregue junto neste app)</div>
-    <div className="hint">Itens que vêm dentro do app — ex.: Zap → Telecine, Premiere, Canais Adultos; Aya Books → eBooks, Mini Books, Audiobooks.</div>
-    {solutions.map(s => <div key={s.id} className="litem" style={{ padding: 8 }}>
-      <div className="li-main"><b>{s.name}</b>{s.description && <small>{s.description}</small>}</div>
-      <button className="btn sm ghost" onClick={() => removeSolution(s.id)}><Icon name="x" /></button>
-    </div>)}
-    <div className="row" style={{ gap: 8 }}>
-      <input className="inp" value={solName} onChange={e => setSolName(e.target.value)} placeholder="Novo item à la carte" onKeyDown={e => e.key === 'Enter' && addSolution()} />
-      <button className="btn sm" onClick={addSolution}><Icon name="plus" />Adicionar</button>
+    <div className="sec cy" style={{ marginTop: 4 }}>Planos do produto</div>
+    <div className="hint">Variações comerciais do mesmo produto — por exemplo: Zapping Full e Zapping Lite; e-Saúde Pronto Atendimento e e-Saúde Clínica.</div>
+    {!plans.length && <div className="hint">Nenhum plano cadastrado. O produto ainda pode ser vinculado sem plano específico.</div>}
+    {plans.map(plan => <ProductPlanEditor key={plan.id} company={company} plan={plan} onChanged={onChanged} onError={setMsg} />)}
+    <div className="panel stack" style={{ padding: 10 }}>
+      <div className="split">
+        <input className="inp" value={planName} onChange={e => setPlanName(e.target.value)} placeholder="Novo plano (ex.: Full)" onKeyDown={e => e.key === 'Enter' && addPlan()} />
+        <input className="inp" value={planDescription} onChange={e => setPlanDescription(e.target.value)} placeholder="Descrição opcional" onKeyDown={e => e.key === 'Enter' && addPlan()} />
+      </div>
+      <textarea className="inp" rows={2} value={planFeatures} onChange={e => setPlanFeatures(e.target.value)} placeholder={'O que inclui, um item por linha\nEx.: 110 canais'} style={{ resize: 'vertical' }} />
+      <div className="row"><button className="btn sm" disabled={busy} onClick={addPlan}><Icon name="plus" />Adicionar plano</button></div>
     </div>
+
+    <div className="sec mut" style={{ marginTop: 4 }}>À la carte / subprodutos</div>
+    <div className="hint">Ofertas independentes dos planos — por exemplo: Telecine, Premiere e Canais Adultos. Cada uma possui briefing, cores, logos, fotos e base de conhecimento próprios para a criação das artes.</div>
+    {!solutions.length && <div className="hint">Nenhum à la carte ou subproduto cadastrado.</div>}
+    {solutions.map(solution => <ProductAdditionalEditor key={solution.id} company={company} solution={solution} onChanged={onChanged} onError={setMsg} />)}
+    <NewProductAdditionalEditor company={company} product={product} onCreated={() => { setMsg('À la carte / subproduto criado. Complete a mídia e a base no editor acima.'); onChanged(); }} onError={setMsg} />
 
     <div className="row"><button className="btn pri" disabled={busy} onClick={save}>{busy ? 'Salvando…' : 'Salvar produto'}</button></div>
   </div>;
+}
+
+function ProductPlanEditor({ company, plan, onChanged, onError }) {
+  const [name, setName] = React.useState(plan.name || '');
+  const [description, setDescription] = React.useState(plan.description || '');
+  const [features, setFeatures] = React.useState((plan.features || []).join('\n'));
+  const [active, setActive] = React.useState(catalogItemActive(plan));
+  const [sortOrder, setSortOrder] = React.useState(plan.sort_order ?? 0);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+
+  React.useEffect(() => {
+    setName(plan.name || '');
+    setDescription(plan.description || '');
+    setFeatures((plan.features || []).join('\n'));
+    setActive(catalogItemActive(plan));
+    setSortOrder(plan.sort_order ?? 0);
+  }, [plan.id, plan.name, plan.description, plan.features, plan.active, plan.sort_order]);
+
+  async function save() {
+    if (!name.trim()) { setMsg('Erro: informe o nome do plano.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.updateProductPlan(company.id, plan.id, {
+        name: name.trim(),
+        description: description.trim(),
+        features: features.split('\n').map(item => item.trim()).filter(Boolean),
+        active,
+        sort_order: Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0,
+      });
+      setMsg('Plano salvo.'); onChanged();
+    } catch (e) { const text = 'Erro: ' + e.message; setMsg(text); if (onError) onError(text); }
+    finally { setBusy(false); }
+  }
+
+  async function remove() {
+    if (!window.confirm('Excluir o plano "' + plan.name + '"?')) return;
+    setBusy(true); setMsg('');
+    try { await window.mpApi.deleteProductPlan(company.id, plan.id); onChanged(); }
+    catch (e) { const text = 'Erro: ' + e.message; setMsg(text); if (onError) onError(text); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="litem" style={{ padding: 10, alignItems: 'flex-start' }}>
+    <div className="li-main stack" style={{ gap: 7 }}>
+      <div className="split" style={{ gap: 8 }}>
+        <input className="inp" value={name} onChange={e => setName(e.target.value)} aria-label="Nome do plano" />
+        <input className="inp" value={description} onChange={e => setDescription(e.target.value)} placeholder="Descrição do plano" aria-label="Descrição do plano" />
+      </div>
+      <textarea className="inp" rows={2} value={features} onChange={e => setFeatures(e.target.value)} placeholder="Itens incluídos, um por linha" aria-label="Itens incluídos no plano" style={{ resize: 'vertical' }} />
+      <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label className="hint row" style={{ gap: 6, cursor: 'pointer' }}><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} /> Ativo</label>
+        <label className="hint row" style={{ gap: 6 }}>Ordem <input className="inp" type="number" min="0" value={sortOrder} onChange={e => setSortOrder(e.target.value)} style={{ width: 74 }} /></label>
+        <button className="btn sm pri" disabled={busy} onClick={save}>Salvar plano</button>
+        <button className="btn sm ghost" disabled={busy} onClick={remove} title="Excluir plano"><Icon name="trash" /></button>
+      </div>
+      {msg && <small className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</small>}
+    </div>
+  </div>;
+}
+
+function NewProductAdditionalEditor({ company, product, onCreated, onError }) {
+  const [expanded, setExpanded] = React.useState(true);
+  const [name, setName] = React.useState('');
+  const [category, setCategory] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [website, setWebsite] = React.useState('');
+  const [instagram, setInstagram] = React.useState('');
+  const [objective, setObjective] = React.useState('');
+  const [functions, setFunctions] = React.useState('');
+  const [colors, setColors] = React.useState({});
+  const [active, setActive] = React.useState(true);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+
+  async function create() {
+    if (!name.trim()) { setMsg('Erro: informe o nome do à la carte / subproduto.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const created = await window.mpApi.createSolution(company.id, product.id, {
+        name: name.trim(), category: category.trim(), description: description.trim(),
+        website: website.trim(), objective: objective.trim(),
+        functions: functions.split('\n').map(item => item.trim()).filter(Boolean),
+        socials: { instagram: instagram.trim() }, colors: catalogCleanColors(colors), active,
+      });
+      setName(''); setCategory(''); setDescription(''); setWebsite(''); setInstagram('');
+      setObjective(''); setFunctions(''); setColors({}); setActive(true);
+      setMsg('Criado. O editor completo foi adicionado acima para receber logos, fotos e arquivos da base.');
+      if (onCreated) onCreated(created);
+    } catch (e) {
+      const text = 'Erro: ' + e.message;
+      setMsg(text); if (onError) onError(text);
+    } finally { setBusy(false); }
+  }
+
+  return <details className="panel" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} style={{ padding: 10, borderStyle: 'dashed' }}>
+    <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <b><Icon name="plus" /> Cadastrar à la carte / subproduto completo</b>
+        <Pill kind="cy">novo</Pill>
+      </div>
+    </summary>
+    <div className="stack" style={{ marginTop: 12 }}>
+      <div className="hint">Preencha o briefing visual e comercial agora. Depois de criar, o cadastro libera uploads de logos, fotos e documentos.</div>
+      <div className="split">
+        <Field label="Nome *"><input className="inp" value={name} onChange={event => setName(event.target.value)} placeholder="Ex.: Telecine" /></Field>
+        <Field label="Categoria"><input className="inp" value={category} onChange={event => setCategory(event.target.value)} placeholder="Ex.: Filmes e séries" /></Field>
+      </div>
+      <Field label="Descrição"><textarea className="inp" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="O que é, diferenciais, público e mensagens permitidas…" style={{ resize: 'vertical' }} /></Field>
+      <div className="split">
+        <Field label="Site"><input className="inp" value={website} onChange={event => setWebsite(event.target.value)} placeholder="https://" /></Field>
+        <Field label="Instagram"><input className="inp" value={instagram} onChange={event => setInstagram(event.target.value)} placeholder="@subproduto" /></Field>
+      </div>
+      <Field label="Objetivo / posicionamento"><textarea className="inp" rows={2} value={objective} onChange={event => setObjective(event.target.value)} placeholder="Como esta oferta deve ser posicionada nas artes." style={{ resize: 'vertical' }} /></Field>
+      <Field label="Funções / benefícios / o que inclui (um por linha)"><textarea className="inp" rows={3} value={functions} onChange={event => setFunctions(event.target.value)} placeholder={'Catálogo exclusivo\nConteúdo sem anúncios\nAcesso em múltiplas telas'} style={{ resize: 'vertical' }} /></Field>
+      <CatalogColorFields colors={colors} onChange={setColors} labelPrefix="Cor" />
+      <div className="row" style={{ justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label className="hint row" style={{ gap: 6, cursor: 'pointer' }}><input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} /> Ativo e disponível para vínculo/arte</label>
+        <button className="btn sm pri" disabled={busy} onClick={create}><Icon name="plus" />{busy ? 'Criando…' : 'Criar subproduto'}</button>
+      </div>
+      {msg && <small className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</small>}
+    </div>
+  </details>;
+}
+
+function solutionEmbeddedAssets(solution) {
+  const assets = (solution && solution.assets) || [];
+  return {
+    logos: (solution && solution.logos) || assets.filter(asset => (asset.meta || {}).role === 'logo'),
+    photos: (solution && solution.photos) || assets.filter(asset => (asset.meta || {}).role === 'photo'),
+  };
+}
+
+function ProductAdditionalEditor({ company, solution, onChanged, onError }) {
+  const initialAssets = solutionEmbeddedAssets(solution);
+  const [expanded, setExpanded] = React.useState(true);
+  const [name, setName] = React.useState(solution.name || '');
+  const [category, setCategory] = React.useState(solution.category || '');
+  const [description, setDescription] = React.useState(solution.description || '');
+  const [website, setWebsite] = React.useState(solution.website || '');
+  const [instagram, setInstagram] = React.useState((solution.socials || {}).instagram || '');
+  const [objective, setObjective] = React.useState(solution.objective || '');
+  const [functions, setFunctions] = React.useState(Array.isArray(solution.functions) ? solution.functions.join('\n') : (solution.functions || ''));
+  const [colors, setColors] = React.useState(solution.colors || {});
+  const [active, setActive] = React.useState(catalogItemActive(solution));
+  const [logos, setLogos] = React.useState(initialAssets.logos);
+  const [photos, setPhotos] = React.useState(initialAssets.photos);
+  const [kbChars, setKbChars] = React.useState((solution.knowledge || '').length);
+  const [kbPreview, setKbPreview] = React.useState((solution.knowledge || '').slice(0, 4000));
+  const [busy, setBusy] = React.useState(false);
+  const [assetBusy, setAssetBusy] = React.useState('');
+  const [kbBusy, setKbBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  const [assetMsg, setAssetMsg] = React.useState('');
+  const [kbMsg, setKbMsg] = React.useState('');
+  const propAssetsKey = [...initialAssets.logos, ...initialAssets.photos].map(asset => asset.id || asset.url).join('|');
+
+  React.useEffect(() => {
+    setName(solution.name || '');
+    setCategory(solution.category || '');
+    setDescription(solution.description || '');
+    setWebsite(solution.website || '');
+    setInstagram((solution.socials || {}).instagram || '');
+    setObjective(solution.objective || '');
+    setFunctions(Array.isArray(solution.functions) ? solution.functions.join('\n') : (solution.functions || ''));
+    setColors(solution.colors || {});
+    setActive(catalogItemActive(solution));
+  }, [solution.id, solution.name, solution.category, solution.description, solution.website,
+    solution.socials, solution.objective, solution.functions, solution.colors, solution.active]);
+
+  React.useEffect(() => {
+    const embedded = solutionEmbeddedAssets(solution);
+    setLogos(embedded.logos); setPhotos(embedded.photos);
+  }, [solution.id, propAssetsKey]);
+
+  const refreshAssets = React.useCallback(async () => {
+    const result = await window.mpApi.listSolutionAssets(company.id, solution.id);
+    setLogos(result.logos || []); setPhotos(result.photos || []);
+    return result;
+  }, [company.id, solution.id]);
+
+  const refreshKb = React.useCallback(async () => {
+    const result = await window.mpApi.getSolutionKb(company.id, solution.id);
+    setKbChars((result && result.chars) || 0);
+    setKbPreview((result && result.preview) || '');
+    return result;
+  }, [company.id, solution.id]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    window.mpApi.listSolutionAssets(company.id, solution.id).then(result => {
+      if (!cancelled) { setLogos(result.logos || []); setPhotos(result.photos || []); }
+    }).catch(() => {});
+    window.mpApi.getSolutionKb(company.id, solution.id).then(result => {
+      if (!cancelled) {
+        setKbChars((result && result.chars) || 0);
+        setKbPreview((result && result.preview) || '');
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [company.id, solution.id]);
+
+  function reportError(error, setter) {
+    const text = 'Erro: ' + (error.message || error);
+    setter(text); if (onError) onError(text);
+  }
+
+  async function save() {
+    if (!name.trim()) { setMsg('Erro: informe o nome do à la carte / subproduto.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      await window.mpApi.updateSolution(company.id, solution.id, {
+        name: name.trim(), category: category.trim(), description: description.trim(),
+        website: website.trim(), objective: objective.trim(),
+        functions: functions.split('\n').map(item => item.trim()).filter(Boolean),
+        socials: { ...(solution.socials || {}), instagram: instagram.trim() },
+        colors: catalogCleanColors(colors, solution.colors), active,
+      });
+      setMsg('Subproduto salvo e disponível para o briefing das artes.'); onChanged();
+    } catch (e) { reportError(e, setMsg); }
+    finally { setBusy(false); }
+  }
+
+  async function remove() {
+    if (!window.confirm('Excluir o à la carte / subproduto "' + solution.name + '"?')) return;
+    setBusy(true); setMsg('');
+    try { await window.mpApi.deleteSolution(company.id, solution.id); onChanged(); }
+    catch (e) { reportError(e, setMsg); }
+    finally { setBusy(false); }
+  }
+
+  async function uploadAssets(files, kind) {
+    const list = Array.from(files || []).filter(Boolean);
+    if (!list.length) return;
+    setAssetBusy(kind); setAssetMsg('Enviando ' + list.length + ' arquivo(s)…');
+    let uploaded = 0;
+    const facts = [];
+    try {
+      for (const file of list) {
+        const result = kind === 'logo'
+          ? await window.mpApi.uploadSolutionLogo(company.id, solution.id, file)
+          : await window.mpApi.uploadSolutionPhoto(company.id, solution.id, file);
+        uploaded += 1;
+        if (result && result.facts) facts.push(result.facts);
+      }
+      await refreshAssets();
+      setAssetMsg(uploaded + ' ' + (kind === 'logo' ? 'logo(s)' : 'foto(s)') + ' enviada(s).' + (facts.length ? ' As imagens também acrescentaram fatos visuais ao briefing.' : ''));
+      onChanged();
+    } catch (e) { reportError(e, setAssetMsg); }
+    finally { setAssetBusy(''); }
+  }
+
+  async function removeAsset(asset, kind) {
+    if (!window.confirm('Excluir esta ' + (kind === 'logo' ? 'logo' : 'foto') + '?')) return;
+    setAssetBusy(asset.id); setAssetMsg('');
+    try {
+      await window.mpApi.deleteSolutionAsset(company.id, solution.id, asset.id);
+      await refreshAssets();
+      setAssetMsg((kind === 'logo' ? 'Logo' : 'Foto') + ' excluída.'); onChanged();
+    } catch (e) { reportError(e, setAssetMsg); }
+    finally { setAssetBusy(''); }
+  }
+
+  async function uploadKb(file) {
+    if (!file) return;
+    setKbBusy(true); setKbMsg('Lendo e indexando ' + file.name + '…');
+    try {
+      const result = await window.mpApi.uploadSolutionKb(company.id, solution.id, file);
+      const filled = (result && result.filled) || {};
+      if (filled.description) setDescription(filled.description);
+      if (filled.objective) setObjective(filled.objective);
+      if (Array.isArray(filled.functions) && filled.functions.length) setFunctions(filled.functions.join('\n'));
+      if (filled.colors) setColors(filled.colors);
+      await refreshKb();
+      setKbMsg('✓ ' + ((result && result.file) || file.name) + ' adicionado à base.' + (Object.keys(filled).length ? ' Revise os campos preenchidos e salve.' : ''));
+      onChanged();
+    } catch (e) { reportError(e, setKbMsg); }
+    finally { setKbBusy(false); }
+  }
+
+  async function clearKb() {
+    if (!window.confirm('Limpar TODA a base de conhecimento de "' + solution.name + '"?')) return;
+    setKbBusy(true); setKbMsg('');
+    try {
+      await window.mpApi.clearSolutionKb(company.id, solution.id);
+      setKbChars(0); setKbPreview(''); setKbMsg('Base de conhecimento limpa.'); onChanged();
+    } catch (e) { reportError(e, setKbMsg); }
+    finally { setKbBusy(false); }
+  }
+
+  return <details className="panel" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} style={{ padding: 10, borderColor: active ? 'var(--line)' : 'var(--yellow)' }}>
+    <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div className="row" style={{ gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+          <b>{solution.name}</b>
+          <Pill kind={active ? 'good' : 'warn'} dot>{active ? 'ativo' : 'inativo'}</Pill>
+          <Pill>{logos.length} logo(s)</Pill><Pill>{photos.length} foto(s)</Pill>
+          {kbChars > 0 && <Pill kind="cy">KB {kbChars.toLocaleString('pt-BR')} chars</Pill>}
+        </div>
+        <span className="hint">Editar cadastro completo</span>
+      </div>
+    </summary>
+    <div className="stack" style={{ marginTop: 12 }}>
+      {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
+      <div className="split">
+        <Field label="Nome *"><input className="inp" value={name} onChange={event => setName(event.target.value)} aria-label="Nome do subproduto" /></Field>
+        <Field label="Categoria"><input className="inp" value={category} onChange={event => setCategory(event.target.value)} placeholder="Ex.: Filmes e séries" /></Field>
+      </div>
+      <Field label="Descrição (fonte do briefing)"><textarea className="inp" rows={3} value={description} onChange={event => setDescription(event.target.value)} placeholder="O que é, diferenciais, público, claims e restrições…" style={{ resize: 'vertical' }} /></Field>
+      <div className="split">
+        <Field label="Site"><input className="inp" value={website} onChange={event => setWebsite(event.target.value)} placeholder="https://" /></Field>
+        <Field label="Instagram"><input className="inp" value={instagram} onChange={event => setInstagram(event.target.value)} placeholder="@subproduto" /></Field>
+      </div>
+      <Field label="Objetivo / posicionamento (como a IA deve vender esta oferta)"><textarea className="inp" rows={2} value={objective} onChange={event => setObjective(event.target.value)} placeholder="Ex.: opção premium para fãs de cinema, com comunicação de entretenimento e exclusividade." style={{ resize: 'vertical' }} /></Field>
+      <Field label="Funções / benefícios / o que inclui (um por linha — alimenta a IA)"><textarea className="inp" rows={3} value={functions} onChange={event => setFunctions(event.target.value)} placeholder={'Estreias exclusivas\nCatálogo sob demanda\nAcesso em múltiplas telas'} style={{ resize: 'vertical' }} /></Field>
+
+      <div className="sec mut" style={{ marginTop: 2 }}>Cores próprias do subproduto</div>
+      <CatalogColorFields colors={colors} onChange={setColors} />
+
+      <div className="sec mut" style={{ marginTop: 2 }}>Logos próprias <span className="hint">— aceite múltiplo</span></div>
+      <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {logos.map(logo => <div key={logo.id || logo.url} style={{ position: 'relative', display: 'inline-block' }}>
+          <img loading="lazy" decoding="async" src={logo.url} alt={'Logo de ' + solution.name} style={{ width: 112, height: 64, objectFit: 'contain', borderRadius: 7, border: '1px solid var(--line)', background: '#fff', display: 'block' }} />
+          <button className="btn sm" disabled={!!assetBusy} title="Excluir logo" onClick={() => removeAsset(logo, 'logo')}
+            style={{ position: 'absolute', top: -8, right: -8, padding: '1px 6px', lineHeight: 1.2, borderRadius: 999 }}><Icon name="x" /></button>
+        </div>)}
+        {!logos.length && <span className="hint">Nenhuma logo cadastrada.</span>}
+        <label className="btn sm" style={{ cursor: assetBusy ? 'wait' : 'pointer' }}><Icon name="plus" />{assetBusy === 'logo' ? 'Enviando…' : 'Adicionar logos'}
+          <input type="file" accept="image/*" multiple disabled={!!assetBusy} style={{ display: 'none' }} onChange={event => { uploadAssets(event.target.files, 'logo'); event.target.value = ''; }} />
+        </label>
+      </div>
+
+      <div className="sec mut" style={{ marginTop: 2 }}>Fotos / imagens do subproduto <span className="hint">— a IA usa o item real nas artes</span></div>
+      <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {photos.map(photo => <div key={photo.id || photo.url} style={{ position: 'relative', display: 'inline-block' }}>
+          <img loading="lazy" decoding="async" src={photo.url} alt={'Imagem de ' + solution.name} style={{ width: 96, height: 76, objectFit: 'cover', borderRadius: 7, border: '1px solid var(--line)', display: 'block' }} />
+          <button className="btn sm" disabled={!!assetBusy} title="Excluir foto" onClick={() => removeAsset(photo, 'photo')}
+            style={{ position: 'absolute', top: -8, right: -8, padding: '1px 6px', lineHeight: 1.2, borderRadius: 999 }}><Icon name="x" /></button>
+        </div>)}
+        {!photos.length && <span className="hint">Nenhuma foto cadastrada.</span>}
+        <label className="btn sm" style={{ cursor: assetBusy ? 'wait' : 'pointer' }}><Icon name="plus" />{assetBusy === 'photo' ? 'Enviando…' : 'Adicionar fotos'}
+          <input type="file" accept="image/*" multiple disabled={!!assetBusy} style={{ display: 'none' }} onChange={event => { uploadAssets(event.target.files, 'photo'); event.target.value = ''; }} />
+        </label>
+      </div>
+      {assetMsg && <div className={assetMsg.startsWith('Erro') ? 'err' : 'hint'}>{assetMsg}</div>}
+
+      <Field label="Base de conhecimento própria (PDF/DOC/TXT/CSV/imagem — arquivos se acumulam)">
+        <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="btn sm" style={{ cursor: kbBusy ? 'wait' : 'pointer' }}><Icon name="plus" />{kbBusy ? 'Processando…' : 'Adicionar arquivo'}
+            <input type="file" accept=".pdf,.docx,.doc,.txt,.md,.csv,.jpg,.jpeg,.png,.webp" disabled={kbBusy} style={{ display: 'none' }} onChange={event => { const file = event.target.files[0]; event.target.value = ''; uploadKb(file); }} />
+          </label>
+          {kbChars > 0 && <Pill kind="good" dot>{kbChars.toLocaleString('pt-BR')} caracteres indexados</Pill>}
+          {kbChars > 0 && <button className="btn sm ghost" disabled={kbBusy} onClick={clearKb}>Limpar base</button>}
+        </div>
+        {kbMsg && <div className={kbMsg.startsWith('Erro') ? 'err' : 'hint'}>{kbMsg}</div>}
+        {kbChars > 0 && <details style={{ marginTop: 7 }}>
+          <summary className="hint" style={{ cursor: 'pointer', fontWeight: 700 }}>Visualizar trecho indexado</summary>
+          <pre className="mono" style={{ margin: '7px 0 0', padding: 10, maxHeight: 210, overflow: 'auto', whiteSpace: 'pre-wrap', border: '1px solid var(--line)', borderRadius: 7, fontSize: 11 }}>{kbPreview || 'A base está indexada, mas o servidor não retornou uma prévia textual.'}</pre>
+        </details>}
+      </Field>
+
+      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label className="hint row" style={{ gap: 6, cursor: 'pointer' }}><input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} /> Ativo e disponível para vínculo/arte</label>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn sm pri" disabled={busy} onClick={save}>{busy ? 'Salvando…' : 'Salvar subproduto'}</button>
+          <button className="btn sm ghost" disabled={busy || !!assetBusy || kbBusy} onClick={remove} title="Excluir subproduto"><Icon name="trash" />Excluir</button>
+        </div>
+      </div>
+    </div>
+  </details>;
 }
 
 function CompanyConexoes({ company }) {

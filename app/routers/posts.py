@@ -16,16 +16,18 @@ from ..db_companies import (
     post_list, post_get, post_create, post_transition, post_update, post_delete,
     post_stats, POST_STATUSES, POST_TRANSITIONS, POST_LABELS,
     company_get, report_get_latest, report_create, asset_list_logos, asset_list,
-    asset_list_photos, product_list, product_get, solution_list,
+    asset_list_photos, asset_list_solution_assets, product_list, product_get,
+    product_plan_get, product_plan_list, solution_list,
 )
 from ..services.ai import (
     get_ai_config, generate_post_copy, generate_trends, is_ai_enabled,
     generate_image_bytes, generate_image_with_cost, generate_image_resilient, image_models_registry, vision_clear_side, vision_read_text, text_render_issues, judge_art_text, text_fix_feedback, generate_image_with_person, compose_person_scene, verify_same_person, pick_influencer_photo, generate_image_edit, build_image_prompt, get_image_config, generate_image_reference_full, image_ref_models, get_image_ref_model,
     openrouter_image_models, openrouter_video_models, cometapi_video_models, omniroute_video_models, kie_video_models, kie_image_models, omniroute_image_models, openai_image_models, piapi_image_models, cometapi_image_models, usd_to_brl, get_setting,
     create_video_job, get_video_job, download_video, build_video_prompt, build_video_storyboard, get_video_config,
-    accept_kie_callback, kie_callback_token,
+    accept_kie_callback, kie_callback_token, selected_offer_context,
 )
 
+import asyncio
 import os
 import uuid as _uuid
 from urllib.parse import unquote, urlparse
@@ -352,10 +354,6 @@ def _resolve_offer_refs(request: Request, body: Dict[str, Any], target_company_i
             return True, [], JSONResponse(
                 {"detail": "Cada oferta deve informar source_company_id e product_id."}, status_code=422,
             )
-        key = (source_company_id, product_id)
-        if key in seen:
-            continue
-        seen.add(key)
         source_company = company_get(source_company_id)
         if not source_company:
             return True, [], JSONResponse({"detail": "Empresa do catálogo não encontrada."}, status_code=404)
@@ -367,14 +365,64 @@ def _resolve_offer_refs(request: Request, body: Dict[str, Any], target_company_i
             return True, [], JSONResponse(
                 {"detail": "Produto não pertence à empresa de catálogo informada."}, status_code=422,
             )
+        plan_id = str(raw.get("plan_id") or "").strip() or None
+        plan = None
+        if plan_id:
+            plan = product_plan_get(plan_id)
+            if (not plan or str(plan.get("company_id") or "") != source_company_id
+                    or str(plan.get("product_id") or "") != product_id):
+                return True, [], JSONResponse(
+                    {"detail": "Plano/subproduto não pertence ao produto informado."}, status_code=422,
+                )
+        solutions_explicit = "solution_ids" in raw
+        raw_solution_ids = raw.get("solution_ids") if solutions_explicit else None
+        if raw_solution_ids is not None and not isinstance(raw_solution_ids, list):
+            return True, [], JSONResponse(
+                {"detail": "solution_ids deve ser uma lista."}, status_code=422,
+            )
+        if isinstance(raw_solution_ids, list) and len(raw_solution_ids) > 50:
+            return True, [], JSONResponse(
+                {"detail": "Selecione no máximo 50 adicionais por oferta."}, status_code=422,
+            )
+        available_solutions = [solution for solution in (solution_list(product_id) or [])
+                               if solution.get("active", True)]
+        solutions_by_id = {str(solution.get("id") or ""): solution
+                           for solution in available_solutions if solution.get("id")}
+        selected_solution_ids = (list(dict.fromkeys(
+            str(value).strip() for value in (raw_solution_ids or []) if str(value).strip()
+        )) if solutions_explicit else list(solutions_by_id))
+        if any(solution_id not in solutions_by_id for solution_id in selected_solution_ids):
+            return True, [], JSONResponse(
+                {"detail": "Um adicional/à la carte não pertence ao produto informado."}, status_code=422,
+            )
+        key = (source_company_id, product_id, plan_id, tuple(sorted(selected_solution_ids)))
+        if key in seen:
+            continue
+        seen.add(key)
+        public_ref = {"source_company_id": source_company_id, "product_id": product_id}
+        if "plan_id" in raw or plan_id:
+            public_ref["plan_id"] = plan_id
+        if solutions_explicit:
+            public_ref["solution_ids"] = selected_solution_ids
+        selected_solutions = []
+        for solution_id in selected_solution_ids:
+            solution = dict(solutions_by_id[solution_id])
+            solution["_logos"] = asset_list_solution_assets(
+                source_company_id, solution_id, "logo",
+            ) or []
+            solution["_photos"] = asset_list_solution_assets(
+                source_company_id, solution_id, "photo",
+            ) or []
+            selected_solutions.append(solution)
         resolved.append({
-            "ref": {"source_company_id": source_company_id, "product_id": product_id},
+            "ref": public_ref,
             "source_company": source_company,
             "product": product,
+            "plan": plan,
             # Os assets são consultados pelo par validado, nunca por busca global de nome.
             "logos": asset_list_logos(source_company_id, product_id) or [],
             "photos": asset_list_photos(source_company_id, product_id) or [],
-            "solutions": solution_list(product_id) or [],
+            "solutions": selected_solutions,
         })
     return True, resolved, None
 
@@ -388,9 +436,39 @@ def _offer_products(resolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         product["_source_company_id"] = item["ref"]["source_company_id"]
         product["_source_company_name"] = source.get("name") or ""
         product["_offer_ref"] = dict(item["ref"])
-        product["_logos"] = list(item.get("logos") or [])
-        product["_photos"] = list(item.get("photos") or [])
-        product["solutions"] = list(item.get("solutions") or [])
+        product_logos = list(item.get("logos") or [])
+        product_photos = list(item.get("photos") or [])
+        solutions = list(item.get("solutions") or [])
+        logo_groups = []
+        for solution in solutions:
+            solution_logos = list(solution.get("_logos") or [])
+            if solution_logos:
+                logo_groups.append({"name": solution.get("name") or "Adicional", "assets": solution_logos})
+        if product_logos:
+            logo_groups.append({"name": product.get("name") or "Produto", "assets": product_logos})
+
+        def _unique_assets(groups):
+            assets, seen_assets = [], set()
+            for group in groups:
+                for asset in group:
+                    key = str(asset.get("id") or asset.get("url") or "")
+                    if key and key not in seen_assets:
+                        seen_assets.add(key)
+                        assets.append(asset)
+            return assets
+
+        # O à-la-carte selecionado vem primeiro: numa saída que só aceita uma logo/foto,
+        # a identidade específica vence e o produto pai fica como fallback.
+        solution_logos = [list(solution.get("_logos") or []) for solution in solutions]
+        solution_photos = [list(solution.get("_photos") or []) for solution in solutions]
+        product["_product_logos"] = product_logos
+        product["_product_photos"] = product_photos
+        product["_offer_logo_groups"] = logo_groups
+        product["_logos"] = _unique_assets(solution_logos + [product_logos])
+        product["_photos"] = _unique_assets(solution_photos + [product_photos])
+        product["_selected_plan"] = dict(item.get("plan") or {}) or None
+        product["plan"] = product["_selected_plan"]
+        product["solutions"] = solutions
         out.append(product)
     return out
 
@@ -409,29 +487,10 @@ def _offer_context(products: List[Dict[str, Any]]) -> str:
     """Contexto factual e limitado das ofertas explicitamente selecionadas."""
     blocks = []
     for product in products:
-        functions = product.get("functions") or []
-        if isinstance(functions, str):
-            try:
-                import json as _json
-                functions = _json.loads(functions)
-            except Exception:
-                functions = [functions]
-        solutions = [
-            (s.get("name") or s.get("title") or s.get("description") or "").strip()
-            for s in (product.get("solutions") or [])
-            if isinstance(s, dict)
-        ]
-        facts = [
-            ("Descrição: " + (product.get("description") or "").strip()) if product.get("description") else "",
-            ("Objetivo: " + (product.get("objective") or "").strip()) if product.get("objective") else "",
-            ("Funções: " + "; ".join(str(v).strip() for v in functions if str(v).strip())[:1800]) if functions else "",
-            ("Soluções: " + "; ".join(v for v in solutions if v)[:1600]) if solutions else "",
-            ("Base de conhecimento: " + (product.get("knowledge") or "").strip()[:7000]) if product.get("knowledge") else "",
-            ("Pesquisa web validada: " + (product.get("web_brief") or "").strip()[:2500]) if product.get("web_brief") else "",
-        ]
+        facts = selected_offer_context(product, knowledge_limit=7000, web_limit=2500)
         blocks.append(
             f"[{product.get('name') or 'Oferta'} — catálogo de {product.get('_source_company_name') or 'empresa selecionada'}] "
-            + " | ".join(v for v in facts if v)
+            + facts
         )
     if not blocks:
         return "OFERTAS SELECIONADAS: nenhuma; produza conteúdo institucional sem inventar produto."
@@ -619,6 +678,24 @@ def offer_catalog(request: Request, company_id: str = ""):
             if not product.get("active", True):
                 continue
             product_id = str(product.get("id") or "")
+            plans = [dict(plan) for plan in (product_plan_list(product_id) or [])
+                     if plan.get("active", True)]
+            solutions = []
+            for solution in (solution_list(product_id) or []):
+                if not solution.get("active", True):
+                    continue
+                solution = dict(solution)
+                solution_assets = asset_list_solution_assets(
+                    source_id, str(solution.get("id") or ""),
+                ) or []
+                solution["has_logo"] = any(
+                    (asset.get("meta") or {}).get("role") == "logo" for asset in solution_assets
+                )
+                solution["has_photo"] = any(
+                    (asset.get("meta") or {}).get("role") == "photo" for asset in solution_assets
+                )
+                solution["has_knowledge"] = bool((solution.get("knowledge") or "").strip())
+                solutions.append(solution)
             products.append({
                 "id": product_id,
                 "name": product.get("name") or "",
@@ -627,6 +704,8 @@ def offer_catalog(request: Request, company_id: str = ""):
                 "has_logo": bool(asset_list_logos(source_id, product_id)),
                 "has_photo": bool(asset_list_photos(source_id, product_id)),
                 "has_knowledge": bool((product.get("knowledge") or "").strip()),
+                "plans": plans,
+                "solutions": solutions,
             })
         if products:
             catalogs.append({
@@ -852,6 +931,11 @@ async def generate_post_image(request: Request):
                  if requested_ref and p.get("_offer_ref") == requested_ref), None)
     if not prod:
         prod = next((p for p in products if (p.get("name") or "").strip().lower() == product.lower()), None)
+    if prod and offers_explicit:
+        prompt += (
+            " CONTEXTO Factual da oferta selecionada (use para compor a cena e respeitar as cores/assets; "
+            "não invente recurso, promessa ou preço): " + selected_offer_context(prod)[:10000]
+        )
     approved_company_logos = [logo for logo in (asset_list_logos(company_id) or []) if _logo_is_approved(logo)]
     co_logo = _first_raster_logo(sorted(approved_company_logos, key=lambda l: 0 if (l.get("meta") or {}).get("is_primary") else 1))
     if prod and offers_explicit:
@@ -1387,17 +1471,23 @@ async def animate_art(request: Request):
         "Anime esta arte com elegância sutil: leve zoom-in cinematográfico, brilho suave percorrendo os elementos, "
         "partículas discretas. Mantenha TODOS os textos e a logo perfeitamente legíveis e estáveis. "
         "SEM fala — apenas trilha/ambiente suave.")
+    resolution = (body.get("resolution") or "1080p").strip()   # default do provedor é 480p → borra a arte
 
     def _run():
         import time as _t
         import httpx as _hx
         from ..services.ai import _kie_key, _KIE_BASE, _kie_record, _kie_result_urls
         key = _kie_key()
-        r = _hx.post(_KIE_BASE + "/jobs/createTask",
-                     headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-                     json={"model": "grok-imagine/image-to-video",
-                           "input": {"image_urls": [pub], "prompt": motion}}, timeout=30)
-        tid = ((r.json() or {}).get("data") or {}).get("taskId")
+        tid = None
+        for _res in (resolution, "720p"):                      # se o provedor recusar 1080p, cai pra 720p
+            r = _hx.post(_KIE_BASE + "/jobs/createTask",
+                         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+                         json={"model": "grok-imagine/image-to-video",
+                               "input": {"image_urls": [pub], "prompt": motion,
+                                         "mode": "normal", "resolution": _res}}, timeout=30)
+            tid = ((r.json() or {}).get("data") or {}).get("taskId")
+            if tid or _res == "720p":
+                break
         if not tid:
             raise ValueError("provedor não aceitou: " + r.text[:120])
         for _ in range(90):
@@ -1547,14 +1637,25 @@ async def render_carousel(request: Request):
         img_size = "1024x1792" if fmt == "story" else "1024x1536"
         # Mapa nome do app (minúsculo) -> logo OFICIAL cadastrada (carimbada por código).
         render_products_by_id = {str(p.get("id") or ""): p for p in render_products if p.get("id")}
-        app_logos, app_logos_by_id = {}, {}
+        app_logos, app_logo_groups_by_id = {}, {}
         for p in render_products:
             source_company_id = p.get("_source_company_id") or company_id
-            product_assets = p.get("_logos") if offers_explicit else asset_list_logos(source_company_id, p["id"])
-            lps = _all_raster_logos(product_assets)   # variantes da oferta escolhida
-            if lps:
-                app_logos[(p.get("name") or "").strip().lower()] = lps
-                app_logos_by_id[str(p.get("id") or "")] = lps
+            raw_groups = (p.get("_offer_logo_groups") or []) if offers_explicit else [{
+                "name": p.get("name") or "Produto",
+                "assets": asset_list_logos(source_company_id, p["id"]),
+            }]
+            logo_groups = []
+            for group in raw_groups:
+                lps = _all_raster_logos(group.get("assets") or [])
+                if not lps:
+                    continue
+                group_name = (group.get("name") or p.get("name") or "").strip()
+                logo_groups.append({"name": group_name, "variants": lps,
+                                    "assets": list(group.get("assets") or [])})
+                if group_name:
+                    app_logos[group_name.lower()] = lps
+            if logo_groups:
+                app_logo_groups_by_id[str(p.get("id") or "")] = logo_groups
         brand_color = colors.get("primary") or colors.get("accent") or "#ED5E1F"
         from ..services.template_composer import compose_logos_only, compose_cta_footer
         from ..services.ai import image_template_get
@@ -1587,8 +1688,9 @@ async def render_carousel(request: Request):
             tagged = Counter((t.get("app") or "").strip().lower() for t in telas if (t.get("app") or "").strip())
             if tagged:
                 primary_app_variants = app_logos.get(tagged.most_common(1)[0][0])
-            elif len(app_logos) == 1:
-                primary_app_variants = next(iter(app_logos.values()))
+            elif len(app_logo_groups_by_id) == 1:
+                only_groups = next(iter(app_logo_groups_by_id.values()))
+                primary_app_variants = only_groups[0]["variants"] if only_groups else None
         out, total_cost, fails, bases = [], 0.0, [], []
         # TRANSBORDO: registro de modelos (1x) + provedores mortos compartilhados entre as telas + nota de transbordos.
         img_registry = image_models_registry() if ai_bg else []
@@ -1653,16 +1755,9 @@ async def render_carousel(request: Request):
                     for _p in render_products:
                         _nm = (_p.get("name") or "").strip()
                         if _nm:
-                            _fns3 = _p.get("functions") or []
-                            if isinstance(_fns3, str):
-                                try:
-                                    import json as _j3; _fns3 = _j3.loads(_fns3)
-                                except Exception:
-                                    _fns3 = [_fns3] if _fns3 else []
-                            _kbtxt = " | ".join(x for x in [(_p.get("description") or "").strip(),
-                                                            (_p.get("objective") or "").strip(),
-                                                            ("Inclui: " + "; ".join(str(f) for f in _fns3[:8]) if _fns3 else ""),
-                                                            (_p.get("knowledge") or "")[:700].strip()] if x)
+                            _kbtxt = selected_offer_context(
+                                _p, knowledge_limit=2600, web_limit=900,
+                            )
                             if _kbtxt:
                                 ref_ctx["kb"][_nm.lower()] = _kbtxt
                 except Exception:
@@ -1769,8 +1864,12 @@ async def render_carousel(request: Request):
             slide_products = _products_for_slide(s)
             for selected_product in slide_products:
                 product_id = str(selected_product.get("id") or "")
-                if product_id in app_logos_by_id and product_id not in _seen:
-                    _seen.add(product_id); slide_app_logos.append(app_logos_by_id[product_id])
+                for logo_group in app_logo_groups_by_id.get(product_id, []):
+                    group_key = product_id + ":" + str(logo_group.get("name") or "").lower()
+                    if group_key not in _seen:
+                        _seen.add(group_key)
+                        _seen.add(str(logo_group.get("name") or "").lower())
+                        slide_app_logos.append(logo_group["variants"])
             for nm in ([app_name] if app_name else []) + list(app_logos.keys()):
                 if nm and nm in app_logos and nm not in _seen and (nm == app_name or nm in tl):
                     _seen.add(nm); slide_app_logos.append(app_logos[nm])
@@ -1795,19 +1894,25 @@ async def render_carousel(request: Request):
                 prompt = _creative_full_prompt(s, brand_color, company.get("name", ""), _pal, _dna)   # IA arquiteta na identidade
             else:
                 prompt = _full_slide_prompt(s, brand_color, company.get("name", ""), structure, (tmpl or {}).get("variant"), _palette_str(colors))
+            if offers_explicit and slide_products:
+                prompt += (
+                    " CONTEXTO Factual das ofertas selecionadas nesta tela (use para a cena e para respeitar "
+                    "cores/assets; não invente recurso, promessa ou preço): "
+                    + " || ".join(selected_offer_context(product) for product in slide_products)[:12000]
+                )
             app_legacy = app_variants[0] if app_variants else None   # legacy usa 1 só
             offer_photo_bytes, offer_photo_urls = [], []
             if offers_explicit:
                 for selected_product in slide_products[:2]:
-                    photo_asset = next(iter(selected_product.get("_photos") or []), None)
-                    photo_url = (photo_asset or {}).get("url") or ""
-                    photo_bytes = _load_upload_bytes(
-                        photo_url, {str(selected_product.get("_source_company_id") or company_id)},
-                    )
-                    if photo_bytes:
-                        offer_photo_bytes.append(photo_bytes)
-                        offer_photo_urls.append((_render_public_base() + photo_url)
-                                                if photo_url.startswith("/") else photo_url)
+                    for photo_asset in (selected_product.get("_photos") or [])[:2]:
+                        photo_url = (photo_asset or {}).get("url") or ""
+                        photo_bytes = _load_upload_bytes(
+                            photo_url, {str(selected_product.get("_source_company_id") or company_id)},
+                        )
+                        if photo_bytes:
+                            offer_photo_bytes.append(photo_bytes)
+                            offer_photo_urls.append((_render_public_base() + photo_url)
+                                                    if photo_url.startswith("/") else photo_url)
             if offer_photo_bytes:
                 prompt += (" As imagens de referência mostram o PRODUTO REAL selecionado; preserve formato, "
                            "cores, acabamento e detalhes visuais, sem substituí-lo por item genérico.")
@@ -1861,16 +1966,18 @@ async def render_carousel(request: Request):
                 if offers_explicit:
                     # Caminho novo: somente IDs já validados. Nenhuma varredura por outros clientes.
                     for _p3 in slide_products:
-                        _n3 = (_p3.get("name") or "").strip().lower()
-                        _as3 = _p3.get("_logos") or []
-                        _lg3 = _all_raster_logos(_as3)
-                        if not _n3 or _n3 in _seen_p or not _lg3:
-                            continue
-                        _u3 = next((a.get("url") for a in _as3
-                                    if (a.get("url") or "").lower().rsplit(".", 1)[-1]
-                                    in ("png", "jpg", "jpeg", "webp")), "")
-                        _seen_p.add(_n3)
-                        _prod_logos.append(((_p3.get("name") or "").strip(), _lg3[0], _u3 or ""))
+                        for _group3 in (_p3.get("_offer_logo_groups") or []):
+                            _label3 = (_group3.get("name") or _p3.get("name") or "").strip()
+                            _n3 = _label3.lower()
+                            _as3 = _group3.get("assets") or []
+                            _lg3 = _all_raster_logos(_as3)
+                            if not _n3 or _n3 in _seen_p or not _lg3:
+                                continue
+                            _u3 = next((a.get("url") for a in _as3
+                                        if (a.get("url") or "").lower().rsplit(".", 1)[-1]
+                                        in ("png", "jpg", "jpeg", "webp")), "")
+                            _seen_p.add(_n3)
+                            _prod_logos.append((_label3, _lg3[0], _u3 or ""))
                 else:
                     try:
                         from ..db_companies import company_list as _clist3, product_list as _plist3
@@ -1909,21 +2016,21 @@ async def render_carousel(request: Request):
                         pass
                 if offers_explicit:
                     for _p3 in slide_products[:2]:
-                        _photo = next(iter(_p3.get("_photos") or []), None)
-                        _photo_url = (_photo or {}).get("url") or ""
-                        _photo_bytes = _load_upload_bytes(
-                            _photo_url, {str(_p3.get("_source_company_id") or company_id)},
-                        )
-                        if not _photo_bytes:
-                            continue
-                        _refs.append(_photo_bytes)
-                        _ref_urls.append((_render_public_base() + _photo_url)
-                                         if _photo_url.startswith("/") else _photo_url)
-                        _extra.append(
-                            "Uma das referências é a FOTO REAL da oferta "
-                            + ((_p3.get("name") or "produto").strip())
-                            + " — preserve formato, cores e detalhes visuais; não substitua por produto genérico."
-                        )
+                        for _photo in (_p3.get("_photos") or [])[:2]:
+                            _photo_url = (_photo or {}).get("url") or ""
+                            _photo_bytes = _load_upload_bytes(
+                                _photo_url, {str(_p3.get("_source_company_id") or company_id)},
+                            )
+                            if not _photo_bytes:
+                                continue
+                            _refs.append(_photo_bytes)
+                            _ref_urls.append((_render_public_base() + _photo_url)
+                                             if _photo_url.startswith("/") else _photo_url)
+                            _extra.append(
+                                "Uma das referências é uma FOTO/IMAGEM REAL da oferta selecionada "
+                                + ((_p3.get("name") or "produto").strip())
+                                + " — preserve formato, cores e detalhes visuais; não substitua por produto genérico."
+                            )
                 # Ordem final: continuidade da peça, família visual aprovada, marca e oferta real.
                 # Deduplicação mantém ao menos uma inspiração dentro do limite do provedor.
                 _ordered_urls = ([_anchor_ref_url] if _anchor_ref_url else [])
@@ -2678,13 +2785,15 @@ def _render_studio_video_job(company_id: str, jid: str, theme: str, video_prompt
             for _p in _matched_products[:3]:
                 _nm = (_p.get("name") or "").strip()
                 if _nm:
-                    _kb += f" [{_nm}] " + (_p.get("description") or "") + " " + (_p.get("objective") or "")
+                    _kb += f" [{_nm}] " + selected_offer_context(
+                        _p, knowledge_limit=2600, web_limit=900,
+                    )
         except Exception:
             pass
         sysm = "Você é diretor de comerciais curtos. Responda SÓ JSON válido pt-BR."
         usr = (f"Empresa: {company.get('name','')} ({(company.get('segment') or '').strip()}). "
                f"Público: {(bk.get('audience') or '')[:200]}. PEDIDO DO CLIENTE (respeite e enriqueça): {theme}. "
-               + (f"Contexto real: {_kb[:800]}. " if _kb.strip() else "")
+               + (f"Contexto real da oferta selecionada: {_kb[:6000]}. " if _kb.strip() else "")
                + (f"Direção extra: {video_prompt}. " if video_prompt else "")
                + f'Monte um comercial de {n} cenas de 8s. Formato: {{"fala":"depoimento/locução COMPLETA em 1-2 frases '
                  f'curtas (cabe em 7s falado), pt-BR","persona":"quem aparece (pessoa realista OU mascote/personagem '
@@ -2713,16 +2822,32 @@ def _render_studio_video_job(company_id: str, jid: str, theme: str, video_prompt
                  if (_p.get("name") or "").strip().lower() in _tl]
             )
             for _p in _matched_products[:2]:
-                _assets = (_p.get("_logos") or []) if offer_products is not None else asset_list_logos(company_id, _p["id"])
-                for _lp in (_all_raster_logos(_assets) or [])[:1]:
-                    refs.append(open(_lp, "rb").read())
+                if offer_products is not None:
+                    _logo_groups = _p.get("_offer_logo_groups") or [{
+                        "name": _p.get("name") or "oferta", "assets": _p.get("_logos") or [],
+                    }]
+                    for _group in _logo_groups[:3]:
+                        for _lp in (_all_raster_logos(_group.get("assets") or []) or [])[:1]:
+                            refs.append(open(_lp, "rb").read())
+                    for _photo_asset in (_p.get("_photos") or [])[:2]:
+                        _photo_bytes = _load_upload_bytes(
+                            _photo_asset.get("url") or "",
+                            {str(_p.get("_source_company_id") or company_id)},
+                        )
+                        if _photo_bytes:
+                            refs.append(_photo_bytes)
+                else:
+                    for _lp in (_all_raster_logos(asset_list_logos(company_id, _p["id"])) or [])[:1]:
+                        refs.append(open(_lp, "rb").read())
         except Exception:
             pass
         IDENT = (f"Identidade da marca {company.get('name','')}: {(bk.get('visual_prompt_base') or '').strip()} "
                  + (f"Paleta oficial: {pal}. " if pal else "")
                  + f"Personagem: {persona} (o MESMO em todas as cenas). "
                  "As LOGOS das referências aparecem INTEGRADAS à cena de forma natural (telão/painel/ambiente) — nunca "
-                 "carimbo artificial. Vertical 9:16 cinematográfico, frame de abertura de vídeo, alta qualidade.")
+                 "carimbo artificial. As FOTOS/IMAGENS REAIS da oferta selecionada devem ser preservadas em formato, "
+                 "cores, acabamento e detalhes, sem troca por item genérico. Vertical 9:16 cinematográfico, frame de "
+                 "abertura de vídeo, alta qualidade.")
         # 3) KEYFRAMES consistentes (kf N referencia o anterior)
         kf_urls = []
         prev = None
@@ -2932,11 +3057,18 @@ async def generate_branded_video(request: Request):
         _match = [p for p in _prods if _norm(p.get("name")) and _norm(p.get("name")) in _tn]
     app_logos = {}
     for _p in _match[:1]:                                            # SÓ o app em foco → nunca carimba app errado
-        _lps = _all_raster_logos(
-            (_p.get("_logos") or []) if offers_explicit else asset_list_logos(cid, _p["id"])
-        )
-        if _lps:
-            app_logos[(_p.get("name") or "").strip().lower()] = _lps
+        if offers_explicit:
+            _groups = _p.get("_offer_logo_groups") or [{
+                "name": _p.get("name") or "oferta", "assets": _p.get("_logos") or [],
+            }]
+            for _group in _groups:
+                _lps = _all_raster_logos(_group.get("assets") or [])
+                if _lps:
+                    app_logos[(_group.get("name") or _p.get("name") or "oferta").strip().lower()] = _lps
+        else:
+            _lps = _all_raster_logos(asset_list_logos(cid, _p["id"]))
+            if _lps:
+                app_logos[(_p.get("name") or "").strip().lower()] = _lps
     site = (company.get("website") or "").strip()
     handle = ((company.get("socials") or {}).get("instagram") or "").strip()
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())

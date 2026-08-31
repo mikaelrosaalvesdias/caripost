@@ -24,7 +24,8 @@ from ..db_companies import (
     normalize_brand_colors,
     competitor_list, competitor_create, competitor_delete,
     asset_list, asset_create, asset_delete, asset_get, asset_update_meta,
-    asset_list_logos, asset_list_photos, asset_clear_primary, asset_set_primary_logo,
+    asset_list_logos, asset_list_photos, asset_list_solution_assets,
+    asset_clear_primary, asset_set_primary_logo,
     asset_claim_primary_logo_if_empty,
     product_list, product_get, product_create, product_copy, product_update, product_delete,
     product_group_list, product_group_get, product_group_create, product_group_update, product_group_delete,
@@ -3540,12 +3541,26 @@ def _catalog_group_for_product(product: Dict[str, Any]) -> Optional[Dict[str, An
     return group
 
 
+def _solution_with_assets(company_id: str, solution: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach only the media owned by this exact à-la-carte/subproduct."""
+    item = dict(solution)
+    assets = asset_list_solution_assets(company_id, str(item.get("id") or ""))
+    item["assets"] = assets
+    item["logos"] = [asset for asset in assets if (asset.get("meta") or {}).get("role") == "logo"]
+    item["photos"] = [asset for asset in assets if (asset.get("meta") or {}).get("role") == "photo"]
+    return item
+
+
 def _catalog_product_entry(company_id: str, product: Dict[str, Any], *, assets: bool = False) -> Dict[str, Any]:
     """Return one product with its hierarchy while keeping legacy product fields intact."""
     item = dict(product)
     item["group"] = _catalog_group_for_product(item)
     item["plans"] = product_plan_list(str(item.get("id") or ""))
-    item["solutions"] = solution_list(str(item.get("id") or ""))
+    solutions = solution_list(str(item.get("id") or ""))
+    item["solutions"] = (
+        [_solution_with_assets(company_id, solution) for solution in solutions]
+        if assets else solutions
+    )
     if assets:
         item["logos"] = asset_list_logos(company_id, str(item.get("id") or ""))
         item["photos"] = asset_list_photos(company_id, str(item.get("id") or ""))
@@ -3560,8 +3575,11 @@ def _catalog_link_view(link: Dict[str, Any]) -> Dict[str, Any]:
     source = company_get(str(item.get("source_company_id") or ""))
     group = _catalog_group_for_product(product) if product else None
     wanted = {str(value) for value in (item.get("solution_ids") or []) if str(value)}
-    additions = [row for row in (solution_list(str(item.get("product_id") or "")) if product else [])
-                 if str(row.get("id") or "") in wanted]
+    additions = [
+        _solution_with_assets(str(item.get("source_company_id") or ""), row)
+        for row in (solution_list(str(item.get("product_id") or "")) if product else [])
+        if str(row.get("id") or "") in wanted
+    ]
     item.update({
         "source_company_name": (source or {}).get("name") or "",
         "group": group,
@@ -4493,7 +4511,8 @@ def delete_product_photo(company_id: str, product_id: str, asset_id: str, reques
         return denied
     asset = asset_get(asset_id)
     if (not asset or str(asset.get("company_id") or "") != str(company_id)
-            or str(asset.get("product_id") or "") != str(product_id)):
+            or str(asset.get("product_id") or "") != str(product_id)
+            or asset.get("solution_id") is not None):
         return JSONResponse({"detail": "Foto não encontrada"}, status_code=404)
     return {"deleted": asset_delete(asset_id)}
 
@@ -4509,7 +4528,12 @@ def list_solutions(company_id: str, product_id: str, request: Request):
     prod = product_get(product_id)
     if not prod or str(prod.get("company_id") or "") != str(company_id):
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
-    return {"solutions": solution_list(product_id)}
+    return {
+        "solutions": [
+            _solution_with_assets(company_id, solution)
+            for solution in solution_list(product_id)
+        ],
+    }
 
 
 @router.post("/{company_id}/products/{product_id}/solutions")
@@ -4529,10 +4553,13 @@ async def create_solution(company_id: str, product_id: str, request: Request):
         data = {}
     if not (data.get("name") or "").strip():
         return JSONResponse({"detail": "name é obrigatório"}, status_code=422)
-    sol = solution_create(product_id, data)
+    try:
+        sol = solution_create(product_id, data)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
     if not sol:
         return JSONResponse({"detail": "Produto não encontrado"}, status_code=404)
-    return {"solution": sol}
+    return {"solution": _solution_with_assets(company_id, sol)}
 
 
 @router.put("/{company_id}/solutions/{solution_id}")
@@ -4550,10 +4577,266 @@ async def update_solution(company_id: str, solution_id: str, request: Request):
         data = await request.json()
     except Exception:
         data = {}
-    sol = solution_update(solution_id, data)
+    try:
+        sol = solution_update(solution_id, data)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
     if not sol:
         return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
-    return {"solution": sol}
+    return {"solution": _solution_with_assets(company_id, sol)}
+
+
+def _remove_uploaded_asset_file(asset: Dict[str, Any]) -> None:
+    """Best-effort removal restricted to UPLOAD_DIR; never follow an asset URL outside it."""
+    url = str((asset or {}).get("url") or "")
+    if not url.startswith(UPLOAD_URL_PREFIX):
+        return
+    relative = url[len(UPLOAD_URL_PREFIX):].lstrip("/")
+    upload_root = os.path.realpath(UPLOAD_DIR)
+    candidate = os.path.realpath(os.path.join(upload_root, relative))
+    try:
+        if os.path.commonpath((upload_root, candidate)) != upload_root:
+            return
+    except ValueError:
+        return
+    try:
+        if os.path.isfile(candidate):
+            os.remove(candidate)
+    except OSError:
+        # The database record is authoritative; an unavailable stale file must not
+        # prevent the operator from removing a catalog entry.
+        pass
+
+
+def _solution_owned_by_company(company_id: str, solution_id: str) -> Optional[Dict[str, Any]]:
+    solution = solution_get(solution_id)
+    if not solution or str(solution.get("company_id") or "") != str(company_id):
+        return None
+    return solution
+
+
+@router.get("/{company_id}/solutions/{solution_id}/assets")
+def list_solution_assets(company_id: str, solution_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not _solution_owned_by_company(company_id, solution_id):
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    assets = asset_list_solution_assets(company_id, solution_id)
+    return {
+        "assets": assets,
+        "logos": [asset for asset in assets if (asset.get("meta") or {}).get("role") == "logo"],
+        "photos": [asset for asset in assets if (asset.get("meta") or {}).get("role") == "photo"],
+    }
+
+
+@router.post("/{company_id}/solutions/{solution_id}/logo")
+async def upload_solution_logo(
+    company_id: str,
+    solution_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    variant: str = Form("light"),
+):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    solution = _solution_owned_by_company(company_id, solution_id)
+    if not solution:
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    try:
+        content = _normalize_logo_upload(await file.read(_MAX_LOGO_UPLOAD_BYTES + 1))
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    subdir = os.path.join(UPLOAD_DIR, company_id, "solutions", solution_id)
+    os.makedirs(subdir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.png"
+    filepath = os.path.join(subdir, filename)
+    with open(filepath, "wb") as output:
+        output.write(content)
+    url = f"{UPLOAD_URL_PREFIX}/{company_id}/solutions/{solution_id}/{filename}"
+    existing_logos = asset_list_solution_assets(company_id, solution_id, "logo")
+    asset = asset_create(company_id, {
+        "kind": "IMAGE",
+        "source": "UPLOADED",
+        "url": url,
+        "solution_id": solution_id,
+        "meta": {
+            "role": "logo",
+            "variant": str(variant or "light"),
+            "is_primary": not bool(existing_logos),
+            "identity_scope": "solution",
+            "confidence": 1.0,
+        },
+    })
+    try:
+        palette = _dominant_colors(filepath, 3)
+        if palette:
+            colors = dict(solution.get("colors") or {})
+            for key, color in zip(("primary", "secondary", "accent"), palette):
+                colors.setdefault(key, color)
+            solution_update(solution_id, {"colors": colors})
+    except Exception:
+        pass
+    return {"logo": asset, "solution": _solution_with_assets(company_id, solution_get(solution_id) or solution)}
+
+
+@router.post("/{company_id}/solutions/{solution_id}/photo")
+async def upload_solution_photo(
+    company_id: str, solution_id: str, request: Request, file: UploadFile = File(...),
+):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    solution = _solution_owned_by_company(company_id, solution_id)
+    if not solution:
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    try:
+        content = _normalize_logo_upload(await file.read(_MAX_LOGO_UPLOAD_BYTES + 1))
+    except ValueError as exc:
+        detail = str(exc).replace("logo", "imagem").replace("Logo", "Imagem")
+        return JSONResponse({"detail": detail}, status_code=422)
+    subdir = os.path.join(UPLOAD_DIR, company_id, "solutions", solution_id)
+    os.makedirs(subdir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.png"
+    filepath = os.path.join(subdir, filename)
+    with open(filepath, "wb") as output:
+        output.write(content)
+    url = f"{UPLOAD_URL_PREFIX}/{company_id}/solutions/{solution_id}/{filename}"
+    asset = asset_create(company_id, {
+        "kind": "IMAGE",
+        "source": "UPLOADED",
+        "url": url,
+        "solution_id": solution_id,
+        "meta": {"role": "photo", "identity_scope": "solution"},
+    })
+    facts = ""
+    try:
+        from ..services.ai import vision_product_facts
+        facts, _cost = vision_product_facts(content)
+        if facts:
+            previous = str(solution.get("knowledge") or "").strip()
+            tag = f"[IMAGEM DO SUBPRODUTO: {solution.get('name') or ''}] {facts}"
+            if tag not in previous:
+                solution_update(
+                    solution_id,
+                    {"knowledge": (previous + ("\n\n" if previous else "") + tag)[:60000]},
+                )
+    except Exception:
+        facts = ""
+    return {
+        "photo": asset,
+        "facts": facts,
+        "solution": _solution_with_assets(company_id, solution_get(solution_id) or solution),
+    }
+
+
+@router.delete("/{company_id}/solutions/{solution_id}/assets/{asset_id}")
+def delete_solution_asset(
+    company_id: str, solution_id: str, asset_id: str, request: Request,
+):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not _solution_owned_by_company(company_id, solution_id):
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    asset = asset_get(asset_id)
+    role = ((asset or {}).get("meta") or {}).get("role")
+    if (
+        not asset
+        or str(asset.get("company_id") or "") != str(company_id)
+        or str(asset.get("solution_id") or "") != str(solution_id)
+        or role not in {"logo", "photo"}
+    ):
+        return JSONResponse({"detail": "Imagem não encontrada"}, status_code=404)
+    if not asset_delete(asset_id):
+        return JSONResponse({"detail": "Imagem não encontrada"}, status_code=404)
+    _remove_uploaded_asset_file(asset)
+    return {"deleted": True}
+
+
+@router.post("/{company_id}/solutions/{solution_id}/kb")
+async def upload_solution_kb(
+    company_id: str, solution_id: str, request: Request, file: UploadFile = File(...),
+):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    solution = _solution_owned_by_company(company_id, solution_id)
+    if not solution:
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    raw = await file.read()
+    name = file.filename or "doc.txt"
+    import asyncio as _aio
+    try:
+        text = ((await _aio.to_thread(_extract_doc_text, name, raw)) or "").strip()
+    except Exception as exc:
+        return JSONResponse({"detail": f"Falha ao ler '{name}': {exc}"}, status_code=400)
+    if not text or len(text) < 20:
+        try:
+            text = ((await _aio.to_thread(_vision_ocr_doc, name, raw)) or "").strip()
+        except Exception:
+            text = ""
+    if not text:
+        return JSONResponse(
+            {"detail": f"Não consegui extrair texto de '{name}'. Formatos: PDF, DOCX, TXT, MD, CSV, "
+                       "imagem ou PDF escaneado via OCR."},
+            status_code=400,
+        )
+    previous = str(solution.get("knowledge") or "").strip()
+    merged = (previous + f"\n\n===== {name} =====\n" + text).strip()[:60000]
+    updated = solution_update(solution_id, {"knowledge": merged}) or solution
+    return {
+        "ok": True,
+        "file": name,
+        "chars": len(text),
+        "total_chars": len(merged),
+        "solution": _solution_with_assets(company_id, updated),
+    }
+
+
+@router.get("/{company_id}/solutions/{solution_id}/kb")
+def get_solution_kb(company_id: str, solution_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    solution = _solution_owned_by_company(company_id, solution_id)
+    if not solution:
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    knowledge = str(solution.get("knowledge") or "")
+    return {"chars": len(knowledge), "preview": knowledge[:2000]}
+
+
+@router.delete("/{company_id}/solutions/{solution_id}/kb")
+def clear_solution_kb(company_id: str, solution_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not _solution_owned_by_company(company_id, solution_id):
+        return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    solution_update(solution_id, {"knowledge": ""})
+    return {"ok": True}
 
 
 @router.delete("/{company_id}/solutions/{solution_id}")
@@ -4571,8 +4854,11 @@ def delete_solution(company_id: str, solution_id: str, request: Request):
         return JSONResponse(
             {"detail": "Adicional vinculado a cliente. Remova o vínculo antes de excluir."}, status_code=409,
         )
+    owned_assets = asset_list_solution_assets(company_id, solution_id)
     if not solution_delete(solution_id):
         return JSONResponse({"detail": "Solução não encontrada"}, status_code=404)
+    for asset in owned_assets:
+        _remove_uploaded_asset_file(asset)
     return {"deleted": True}
 
 
@@ -4807,6 +5093,7 @@ def set_primary_logo(company_id: str, asset_id: str, request: Request):
     asset = asset_get(asset_id)
     meta = (asset or {}).get("meta") or {}
     if (not asset or asset.get("company_id") != company_id or asset.get("product_id") is not None
+            or asset.get("solution_id") is not None
             or meta.get("role") != "logo"):
         return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     asset = asset_set_primary_logo(company_id, asset_id, "MANUAL")
@@ -4830,6 +5117,7 @@ def delete_logo(company_id: str, asset_id: str, request: Request):
     asset = asset_get(asset_id)
     meta = (asset or {}).get("meta") or {}
     if (not asset or asset.get("company_id") != company_id or asset.get("product_id") is not None
+            or asset.get("solution_id") is not None
             or meta.get("role") != "logo"):
         return JSONResponse({"detail": "Logo não encontrada"}, status_code=404)
     if asset and (asset.get("url") or "").startswith(UPLOAD_URL_PREFIX):

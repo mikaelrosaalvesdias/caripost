@@ -1073,7 +1073,23 @@
       return r.competitors || [];
     },
 
-    /* ════════ PRODUTOS → SOLUÇÕES (fontes de conteúdo) ════════ */
+    /* ════════ CATÁLOGO: GRUPOS → PRODUTOS → PLANOS + ADICIONAIS ════════ */
+
+    async listProductGroups(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/product-groups');
+      return r.groups || [];
+    },
+    async createProductGroup(companyId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/product-groups', { method: 'POST', body: JSON.stringify(payload) });
+      return r.group;
+    },
+    async updateProductGroup(companyId, groupId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/product-groups/' + _enc(groupId), { method: 'PUT', body: JSON.stringify(payload) });
+      return r.group;
+    },
+    async deleteProductGroup(companyId, groupId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/product-groups/' + _enc(groupId), { method: 'DELETE' });
+    },
 
     async listProducts(companyId) {
       const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products');
@@ -1089,6 +1105,36 @@
     },
     async deleteProduct(companyId, productId) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId), { method: 'DELETE' });
+    },
+    async listProductPlans(companyId, productId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/plans');
+      return r.plans || [];
+    },
+    async createProductPlan(companyId, productId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/plans', { method: 'POST', body: JSON.stringify(payload) });
+      return r.plan;
+    },
+    async updateProductPlan(companyId, planId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/plans/' + _enc(planId), { method: 'PUT', body: JSON.stringify(payload) });
+      return r.plan;
+    },
+    async deleteProductPlan(companyId, planId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/plans/' + _enc(planId), { method: 'DELETE' });
+    },
+    async listCatalogLinks(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/catalog-links');
+      return r.links || [];
+    },
+    async catalogLinkOptions(companyId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/catalog-links/options');
+      return r.catalogs || [];
+    },
+    async createCatalogLink(companyId, payload) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/catalog-links', { method: 'POST', body: JSON.stringify(payload) });
+      return r.link;
+    },
+    async deleteCatalogLink(companyId, linkId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/catalog-links/' + _enc(linkId), { method: 'DELETE' });
     },
     async enrichProduct(companyId, productId, payload) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/products/' + _enc(productId) + '/enrich', { method: 'POST', body: JSON.stringify(payload || {}) });
@@ -1233,6 +1279,34 @@
     },
     async deleteSolution(companyId, solutionId) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId), { method: 'DELETE' });
+    },
+    async listSolutionAssets(companyId, solutionId) {
+      const r = await mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/assets');
+      return { logos: r.logos || [], photos: r.photos || [] };
+    },
+    async uploadSolutionLogo(companyId, solutionId, file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/logo', { method: 'POST', body: fd, headers: {} });
+    },
+    async uploadSolutionPhoto(companyId, solutionId, file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/photo', { method: 'POST', body: fd, headers: {} });
+    },
+    async deleteSolutionAsset(companyId, solutionId, assetId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/assets/' + _enc(assetId), { method: 'DELETE' });
+    },
+    async uploadSolutionKb(companyId, solutionId, file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/kb', { method: 'POST', body: fd, headers: {} });
+    },
+    async getSolutionKb(companyId, solutionId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/kb').catch(() => ({ chars: 0, preview: '' }));
+    },
+    async clearSolutionKb(companyId, solutionId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/solutions/' + _enc(solutionId) + '/kb', { method: 'DELETE' });
     },
 
     /* ════════ MULTI-LOGO (empresa) ════════ */

@@ -39,8 +39,13 @@ for symbol in (
     "brand_kit_get brand_kit_upsert brand_kit_extras_patch brand_kit_apply_auto "
     "normalize_brand_colors "
     "competitor_list competitor_create competitor_delete asset_list asset_create asset_delete asset_get "
-    "asset_update_meta asset_list_logos asset_list_photos asset_clear_primary asset_set_primary_logo asset_claim_primary_logo_if_empty product_list product_get "
-    "product_create product_copy product_update product_delete solution_list solution_get solution_create "
+    "asset_update_meta asset_list_logos asset_list_photos asset_list_solution_assets asset_clear_primary asset_set_primary_logo asset_claim_primary_logo_if_empty product_list product_get "
+    "product_create product_copy product_update product_delete "
+    "product_group_list product_group_get product_group_create product_group_update product_group_delete "
+    "product_plan_list product_plan_get product_plan_create product_plan_update product_plan_delete "
+    "catalog_link_list catalog_link_get catalog_link_create catalog_link_delete "
+    "catalog_link_references_product catalog_link_references_plan catalog_link_references_solution "
+    "solution_list solution_get solution_create "
     "solution_update solution_delete "
     "infcompany_get infcompany_list infcompany_create infcompany_update infcompany_delete "
     "influencer_get influencer_list influencer_create influencer_update influencer_delete "
@@ -655,6 +660,142 @@ class CompanyChildRouteOwnershipTests(unittest.TestCase):
             result = companies.list_all_competitors(self.Request())
 
         self.assertEqual(result["competitors"], rows[:1])
+
+
+class CatalogHierarchyRouterTests(unittest.TestCase):
+    class Request:
+        headers = {}
+        cookies = {}
+
+        def __init__(self, body=None):
+            self.body = body or {}
+
+        async def json(self):
+            return self.body
+
+    def test_product_rejects_group_from_another_company(self):
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "_company_scope_required", return_value=None), \
+             patch.object(companies, "company_get", return_value={"id": "c1"}), \
+             patch.object(companies, "product_group_get", return_value={"id": "g2", "company_id": "c2"}), \
+             patch.object(companies, "product_create") as create:
+            result = asyncio.run(companies.create_product(
+                "c1", self.Request({"name": "Zapping", "group_id": "g2"}),
+            ))
+
+        self.assertEqual(result.status_code, 422)
+        create.assert_not_called()
+
+    def test_catalog_link_rejects_plan_from_another_product(self):
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "_company_scope_required", return_value=None), \
+             patch.object(companies, "company_get", return_value={"id": "target"}), \
+             patch.object(companies, "product_get", return_value={"id": "zapping", "company_id": "cariap"}), \
+             patch.object(companies, "product_plan_get", return_value={"id": "full", "product_id": "esaude", "company_id": "cariap"}), \
+             patch.object(companies, "catalog_link_create") as create:
+            result = asyncio.run(companies.create_catalog_link("target", self.Request({
+                "source_company_id": "cariap", "product_id": "zapping", "plan_id": "full",
+            })))
+
+        self.assertEqual(result.status_code, 422)
+        create.assert_not_called()
+
+    def test_linked_product_cannot_be_deleted(self):
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "_company_scope_required", return_value=None), \
+             patch.object(companies, "product_get", return_value={"id": "zapping", "company_id": "cariap"}), \
+             patch.object(companies, "catalog_link_references_product", return_value=True), \
+             patch.object(companies, "product_delete") as delete:
+            result = companies.delete_product("cariap", "zapping", self.Request())
+
+        self.assertEqual(result.status_code, 409)
+        delete.assert_not_called()
+
+    def test_solution_list_exposes_only_assets_owned_by_each_solution(self):
+        solution = {"id": "telecine", "company_id": "cariap", "product_id": "zapping"}
+        logo = {
+            "id": "logo-1", "company_id": "cariap", "solution_id": "telecine",
+            "meta": {"role": "logo"},
+        }
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "_company_scope_required", return_value=None), \
+             patch.object(companies, "product_get", return_value={"id": "zapping", "company_id": "cariap"}), \
+             patch.object(companies, "solution_list", return_value=[solution]), \
+             patch.object(companies, "asset_list_solution_assets", return_value=[logo]) as list_assets:
+            result = companies.list_solutions("cariap", "zapping", self.Request())
+
+        self.assertEqual(result["solutions"][0]["logos"], [logo])
+        self.assertEqual(result["solutions"][0]["photos"], [])
+        list_assets.assert_called_once_with("cariap", "telecine")
+
+    def test_solution_asset_delete_rejects_asset_from_another_solution(self):
+        asset = {
+            "id": "logo-1", "company_id": "cariap", "solution_id": "premiere",
+            "meta": {"role": "logo"},
+        }
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "_company_scope_required", return_value=None), \
+             patch.object(companies, "solution_get", return_value={"id": "telecine", "company_id": "cariap"}), \
+             patch.object(companies, "asset_get", return_value=asset), \
+             patch.object(companies, "asset_delete") as delete:
+            result = companies.delete_solution_asset(
+                "cariap", "telecine", "logo-1", self.Request(),
+            )
+
+        self.assertEqual(result.status_code, 404)
+        delete.assert_not_called()
+
+    def test_deleting_solution_removes_its_uploaded_files_safely(self):
+        with tempfile.TemporaryDirectory() as media_root:
+            relative = Path("cariap") / "solutions" / "telecine" / "logo.png"
+            filepath = Path(media_root) / relative
+            filepath.parent.mkdir(parents=True)
+            filepath.write_bytes(b"image")
+            asset = {
+                "id": "logo-1", "company_id": "cariap", "solution_id": "telecine",
+                "url": "/uploads/" + relative.as_posix(), "meta": {"role": "logo"},
+            }
+            with patch.object(companies, "UPLOAD_DIR", media_root), \
+                 patch.object(companies, "UPLOAD_URL_PREFIX", "/uploads"), \
+                 patch.object(companies, "_api_key_required", return_value=None), \
+                 patch.object(companies, "_company_scope_required", return_value=None), \
+                 patch.object(companies, "solution_get", return_value={"id": "telecine", "company_id": "cariap"}), \
+                 patch.object(companies, "catalog_link_references_solution", return_value=False), \
+                 patch.object(companies, "asset_list_solution_assets", return_value=[asset]), \
+                 patch.object(companies, "solution_delete", return_value=True):
+                result = companies.delete_solution("cariap", "telecine", self.Request())
+
+            self.assertTrue(result["deleted"])
+            self.assertFalse(filepath.exists())
+
+    def test_solution_kb_upload_accumulates_extracted_text(self):
+        class Upload:
+            filename = "telecine.txt"
+
+            async def read(self):
+                return b"Catalogo Telecine com filmes, canais ao vivo e estreias exclusivas."
+
+        current = {
+            "id": "telecine", "company_id": "cariap", "product_id": "zapping",
+            "name": "Telecine", "knowledge": "Informacao anterior.",
+        }
+        updated = {**current, "knowledge": "Informacao anterior.\n\nCatalogo Telecine"}
+        with patch.object(companies, "_api_key_required", return_value=None), \
+             patch.object(companies, "_company_scope_required", return_value=None), \
+             patch.object(companies, "solution_get", return_value=current), \
+             patch.object(companies, "solution_update", return_value=updated) as update, \
+             patch.object(companies, "asset_list_solution_assets", return_value=[]), \
+             patch.object(asyncio, "to_thread", new=AsyncMock(
+                 side_effect=lambda function, *args: function(*args)
+             )):
+            result = asyncio.run(companies.upload_solution_kb(
+                "cariap", "telecine", self.Request(), Upload(),
+            ))
+
+        self.assertTrue(result["ok"])
+        saved_knowledge = update.call_args.args[1]["knowledge"]
+        self.assertIn("Informacao anterior.", saved_knowledge)
+        self.assertIn("Catalogo Telecine", saved_knowledge)
 
 
 class LogoDeletionReviewTests(unittest.TestCase):
