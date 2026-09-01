@@ -178,7 +178,7 @@ function CompanyEnrichmentPanel({ company, onRefresh, onReview }) {
 
   async function useDetectedPalette() {
     if (!Object.keys(detectedColors).length) return;
-    if (!window.confirm('Substituir a paleta atual pelas cores detectadas nas logos?')) return;
+    if (!await mpConfirm('Substituir a paleta atual pelas cores detectadas nas logos?')) return;
     setApplyingPalette(true); setError('');
     try {
       await window.mpApi.saveBrandKit(company.id, { colors: detectedColors });
@@ -285,9 +285,9 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
   }, [companyId, enrichmentState, load]);
 
   async function delCompany() {
-    if (!window.confirm('Excluir a empresa "' + (company && company.name) + '" e todos os seus dados (produtos, posts, conexões)?')) return;
+    if (!await mpConfirm('Excluir a empresa "' + (company && company.name) + '" e todos os seus dados (produtos, posts, conexões)?')) return;
     try { await window.mpApi.deleteCompany(companyId); if (onDeleted) onDeleted(); }
-    catch (e) { window.alert('Erro: ' + e.message); }
+    catch (e) { mpAlert('Erro: ' + e.message); }
   }
 
   if (loading) return <div className="panel"><div className="hint">Carregando…</div></div>;
@@ -343,7 +343,7 @@ function CompanyLifecycleBanner({ company, onSaved }) {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
   async function convert() {
-    if (!window.confirm(`Confirmar que ${company.name} fechou e liberar conexão/publicação?`)) return;
+    if (!await mpConfirm(`Confirmar que ${company.name} fechou e liberar conexão/publicação?`)) return;
     setBusy(true); setMsg('');
     try {
       await window.mpApi.convertCompanyToManaged(company.id);
@@ -601,7 +601,7 @@ function ProductGroupEditor({ company, group, productCount, onChanged }) {
 
   async function remove() {
     if (productCount) { setMsg('Erro: mova os produtos deste grupo antes de excluí-lo.'); return; }
-    if (!window.confirm('Excluir o grupo "' + group.name + '"?')) return;
+    if (!await mpConfirm('Excluir o grupo "' + group.name + '"?')) return;
     setBusy(true); setMsg('');
     try { await window.mpApi.deleteProductGroup(company.id, group.id); onChanged(); }
     catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
@@ -667,7 +667,7 @@ function CompanyCatalogLinks({ company }) {
 
   async function remove(link) {
     const productName = (link.product && link.product.name) || 'esta oferta';
-    if (!window.confirm('Remover o vínculo com "' + productName + '"?')) return;
+    if (!await mpConfirm('Remover o vínculo com "' + productName + '"?')) return;
     setBusy(link.id); setMsg('');
     try {
       await window.mpApi.deleteCatalogLink(company.id, link.id);
@@ -1235,7 +1235,7 @@ function ProductCard({ company, product, groups, onChanged }) {
     finally { setKbBusy(false); }
   }
   async function clearKb() {
-    if (!window.confirm('Limpar TODA a base de conhecimento de "' + product.name + '"?')) return;
+    if (!await mpConfirm('Limpar TODA a base de conhecimento de "' + product.name + '"?')) return;
     setKbBusy(true);
     try { await window.mpApi.clearProductKb(company.id, product.id); setKbChars(0); setKbMsg('Base limpa.'); onChanged(); }
     catch (e) { setKbMsg('Erro: ' + e.message); }
@@ -1273,7 +1273,7 @@ function ProductCard({ company, product, groups, onChanged }) {
     finally { setBusy(false); }
   }
   async function remove() {
-    if (!window.confirm('Excluir o produto "' + product.name + '"?')) return;
+    if (!await mpConfirm('Excluir o produto "' + product.name + '"?')) return;
     try { await window.mpApi.deleteProduct(company.id, product.id); onChanged(); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
@@ -1306,7 +1306,7 @@ function ProductCard({ company, product, groups, onChanged }) {
     if (list.length > 1) setMsg(`${ok} logo(s) enviada(s)` + (fail ? `, ${fail} falhou(aram)` : '') + '.');
   }
   async function removeLogo(id) {
-    if (!window.confirm('Excluir esta logo?')) return;
+    if (!await mpConfirm('Excluir esta logo?')) return;
     try { await window.mpApi.deleteLogo(company.id, id); onChanged(); }
     catch (e) { setMsg('Erro: ' + e.message); }
   }
@@ -1321,7 +1321,7 @@ function ProductCard({ company, product, groups, onChanged }) {
     finally { setPhotoBusy(false); }
   }
   async function removePhoto(id) {
-    if (!window.confirm('Excluir esta foto?')) return;
+    if (!await mpConfirm('Excluir esta foto?')) return;
     try { await window.mpApi.deleteProductPhoto(company.id, product.id, id); onChanged(); }
     catch (e) { setPhotoMsg('Erro: ' + e.message); }
   }
@@ -1454,7 +1454,7 @@ function ProductPlanEditor({ company, plan, onChanged, onError }) {
   }
 
   async function remove() {
-    if (!window.confirm('Excluir o plano "' + plan.name + '"?')) return;
+    if (!await mpConfirm('Excluir o plano "' + plan.name + '"?')) return;
     setBusy(true); setMsg('');
     try { await window.mpApi.deleteProductPlan(company.id, plan.id); onChanged(); }
     catch (e) { const text = 'Erro: ' + e.message; setMsg(text); if (onError) onError(text); }
@@ -1642,7 +1642,7 @@ function ProductAdditionalEditor({ company, solution, onChanged, onError }) {
   }
 
   async function remove() {
-    if (!window.confirm('Excluir o à la carte / subproduto "' + solution.name + '"?')) return;
+    if (!await mpConfirm('Excluir o à la carte / subproduto "' + solution.name + '"?')) return;
     setBusy(true); setMsg('');
     try { await window.mpApi.deleteSolution(company.id, solution.id); onChanged(); }
     catch (e) { reportError(e, setMsg); }
@@ -1671,7 +1671,7 @@ function ProductAdditionalEditor({ company, solution, onChanged, onError }) {
   }
 
   async function removeAsset(asset, kind) {
-    if (!window.confirm('Excluir esta ' + (kind === 'logo' ? 'logo' : 'foto') + '?')) return;
+    if (!await mpConfirm('Excluir esta ' + (kind === 'logo' ? 'logo' : 'foto') + '?')) return;
     setAssetBusy(asset.id); setAssetMsg('');
     try {
       await window.mpApi.deleteSolutionAsset(company.id, solution.id, asset.id);
@@ -1699,7 +1699,7 @@ function ProductAdditionalEditor({ company, solution, onChanged, onError }) {
   }
 
   async function clearKb() {
-    if (!window.confirm('Limpar TODA a base de conhecimento de "' + solution.name + '"?')) return;
+    if (!await mpConfirm('Limpar TODA a base de conhecimento de "' + solution.name + '"?')) return;
     setKbBusy(true); setKbMsg('');
     try {
       await window.mpApi.clearSolutionKb(company.id, solution.id);
@@ -2197,7 +2197,7 @@ function CompanyLogos({ company, onSaved, onLogosLoaded }) {
     finally { setBusy(false); }
   }
   async function remove(id) {
-    if (!window.confirm('Excluir esta logo?')) return;
+    if (!await mpConfirm('Excluir esta logo?')) return;
     setBusy(true); setMsg('');
     try { await window.mpApi.deleteLogo(company.id, id); load(); onSaved && onSaved(true); }
     catch (e) { setMsg('Erro: ' + e.message); }
@@ -2535,7 +2535,7 @@ function CompanyCriacao({ company }) {
     catch (e) { setMsg('Erro: ' + (e.message || e)); } finally { setBusy(false); }
   }
   async function resetAll() {
-    if (!window.confirm('Restaurar TODAS as configurações criativas deste cliente para o padrão?')) return;
+    if (!await mpConfirm('Restaurar TODAS as configurações criativas deste cliente para o padrão?')) return;
     setBusy(true); setMsg('');
     try { await window.mpApi.saveCreativeConfig(company.id, {}); setBaseOv({}); setEdits({}); setMsg('Restaurado para o padrão.'); }
     catch (e) { setMsg('Erro: ' + (e.message || e)); } finally { setBusy(false); }
@@ -2764,8 +2764,8 @@ function AprovacaoApp() {
   }, []);
   React.useEffect(() => { if (window.mpApi) load(); }, [load]);
 
-  async function transition(id, to) { try { await window.mpApi.transitionPost(id, to); load(); } catch (e) { alert(e.message); } }
-  async function del(id) { if (!confirm('Excluir?')) return; try { await window.mpApi.deletePost(id); load(); } catch (e) { alert(e.message); } }
+  async function transition(id, to) { try { await window.mpApi.transitionPost(id, to); load(); } catch (e) { mpAlert(e.message); } }
+  async function del(id) { if (!confirm('Excluir?')) return; try { await window.mpApi.deletePost(id); load(); } catch (e) { mpAlert(e.message); } }
 
   const SL = { REVIEW: 'em revisão', DRAFT: 'rascunho', APPROVED: 'aprovado', SCHEDULED: 'agendado', PUBLISHED: 'publicado' };
   const order = { REVIEW: 0, DRAFT: 1, APPROVED: 2, SCHEDULED: 3, PUBLISHED: 4 };
@@ -2809,9 +2809,9 @@ function PostCard({ post, label, onTransition, onDelete, onExpand }) {
       <div className="li-main"><b>{post.title || 'Sem título'}</b><small>{nets || '—'}</small></div>
       <Pill kind={post.status === 'PUBLISHED' || post.status === 'APPROVED' ? 'good' : post.status === 'REVIEW' ? 'warn' : 'cy'} dot>{label}</Pill>
     </div>
-    {post.review_decision === 'changes' && <div style={{ background: '#3a2f10', color: '#ffd479', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>⚠ Cliente: ressalvas — {post.review_comment}</div>}
-    {post.review_decision === 'rejected' && <div className="err">✕ Cliente reprovou — {post.review_comment}</div>}
-    {post.review_decision === 'approved' && <div className="ok">✓ Cliente aprovou 100%</div>}
+    {post.review_decision === 'changes' && <Callout kind="warn">Cliente aprovou <b>com ressalvas</b>: {post.review_comment}</Callout>}
+    {post.review_decision === 'rejected' && <Callout kind="danger" icon="x">Cliente <b>reprovou</b>: {post.review_comment}</Callout>}
+    {post.review_decision === 'approved' && <Callout kind="good">Cliente aprovou 100%</Callout>}
     <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--text2)', maxHeight: 72, overflow: 'auto' }}>{post.copy}</div>
     <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
       <button className="btn sm ghost" onClick={onExpand}>Ver completo</button>
@@ -2951,7 +2951,7 @@ function CompanyAcesso({ company, onSaved }) {
     {users.length > 0 && <div className="stack" style={{ gap: 6 }}>
       {users.map(u => <div key={u.user_id} className="litem" style={{ padding: 10 }}>
         <div className="li-main"><b>{u.username}</b><small>{u.role === 'agency' ? 'Agência' : 'Cliente final'} · {u.active ? 'ativo' : 'inativo'}</small></div>
-        <button className="btn sm ghost" onClick={async () => { const p = prompt('Nova senha para ' + u.username + ':'); if (p) { await window.mpApi.resetAuthPassword(u.user_id, p); setMsg('✓ Senha redefinida.'); } }}>Redefinir senha</button>
+        <button className="btn sm ghost" onClick={async () => { const p = await mpPrompt('Nova senha para ' + u.username + ':'); if (p) { await window.mpApi.resetAuthPassword(u.user_id, p); setMsg('✓ Senha redefinida.'); } }}>Redefinir senha</button>
       </div>)}
     </div>}
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}

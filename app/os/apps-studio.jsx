@@ -81,7 +81,7 @@ function AutoEditorApp() {
   }
 
   function start() {
-    if (!selectedKeys.length) { alert('Selecione ao menos um vídeo fonte.'); return; }
+    if (!selectedKeys.length) { mpAlert('Selecione ao menos um vídeo fonte.'); return; }
     setRunning(true); setJobPct(5); setJobLabel('Iniciando…');
     window.mpApi.startAutoEditor({
       video_object_key: selectedKeys[0],
@@ -90,8 +90,8 @@ function AutoEditorApp() {
       transition_mode: trans,
       audio_normalize: audioNorm,
       audio_denoise: audioDen,
-    }).then(r => { if (r.job_id) _poll(r.job_id); else { setRunning(false); alert(r.error || 'Falha ao iniciar'); } })
-      .catch(e => { setRunning(false); alert('Erro: ' + e.message); });
+    }).then(r => { if (r.job_id) _poll(r.job_id); else { setRunning(false); mpAlert(r.error || 'Falha ao iniciar'); } })
+      .catch(e => { setRunning(false); mpAlert('Erro: ' + e.message); });
   }
 
   return <div className="app">
@@ -112,7 +112,7 @@ function AutoEditorApp() {
             {selectedKeys.map((k, i) => <div key={k} className="litem" style={{ padding: '9px 12px' }}>
               <span className="chip" style={{ fontFamily: 'var(--fm)', fontSize: 11 }}>v{i}</span>
               <div className="li-main"><b style={{ fontSize: 12 }}>{k.split('/').pop()}</b></div>
-              <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={() => setSelectedKeys(p => p.filter(x => x !== k))}>✕</button>
+              <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={() => setSelectedKeys(p => p.filter(x => x !== k))}><Icon name="x" /></button>
             </div>)}
           </div>}
           <div className="hint" style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>fontes: <b style={{ color: 'var(--text2)' }}>{selectedKeys.length} vídeo(s)</b></div>
@@ -191,7 +191,7 @@ function EnhancerApp() {
   React.useEffect(() => { return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, []);
 
   async function start() {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo primeiro.'); return; }
     setPhase('running'); setPct(5); setStatusMsg('Iniciando…');
     try {
       const r = await window.mpApi.enhancerStart({

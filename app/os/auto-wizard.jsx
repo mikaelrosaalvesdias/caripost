@@ -80,7 +80,7 @@ function AutoMode({ onExit, onClose }) {
       setSelectedKeys(prev => [...new Set([...prev, ...keys])]);
       setCatFilter('original');
     } catch (e) {
-      alert('Upload falhou: ' + e.message);
+      mpAlert('Upload falhou: ' + e.message);
     } finally {
       setUploading(false); setUploadPct(0);
     }
@@ -114,7 +114,7 @@ function AutoMode({ onExit, onClose }) {
   }
 
   async function startJob() {
-    if (!selectedKeys.length) { alert('Selecione ao menos um video fonte.'); return; }
+    if (!selectedKeys.length) { mpAlert('Selecione ao menos um video fonte.'); return; }
     if (!window.mpApi) return;
     try {
       setPhase('running'); setActive(0); setPct(5); setDetail('Iniciando...');

@@ -27,7 +27,7 @@ function FilePicker({ onSelect, onClose, filterFn }) {
   return <div className="panel stack" style={{ maxHeight: 320, overflow: 'hidden', display: 'flex' }}>
     <div className="rowx" style={{ justifyContent: 'space-between' }}>
       <input className="inp" style={{ flex: 1, height: 34, fontSize: 12 }} placeholder="Buscar…" value={q} onChange={e => setQ(e.target.value)} autoFocus />
-      <button className="btn sm ghost" onClick={onClose}>✕</button>
+      <button className="btn sm ghost" onClick={onClose}><Icon name="x" /></button>
     </div>
     <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
       {loading && <div className="hint">Carregando…</div>}
@@ -69,7 +69,7 @@ function LegendaApp() {
   }
 
   async function doBurn(skipSubs) {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo primeiro.'); return; }
     setPhase('preparing'); setPct(5); setStatusMsg('Preparando…');
     try {
       const rid = runId || await window.mpApi.ensureRun(file, m => setStatusMsg(m));
@@ -191,8 +191,8 @@ function LogoApp() {
   }, []);
 
   async function doBurnLogo() {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
-    if (!selProfile) { alert('Nenhum perfil de logo cadastrado.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo primeiro.'); return; }
+    if (!selProfile) { mpAlert('Nenhum perfil de logo cadastrado.'); return; }
     setPhase('burning'); setPct(5); setStatusMsg('Preparando…');
     try {
       const rid = await window.mpApi.ensureRun(file, m => setStatusMsg(m));
@@ -286,8 +286,8 @@ function LogoBurnModal({ teaserKey, runId, profiles, onClose, onDone }) {
   React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   async function burn() {
-    if (!selProfile) { alert('Selecione um perfil de logo.'); return; }
-    if (!runId) { alert('Sem run associado ao teaser — não é possível queimar a logo.'); return; }
+    if (!selProfile) { mpAlert('Selecione um perfil de logo.'); return; }
+    if (!runId) { mpAlert('Sem run associado ao teaser — não é possível queimar a logo.'); return; }
     setProc({ open: true, pct: 5, detail: 'Iniciando queima da logo…', phase: 'running' });
     try {
       const pp = posPct[pos] || posPct.br;
@@ -436,7 +436,7 @@ function TeaserApp() {
       const run = await window.mpApi.getRun(rid).catch(() => null);
       const ts = run?.result?.vision?.frame_timestamps;
       setFrameTimes(Array.isArray(ts) ? ts : []);
-    } catch (e) { alert('Análise falhou: ' + e.message); }
+    } catch (e) { mpAlert('Análise falhou: ' + e.message); }
     finally { setLoadingFrames(false); }
   }
 
@@ -448,7 +448,7 @@ function TeaserApp() {
       const key = await window.mpApi.uploadFile(f, p => setOpenerUpPct(p));
       setOpener({ object_key: key, n: f.name });
       setOpenerUpPct(0);
-    } catch (e) { setOpenerUpPct(0); alert('Upload falhou: ' + e.message); }
+    } catch (e) { setOpenerUpPct(0); mpAlert('Upload falhou: ' + e.message); }
   }
 
   function _buildPlan(n, totMin, fMin, lMin) {
@@ -479,7 +479,7 @@ function TeaserApp() {
   }
 
   async function generate() {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo primeiro.'); return; }
     Object.values(pollRefs.current).forEach(t => clearInterval(t));
     pollRefs.current = {};
 
@@ -491,7 +491,7 @@ function TeaserApp() {
     if (autoDist) {
       const planN = sortedSel.length >= 2 ? Math.min(sortedSel.length, 20) : nClips;
       const plan = _buildPlan(planN, totalMin, firstMin, lastMin);
-      if (!plan.ok) { alert(plan.detail); return; }
+      if (!plan.ok) { mpAlert(plan.detail); return; }
       nClips = planN; ordered = plan.durations;
       cDur = Math.max(2, Math.min(Math.round(ordered.reduce((a, b) => a + b, 0) / ordered.length), 720));
       if (sortedSel.length) sortedSel.slice(0, nClips).forEach((idx, pos) => { perScene[idx] = ordered[pos]; });
@@ -499,7 +499,7 @@ function TeaserApp() {
       sortedSel.forEach(idx => { perScene[idx] = cDur; });
     }
     const totalSec = ordered.length ? ordered.reduce((a, b) => a + b, 0) : nClips * cDur;
-    if (totalSec > 1800) { alert('Teaser muito longo (' + Math.round(totalSec / 60) + ' min). Limite: 30 min.'); return; }
+    if (totalSec > 1800) { mpAlert('Teaser muito longo (' + Math.round(totalSec / 60) + ' min). Limite: 30 min.'); return; }
 
     const variants = fmt === 'both'
       ? [{ label: 'Web 1080p', h: 1080 }, { label: 'Celular 720p', h: 720 }]
@@ -545,10 +545,10 @@ function TeaserApp() {
 
   async function renameResult(j, idx) {
     const cur = (j.resultKey || '').split('/').pop();
-    const name = prompt('Novo nome do teaser:', cur);
+    const name = await mpPrompt('Novo nome do teaser:', cur);
     if (!name || name === cur) return;
     try { await window.mpApi.renameMedia(j.resultKey, name); setJobs(js => js.map((x, i) => i === idx ? { ...x, msg: '✓ renomeado para ' + name } : x)); }
-    catch (e) { alert('Erro ao renomear: ' + e.message); }
+    catch (e) { mpAlert('Erro ao renomear: ' + e.message); }
   }
 
   const running = jobs.some(j => j.status === 'running');
@@ -635,7 +635,7 @@ function TeaserApp() {
             ? <div className="litem" style={{ padding: '8px 12px' }}>
                 <span className="li-ic"><Icon name="play" /></span>
                 <div className="li-main"><b style={{ fontSize: 12 }}>{opener.n}</b><small>posição: {openerPos === 'start' ? 'início' : 'fim'}</small></div>
-                <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={() => setOpener(null)}>✕</button>
+                <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={() => setOpener(null)}><Icon name="x" /></button>
               </div>
             : <div className="rowx">
                 <input ref={openerInputRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => handleOpenerUpload(e.target.files)} />
@@ -706,7 +706,7 @@ function ThumbnailApp() {
   }, [file?.object_key]);
 
   async function doGenerate() {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo primeiro.'); return; }
     setPhase('running'); setStatusMsg('Preparando análise…');
     try {
       const rid = runId || await window.mpApi.ensureRun(file, m => setStatusMsg(m));
@@ -785,7 +785,7 @@ function CortesApp() {
   React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   async function generate() {
-    if (!file) { alert('Selecione um vídeo primeiro.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo primeiro.'); return; }
     setBusy(true); setErr(''); setClips([]); setPct(2); setDetail('Enviando…'); setAiPhase('');
     try {
       const r = await window.mpApi.cortesGenerate({

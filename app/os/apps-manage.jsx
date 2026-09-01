@@ -1,6 +1,6 @@
 /* Caripost OS — Gestão de Agência: Criadores, Tendências, Financeiro, DMCA, Settings */
 
-const MP_OS_VERSION = 'v1.27.123';
+const MP_OS_VERSION = 'v1.27.124';
 
 /* ── CRIADORES ── */
 function CreatorsApp() {
@@ -187,7 +187,7 @@ function CreatorDetail({ creatorId, onSaved, onDeleted }) {
 
   async function remove() {
     if (!confirm(`Encerrar/remover o criador "${creator?.name}"?`)) return;
-    try { await window.mpApi.deleteCreator(creatorId); onDeleted && onDeleted(); } catch (e) { alert('Erro: ' + e.message); }
+    try { await window.mpApi.deleteCreator(creatorId); onDeleted && onDeleted(); } catch (e) { mpAlert('Erro: ' + e.message); }
   }
 
   async function scrapeStats() {
@@ -199,7 +199,7 @@ function CreatorDetail({ creatorId, onSaved, onDeleted }) {
 
   async function removePlatform(platform) {
     if (!confirm(`Remover conta de ${platform}?`)) return;
-    try { await window.mpApi.removeCreatorPlatform(creatorId, platform); load(); } catch (e) { alert('Erro: ' + e.message); }
+    try { await window.mpApi.removeCreatorPlatform(creatorId, platform); load(); } catch (e) { mpAlert('Erro: ' + e.message); }
   }
 
   async function checkLogin(platform) {
@@ -608,7 +608,7 @@ function DmcaApp() {
   }
 
   async function setStatus(id, status) {
-    try { await window.mpApi.dmcaUpdateStatus(id, status); _load(); } catch (e) { alert('Erro: ' + e.message); }
+    try { await window.mpApi.dmcaUpdateStatus(id, status); _load(); } catch (e) { mpAlert('Erro: ' + e.message); }
   }
 
   return <div className="app">
@@ -652,7 +652,7 @@ function DmcaApp() {
           <option value="failed">falhou</option>
         </select>
         {x.tone === 'pri' && <button className="btn sm pri" onClick={() => {
-          window.mpApi.dmcaTakedown(x.id).then(() => _load()).catch(e => alert('Erro: ' + e.message));
+          window.mpApi.dmcaTakedown(x.id).then(() => _load()).catch(e => mpAlert('Erro: ' + e.message));
         }}><Icon name="shield" />Takedown</button>}
       </div>)}
     </div>
@@ -836,8 +836,8 @@ function UsersPanel() {
         <div className="li-main"><b>{u.username}</b><small>{u.active ? 'ativo' : 'inativo'}{u.user_id === meId ? ' · você' : ''}</small></div>
         <select className="inp" style={{ width: 120 }} value={u.role} disabled={busy} onChange={e => act(() => window.mpApi.updateUser(u.user_id, { role: e.target.value }), 'Papel atualizado.')}>{ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select>
         <button className="btn sm ghost" disabled={busy} onClick={() => act(() => window.mpApi.updateUser(u.user_id, { active: !u.active }), 'Atualizado.')}>{u.active ? 'Desativar' : 'Ativar'}</button>
-        <button className="btn sm ghost" disabled={busy} onClick={() => { const p = prompt('Nova senha p/ ' + u.username + ' (mín 4):'); if (p) act(() => window.mpApi.resetUserPassword(u.user_id, p), 'Senha redefinida.'); }}>Senha</button>
-        {u.user_id !== meId && <button className="btn sm ghost" style={{ color: 'var(--pri)' }} disabled={busy} onClick={() => { if (window.confirm('Excluir ' + u.username + '?')) act(() => window.mpApi.deleteUser(u.user_id), 'Excluído.'); }}>Excluir</button>}
+        <button className="btn sm ghost" disabled={busy} onClick={async () => { const p = await mpPrompt('Nova senha p/ ' + u.username + ' (mín 4):', '', { type: 'password' }); if (p) act(() => window.mpApi.resetUserPassword(u.user_id, p), 'Senha redefinida.'); }}>Senha</button>
+        {u.user_id !== meId && <button className="btn sm ghost" style={{ color: 'var(--pri)' }} disabled={busy} onClick={async () => { if (await mpConfirm('Excluir ' + u.username + '?', { title: 'Excluir usuário?', confirmLabel: 'Excluir' })) act(() => window.mpApi.deleteUser(u.user_id), 'Excluído.'); }}>Excluir</button>}
       </div>)}
       {!users.length && <div className="hint">Nenhum usuário carregado.</div>}
     </div>
@@ -928,11 +928,11 @@ function SettingsApp() {
 
   async function saveToken(p) {
     const label = TOKEN_LABELS[p] || p;
-    const v = prompt('Cole o valor de ' + label + ':');
+    const v = await mpPrompt('Cole o valor de ' + label + ':');
     if (!v) return;
     setSavingFor(p);
     try { await window.mpApi.saveToken(p, v.trim()); _load(); }
-    catch (e) { alert('Erro: ' + e.message); }
+    catch (e) { mpAlert('Erro: ' + e.message); }
     finally { setSavingFor(''); }
   }
 

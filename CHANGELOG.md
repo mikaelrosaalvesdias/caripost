@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.124 - 2026-09-01
+
+- **fix(os): nenhum diálogo do navegador em lugar nenhum do app.** Varredura do resto do OS: 16 `window.confirm`, 49 `alert()` e 5 `prompt()` viraram diálogos do próprio app. O kit (`ui-modals.jsx`) ganhou `mpConfirm`, `mpAlert` e `mpPrompt` — versões imperativas, com a mesma cara do `<Modal>`/`<Confirm>`, que devolvem Promise.
+- **fix(os): último tema escuro removido.** O modal "Função não liberada no seu plano" (`shell.jsx`) usava scrim preto e `var(--panel, #17171f)` — virou `<Modal>` claro com `<Callout>`. Na lista de posts do cliente, o bloco âmbar `#3a2f10` virou `<Callout>`.
+- **chore(os): emoji fora dos controles.** Os `✕` de fechar em Teaser, Estúdio e Editor viraram `<Icon name="x" />`.
+- Versao: main.py/UI/OS 1.27.124, cache bust OS `v=127124`.
+
 ## v1.27.123 - 2026-09-01
 
 - **fix(os): padrão visual aplicado nas telas que fugiam dele.** Os 7 modais com scrim preto (Clientes, Criação, Agenda) passaram a usar o `<Modal>` claro do app; o visualizador de carrossel virou `<Lightbox>` mantendo navegação e a instrução enviada ao modelo.

@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.124', date: '2026-09-01',
+    items: [
+      { type: 'fix', text: 'Nenhuma tela do app usa mais as caixas de diálogo do navegador: confirmações, avisos e pedidos de texto agora acontecem dentro do Caripost, com o visual do app.' },
+      { type: 'fix', text: 'O aviso de função bloqueada no plano deixou de aparecer numa caixa escura e passou a usar a janela clara padrão.' },
+      { type: 'fix', text: 'Devolutiva do cliente na lista de posts saiu do âmbar escuro; os botões de fechar viraram ícone em vez de caractere.' },
+    ],
+  },
+  {
     version: 'v1.27.123', date: '2026-09-01',
     items: [
       { type: 'fix', text: 'Padrão visual aplicado nas telas que fugiam dele: os modais de Clientes, Criação e Agenda agora usam a janela clara padrão do app, sem fundo preto.' },

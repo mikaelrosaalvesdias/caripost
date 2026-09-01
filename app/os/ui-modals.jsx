@@ -425,3 +425,81 @@ Object.assign(window, {
   Callout, Segmented, CostConfirm, OfferPick, ReviewCard, ArtCard, FlowHead, IdeaInput,
   mpFmtSec, mpFmtEta,
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   DIÁLOGOS IMPERATIVOS — substituem alert() / confirm() / prompt()
+   nativos nos pontos que ainda chamavam o navegador.
+   Mesma cara do <Modal>/<Confirm>; devolvem Promise.
+   ═══════════════════════════════════════════════════════════════ */
+
+function _mpDialogHost() {
+  let el = document.getElementById('mp-dialog-root');
+  if (!el) { el = document.createElement('div'); el.id = 'mp-dialog-root'; document.body.appendChild(el); }
+  return el;
+}
+
+/* monta um modal avulso e resolve a Promise quando ele fecha */
+function _mpOpenDialog(render) {
+  return new Promise(resolve => {
+    const host = document.createElement('div');
+    _mpDialogHost().appendChild(host);
+    const root = ReactDOM.createRoot(host);
+    let done = false;
+    const close = value => {
+      if (done) return;
+      done = true;
+      resolve(value);
+      setTimeout(() => { try { root.unmount(); } catch (e) {} host.remove(); }, 0);
+    };
+    root.render(render(close));
+  });
+}
+
+/* aviso simples — no lugar de alert() */
+function mpAlert(message, opts) {
+  const o = opts || {};
+  const kind = o.kind || (/^(erro|falha|falhou)/i.test(String(message)) ? 'danger' : '');
+  const title = o.title || (kind === 'danger' ? 'Não deu certo' : 'Aviso');
+  return _mpOpenDialog(close => React.createElement(Modal, {
+    size: 'sm', title, icon: kind === 'danger' ? 'warning' : 'help', onClose: () => close(undefined),
+    foot: React.createElement('button', { className: 'btn pri', onClick: () => close(undefined) }, 'Entendi'),
+  }, React.createElement(Callout, { kind: kind || 'info' }, String(message))));
+}
+
+/* confirmação — no lugar de window.confirm(); resolve true/false */
+function mpConfirm(message, opts) {
+  const o = opts || {};
+  return _mpOpenDialog(close => React.createElement(Confirm, {
+    title: o.title || 'Confirmar',
+    message: String(message),
+    confirmLabel: o.confirmLabel || 'Confirmar',
+    cancelLabel: o.cancelLabel || 'Cancelar',
+    onConfirm: () => close(true),
+    onClose: () => close(false),
+  }));
+}
+
+/* campo de texto — no lugar de prompt(); resolve string ou null */
+function MpPromptBody({ label, initial, placeholder, type, onDone }) {
+  const [v, setV] = React.useState(initial || '');
+  return React.createElement(Modal, {
+    size: 'sm', title: label || 'Informe o valor', icon: 'pen', onClose: () => onDone(null),
+    foot: React.createElement(React.Fragment, null,
+      React.createElement('button', { className: 'btn ghost', onClick: () => onDone(null) }, 'Cancelar'),
+      React.createElement('button', { className: 'btn pri', disabled: !v.trim(), onClick: () => onDone(v) }, 'Confirmar')),
+  }, React.createElement(Field, { label: label || 'Valor' },
+    React.createElement('input', {
+      className: 'inp', autoFocus: true, type: type || 'text', value: v, placeholder: placeholder || '',
+      onChange: e => setV(e.target.value),
+      onKeyDown: e => { if (e.key === 'Enter' && v.trim()) onDone(v); },
+    })));
+}
+
+function mpPrompt(label, initial, opts) {
+  const o = opts || {};
+  return _mpOpenDialog(close => React.createElement(MpPromptBody, {
+    label, initial, placeholder: o.placeholder, type: o.type, onDone: close,
+  }));
+}
+
+Object.assign(window, { mpAlert, mpConfirm, mpPrompt });

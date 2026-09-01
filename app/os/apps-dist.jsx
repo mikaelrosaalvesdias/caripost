@@ -22,8 +22,8 @@ function TelegramApp() {
   }, []);
 
   async function sendNow() {
-    if (!file) { alert('Selecione um teaser/vídeo primeiro.'); return; }
-    if (!selGroup) { alert('Selecione um grupo.'); return; }
+    if (!file) { mpAlert('Selecione um teaser/vídeo primeiro.'); return; }
+    if (!selGroup) { mpAlert('Selecione um grupo.'); return; }
     setSending(true); setSentMsg('');
     try {
       const r = await window.mpApi.telegramSendNow({
@@ -151,7 +151,7 @@ function PublisherApp() {
   React.useEffect(() => { loadSocial(); }, [loadSocial]);
 
   async function connectSocial(platform) {
-    if (!socialBrand) { alert('Selecione uma marca/cliente.'); return; }
+    if (!socialBrand) { mpAlert('Selecione uma marca/cliente.'); return; }
     setSocialBusy(true); setSocialMsg('Abrindo conexão ' + platform + '…');
     try {
       const callbackUrl = window.location.origin + '/api/social/callback';
@@ -176,9 +176,9 @@ function PublisherApp() {
   }
 
   async function submitSocial(publishNow) {
-    if (!socialBrand) { alert('Selecione uma marca/cliente.'); return; }
-    if (!socialSelected.length) { alert('Selecione ao menos um canal conectado.'); return; }
-    if (!socialApproved) { alert('A publicação precisa estar aprovada.'); return; }
+    if (!socialBrand) { mpAlert('Selecione uma marca/cliente.'); return; }
+    if (!socialSelected.length) { mpAlert('Selecione ao menos um canal conectado.'); return; }
+    if (!socialApproved) { mpAlert('A publicação precisa estar aprovada.'); return; }
     const channels = socialAccounts.filter(a => socialSelected.includes(a.id)).map(a => ({
       socialConnectionId: a.id,
       platform: a.platform,
@@ -246,9 +246,9 @@ function PublisherApp() {
   }
 
   async function publish() {
-    if (!file) { alert('Selecione um vídeo.'); return; }
-    if (!selCreator) { alert('Selecione um criador.'); return; }
-    if (!selPlats.length) { alert('Selecione ao menos uma plataforma.'); return; }
+    if (!file) { mpAlert('Selecione um vídeo.'); return; }
+    if (!selCreator) { mpAlert('Selecione um criador.'); return; }
+    if (!selPlats.length) { mpAlert('Selecione ao menos uma plataforma.'); return; }
     setPhase('running'); setStatusMsg('Iniciando publicação…');
     try {
       const r = await window.mpApi.publish({

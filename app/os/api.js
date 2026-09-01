@@ -598,7 +598,7 @@
     },
     /* Dispara o download de forma confiável (sem popup-block) */
     async download(key, filename) {
-      if (!key) { alert('Arquivo indisponível para download.'); return; }
+      if (!key) { mpAlert('Arquivo indisponível para download.'); return; }
       try {
         const url = await this.downloadUrl(key, filename);
         if (!url) throw new Error('sem url');
@@ -606,7 +606,7 @@
         a.href = url.startsWith('http') ? url : (location.origin + url);
         a.download = filename || key.split('/').pop();
         document.body.appendChild(a); a.click(); a.remove();
-      } catch (e) { alert('Falha no download: ' + e.message); }
+      } catch (e) { mpAlert('Falha no download: ' + e.message); }
     },
     async renameMedia(key, newName) {
       return mpFetch('/api/media-manager/rename', {

@@ -100,7 +100,7 @@ function AnalyzeApp() {
     try {
       await window.mpApi.updateCreator(creatorId, { reference_channels: links });
       setCreatorRefs(links); setRefDraft('');
-    } catch (e) { alert('Erro ao salvar referências: ' + e.message); }
+    } catch (e) { mpAlert('Erro ao salvar referências: ' + e.message); }
     finally { setSavingRefs(false); }
   }
 
@@ -139,13 +139,13 @@ function AnalyzeApp() {
       setTimeout(() => setUploadPct(0), 1200);
     } catch (e) {
       setUploadPct(0);
-      alert('Upload falhou: ' + e.message);
+      mpAlert('Upload falhou: ' + e.message);
     }
   }
 
   async function doAnalyze() {
-    if (!file?.object_key) { alert('Selecione ou envie um vídeo primeiro.'); return; }
-    if (!creatorId) { alert('Escolha a empresa/criador primeiro.'); return; }
+    if (!file?.object_key) { mpAlert('Selecione ou envie um vídeo primeiro.'); return; }
+    if (!creatorId) { mpAlert('Escolha a empresa/criador primeiro.'); return; }
     const payload = {
       video_object_key: file.object_key,
       original_filename: file.n || '',
@@ -168,7 +168,7 @@ function AnalyzeApp() {
     } catch (e) {
       setAnalyzeModal(m => ({ ...m, open: true, detail: 'Erro: ' + e.message, phase: 'error' }));
       await new Promise(resolve => setTimeout(resolve, 1600));
-      alert('Análise falhou: ' + e.message);
+      mpAlert('Análise falhou: ' + e.message);
     } finally {
       setBusy(false);
       setAnalyzeModal(m => ({ ...m, open: false }));
@@ -357,7 +357,7 @@ function CompareApp() {
       });
       setResults(r.results || r.responses || r);
     } catch (e) {
-      alert('Compare falhou: ' + e.message);
+      mpAlert('Compare falhou: ' + e.message);
     } finally { setBusy(false); }
   }
 
@@ -463,7 +463,7 @@ function RunsApp() {
             <button className="btn sm" onClick={async () => {
               const s = await window.mpApi.getRunSrt(cur.id);
               const txt = typeof s === 'string' ? s : (s.srt || '');
-              if (!txt) { alert('SRT indisponível para este run.'); return; }
+              if (!txt) { mpAlert('SRT indisponível para este run.'); return; }
               const blob = new Blob([txt], { type: 'text/plain' });
               const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'legendas.srt'; a.click();
             }}><Icon name="download" />Baixar SRT</button>
@@ -474,7 +474,7 @@ function RunsApp() {
             <button className="btn sm ghost" style={{ color: 'var(--pri)' }} onClick={async () => {
               if (!confirm('Excluir este run?')) return;
               try { await window.mpApi.fetch('/runs/' + cur.id, { method: 'DELETE' }); setRuns(rs => rs.filter(r => r.id !== cur.id)); setSel(0); }
-              catch (e) { alert('Erro: ' + e.message); }
+              catch (e) { mpAlert('Erro: ' + e.message); }
             }}><Icon name="trash" />Excluir</button>
           </div>
         </>}
@@ -583,18 +583,18 @@ function MediaApp() {
     try {
       const url = await window.mpApi.downloadUrl(f.object_key, f.n.replace(/\.[^.]+$/, ''));
       if (url) window.open(url, '_blank');
-    } catch (e) { alert('Erro no download: ' + e.message); }
+    } catch (e) { mpAlert('Erro no download: ' + e.message); }
     finally { setBusyOp(''); }
   }
   async function doRename(f) {
-    const newName = prompt('Novo nome do arquivo:', f.n);
+    const newName = await mpPrompt('Novo nome do arquivo:', f.n);
     if (!newName || newName === f.n) return;
     setBusyOp('rename');
     try {
       await window.mpApi.renameMedia(f.object_key, newName);
       await _reload();
       setSel(null);
-    } catch (e) { alert('Erro ao renomear: ' + e.message); }
+    } catch (e) { mpAlert('Erro ao renomear: ' + e.message); }
     finally { setBusyOp(''); }
   }
   function doCopy(f) {
@@ -607,7 +607,7 @@ function MediaApp() {
       await window.mpApi.deleteMedia(f.object_key);
       setSel(null);
       await _reload();
-    } catch (e) { alert('Erro ao excluir: ' + e.message); }
+    } catch (e) { mpAlert('Erro ao excluir: ' + e.message); }
     finally { setBusyOp(''); }
   }
   const FILE_OPS_REAL = [

@@ -178,14 +178,11 @@ function App() {
             <div key={id} className="dicon" onClick={() => open(id)} style={appLocked(id, mpUser) ? { opacity: 0.35, filter: 'grayscale(1)' } : undefined}><div className="ig"><Icon name={APPS[id].icon} /></div><span>{APPS[id].title}{appLocked(id, mpUser) ? ' 🔒' : ''}</span></div>)}
         </div>
       </div>)}
-      {lockMsg && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 9999, display: 'grid', placeItems: 'center' }} onClick={() => setLockMsg(false)}>
-        <div style={{ background: 'var(--panel, #17171f)', border: '1px solid var(--line, #333)', borderRadius: 16, padding: '28px 32px', maxWidth: 420, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-          <div style={{ fontSize: 34, marginBottom: 10 }}>🔒</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Função não liberada no seu plano</div>
-          <div style={{ opacity: .8, fontSize: 13, marginBottom: 18 }}>Chame o seu consultor de vendas para liberar esta função.</div>
-          <button className="btn pri" onClick={() => setLockMsg(false)}>Entendi</button>
-        </div>
-      </div>}
+      {lockMsg && <Modal size="sm" icon="shield" title="Função não liberada no seu plano"
+        onClose={() => setLockMsg(false)}
+        foot={<button className="btn pri" onClick={() => setLockMsg(false)}>Entendi</button>}>
+        <Callout kind="info">Chame o seu consultor de vendas para liberar esta função.</Callout>
+      </Modal>}
     </div>
 
     {/* windows */}
