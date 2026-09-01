@@ -803,12 +803,15 @@ function CatalogLinkModal({ company, onClose, onSaved }) {
 
   const summary = [catalog && catalog.company_name, groups.find(item => String(item.id) === String(groupId))?.name, product && product.name, plan && plan.name].filter(Boolean);
 
-  return <div onClick={() => !busy && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 9100, background: 'rgba(0,0,0,.58)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-    <div className="panel stack" style={{ maxWidth: 680, width: '100%', maxHeight: '88vh', overflowY: 'auto', background: 'var(--bg2)' }} onClick={e => e.stopPropagation()}>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-        <div><b>Vincular oferta a {company.name}</b><div className="hint" style={{ marginTop: 4 }}>Siga a hierarquia do catálogo e escolha os à la carte / subprodutos separadamente.</div></div>
-        <button className="btn sm ghost" disabled={busy} onClick={onClose}><Icon name="x" /></button>
-      </div>
+  return <Modal
+    title={`Vincular oferta a ${company.name}`}
+    sub="Siga a hierarquia do catálogo e escolha os à la carte / subprodutos separadamente."
+    icon="link" size="lg" busy={busy} onClose={onClose}
+    foot={catalogs !== null && !!catalogs.length ? <>
+      <button className="btn ghost" disabled={busy} onClick={onClose}>Cancelar</button>
+      <button className="btn pri" disabled={busy || !product} onClick={save}><Icon name="link" />{busy ? 'Vinculando…' : 'Salvar vínculo'}</button>
+    </> : null}>
+    <div className="stack">
       {msg && <div className="err">{msg}</div>}
       {catalogs === null && <div className="hint">Carregando catálogos disponíveis…</div>}
       {catalogs !== null && !catalogs.length && <div className="hint">Nenhuma outra empresa possui um catálogo disponível para vínculo.</div>}
@@ -857,13 +860,9 @@ function CatalogLinkModal({ company, onClose, onSaved }) {
           <b>{summary.join(' → ')}</b>
           {!!solutionIds.length && <div className="hint" style={{ marginTop: 5 }}>+ {solutions.filter(item => solutionIds.includes(item.id)).map(item => item.name).join(', ')}</div>}
         </div>}
-        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancelar</button>
-          <button className="btn pri" disabled={busy || !product} onClick={save}><Icon name="link" />{busy ? 'Vinculando…' : 'Salvar vínculo'}</button>
-        </div>
       </>}
     </div>
-  </div>;
+  </Modal>;
 }
 
 function CopyProductsModal({ company, onClose, onDone }) {
@@ -893,13 +892,15 @@ function CopyProductsModal({ company, onClose, onDone }) {
     } catch (e) { setMsg('Erro: ' + e.message); setBusy(false); }
   }
 
-  return <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-    <div className="panel stack" style={{ maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto', background: 'var(--bg2)' }} onClick={e => e.stopPropagation()}>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <b>Copiar produtos de outro cliente</b>
-        <button className="btn sm ghost" onClick={onClose}><Icon name="x" /></button>
-      </div>
-      <div className="hint" style={{ marginTop: 6 }}>As cópias ficam independentes — editar aqui não muda o cliente de origem. O grupo é recriado no destino; planos, à la carte/subprodutos, logos e fotos não são copiados.</div>
+  return <Modal
+    title="Copiar produtos de outro cliente"
+    sub="As cópias ficam independentes — editar aqui não muda o cliente de origem. O grupo é recriado no destino; planos, à la carte/subprodutos, logos e fotos não são copiados."
+    icon="copy" busy={busy} onClose={onClose}
+    foot={sources !== null && !!sources.length ? <>
+      <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+      <button className="btn pri" onClick={copy} disabled={busy || !chosen.length}>{busy ? 'Copiando…' : `Copiar ${chosen.length || ''} produto(s)`}</button>
+    </> : null}>
+    <div className="stack">
       {msg && <div className="err">{msg}</div>}
       {sources === null && <div className="hint">Carregando clientes…</div>}
       {sources !== null && !sources.length && <div className="hint">Nenhum outro cliente com produtos cadastrados.</div>}
@@ -919,13 +920,9 @@ function CopyProductsModal({ company, onClose, onDone }) {
             <div className="li-main"><b>{p.name}</b>{p.category && <small>{p.category}</small>}</div>
           </label>)}
         </div>
-        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
-          <button className="btn pri" onClick={copy} disabled={busy || !chosen.length}>{busy ? 'Copiando…' : `Copiar ${chosen.length || ''} produto(s)`}</button>
-        </div>
       </div>}
     </div>
-  </div>;
+  </Modal>;
 }
 
 function CompanyInfluencers({ company }) {
@@ -2786,9 +2783,8 @@ function AprovacaoApp() {
         {items.map(p => <PostCard key={p.id} post={p} label={SL[p.status] || p.status} onTransition={transition} onDelete={del} onExpand={() => setSel(p)} />)}
       </div>
     </div>)}
-    {sel && <div onClick={() => setSel(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'grid', placeItems: 'center', zIndex: 9999, padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} className="panel stack" style={{ maxWidth: 440, maxHeight: '92vh', overflow: 'auto' }}>
-        <div className="row" style={{ justifyContent: 'space-between' }}><b>{sel.title || 'Post'}</b><button className="btn sm ghost" onClick={() => setSel(null)}><Icon name="x" /></button></div>
+    {sel && <Modal title={sel.title || 'Post'} icon="doc" size="sm" onClose={() => setSel(null)}>
+      <div className="stack">
         {sel.media_url && <img loading="lazy" decoding="async" src={sel.media_url} style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)' }} />}
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <Pill kind={sel.status === 'PUBLISHED' || sel.status === 'APPROVED' ? 'good' : sel.status === 'REVIEW' ? 'warn' : 'cy'} dot>{SL[sel.status] || sel.status}</Pill>
@@ -2801,7 +2797,7 @@ function AprovacaoApp() {
         <div style={{ whiteSpace: 'pre-wrap', fontSize: 14, color: 'var(--text2)' }}>{sel.copy}</div>
         {sel.hashtags && sel.hashtags.length > 0 && <div style={{ color: 'var(--accent)', fontSize: 13 }}>{sel.hashtags.join(' ')}</div>}
       </div>
-    </div>}
+    </Modal>}
   </div>;
 }
 

@@ -619,3 +619,373 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
   .auto-mid{grid-template-columns:1fr}
   .tb-search{display:none}
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Caripost OS — PATCH v1  ·  padronização visual
+   Anexar ao FINAL de os.css (ou carregar depois dele).
+   Só adiciona; não altera nenhuma regra existente.
+
+   Resolve:
+   1. .hint e .row — usadas centenas de vezes nos apps, mas NUNCA
+      definidas em os.css (texto sem estilo + linhas sem flex).
+   2. Modais ad-hoc com fundo preto (rgba(0,0,0,.6)) num app de
+      tema claro → scrim claro canônico.
+   3. Três loaders de anel duplicados com <style> injetado e hex
+      cravado → um único anel canônico.
+   4. Botõezinhos sobre vídeo com rgba(0,0,0,.72) inline.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 1. PRIMITIVAS QUE FALTAVAM ─────────────────────────────── */
+/* texto auxiliar — o app usa .hint em toda parte */
+.hint{font-size:12.5px;line-height:1.55;color:var(--muted)}
+.hint b{color:var(--text2);font-weight:700}
+.hint.sm{font-size:11.5px}
+
+/* linha flex — o app usa .row em toda parte (só existia .kv .row) */
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* preserva o comportamento de .kv .row já existente */
+.kv .row{flex-wrap:nowrap}
+
+/* summary/details dentro de painéis, no padrão do app */
+details>summary{cursor:pointer}
+details>summary::-webkit-details-marker{display:none}
+details>summary.hint{font-weight:700;color:var(--text2);padding:2px 0}
+details>summary.hint:hover{color:var(--pri2)}
+
+/* .sec.pri — usado nos apps; mesmo laranja do .sec base */
+.sec.pri{color:var(--pri)}
+
+/* checkbox nativo no padrão da marca */
+input[type=checkbox],input[type=radio]{accent-color:var(--pri);width:16px;height:16px;cursor:pointer}
+input[type=color]{width:38px;height:34px;padding:2px;border:1px solid var(--line2);border-radius:9px;background:#fff;cursor:pointer}
+input[type=range]{accent-color:var(--pri)}
+
+/* ─── 2. MODAL CANÔNICO (scrim claro) ────────────────────────── */
+.mp-modal{position:fixed;inset:0;z-index:9500;display:grid;place-items:center;padding:20px;
+  background:rgba(20,28,45,.30);backdrop-filter:blur(6px) saturate(1.1);-webkit-backdrop-filter:blur(6px) saturate(1.1);
+  animation:mpFade .16s var(--ease) both}
+@keyframes mpFade{from{opacity:.4}to{opacity:1}}
+.mp-modal-card{width:100%;max-width:680px;max-height:88vh;display:flex;flex-direction:column;
+  background:#fff;border:1px solid var(--line2);border-radius:18px;box-shadow:var(--sh-lg);overflow:hidden;
+  animation:mpIn .22s var(--spring) both}
+@keyframes mpIn{from{transform:translateY(12px) scale(.985)}to{transform:none}}
+.mp-modal-card.sm{max-width:480px}
+.mp-modal-card.lg{max-width:900px}
+.mp-modal-card.xl{max-width:1100px}
+
+.mp-modal-head{display:flex;align-items:flex-start;gap:12px;padding:18px 20px 14px;flex:none;
+  border-bottom:1px solid var(--line);background:var(--titlebar)}
+.mp-modal-head .mh-ic{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;flex:none;color:#fff;
+  background:linear-gradient(140deg,var(--pri),var(--pri2));box-shadow:0 6px 14px rgba(255,122,24,.28)}
+.mp-modal-head .mh-ic svg{width:18px;height:18px}
+.mp-modal-head .mh-txt{flex:1;min-width:0}
+.mp-modal-head h3{font-family:var(--fh);font-size:17px;font-weight:700;letter-spacing:.01em;line-height:1.25}
+.mp-modal-head .mh-sub{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.5}
+.mp-modal-close{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none;
+  color:var(--muted);transition:.13s var(--ease)}
+.mp-modal-close svg{width:16px;height:16px}
+.mp-modal-close:hover{background:var(--pri-soft);color:var(--pri2)}
+
+.mp-modal-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:20px;display:flex;flex-direction:column;gap:14px}
+/* grids dentro do modal não podem estourar a largura */
+.mp-modal-body>*{min-width:0}
+.mp-modal-body .split,.mp-modal-body .grid2,.mp-modal-body .grid3{min-width:0}
+.mp-modal-body .split>*,.mp-modal-body .grid2>*,.mp-modal-body .grid3>*{min-width:0}
+.mp-modal-body .inp,.mp-modal-body select.inp{max-width:100%}
+.mp-modal-foot{flex:none;display:flex;align-items:center;gap:9px;justify-content:flex-end;flex-wrap:wrap;
+  padding:14px 20px;border-top:1px solid var(--line);background:var(--glass2)}
+.mp-modal-foot .spread{margin-right:auto}
+
+/* steps enxutos dentro de modal (hierarquia catálogo etc.) */
+.mp-steps{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.mp-steps .s{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:var(--r-full);
+  border:1px solid var(--line2);background:#fff}
+.mp-steps .s.on{border-color:var(--pri-line);background:var(--pri-soft);color:var(--pri2);font-weight:600}
+.mp-steps .s.done{border-color:rgba(31,170,90,.32);background:var(--good-soft);color:var(--good);font-weight:600}
+.mp-steps .s i{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;
+  background:rgba(20,28,45,.08);color:var(--muted)}
+.mp-steps .s.on i{background:var(--pri);color:#fff}
+.mp-steps .s.done i{background:var(--good);color:#fff}
+
+/* resumo de seleção */
+.mp-summary{padding:12px 14px;border-radius:12px;background:var(--pri-soft);border:1px solid var(--pri-line)}
+.mp-summary .hint{color:var(--pri2);font-weight:600}
+.mp-summary b{display:block;margin-top:3px;font-size:13.5px;color:var(--text)}
+
+/* ─── 3. LOADER CANÔNICO (um só anel, tema claro) ────────────── */
+.mp-load{--pct:0;position:fixed;inset:0;z-index:9800;display:grid;place-items:center;padding:24px;
+  background:rgba(255,255,255,.93);backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);
+  animation:mpFade .18s var(--ease) both}
+.mp-load-wrap{width:min(440px,88vw);display:flex;flex-direction:column;align-items:center;text-align:center;gap:16px}
+.mp-ring{position:relative;width:188px;height:188px;border-radius:50%;display:grid;place-items:center;
+  background:conic-gradient(var(--pri) calc(var(--pct) * 1%),var(--pri-soft) 0);
+  box-shadow:0 22px 60px rgba(255,122,24,.22),0 0 0 1px var(--pri-line);transition:background .4s var(--ease)}
+.mp-ring::before{content:"";position:absolute;width:144px;height:144px;border-radius:50%;background:#fff;
+  box-shadow:inset 0 0 0 1px var(--line)}
+.mp-ring .pct{position:relative;z-index:1;font-family:var(--fh);font-size:38px;font-weight:700;color:var(--pri);
+  letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+/* anel indeterminado (sem % conhecido) */
+.mp-ring.spin{background:conic-gradient(var(--pri) 0 25%,var(--pri-soft) 25% 100%);animation:mpSpin 1s linear infinite}
+@keyframes mpSpin{to{transform:rotate(360deg)}}
+.mp-ring.spin .pct{animation:mpSpinBack 1s linear infinite}
+@keyframes mpSpinBack{to{transform:rotate(-360deg)}}
+
+.mp-load-title{font-family:var(--fh);font-size:21px;font-weight:700;color:var(--text)}
+.mp-load-detail{font-size:13.5px;font-weight:500;color:var(--text2);min-height:21px;line-height:1.5;max-width:400px}
+.mp-load-eta{font-size:12.5px;color:var(--muted);min-height:19px;font-variant-numeric:tabular-nums}
+.mp-load-file{max-width:100%;font-family:var(--fm);font-size:11px;color:var(--faint);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-load-times{display:flex;gap:32px;margin-top:2px}
+.mp-load-times .t{display:flex;flex-direction:column;align-items:center}
+.mp-load-times .t b{font-family:var(--fh);font-size:18px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.mp-load-times .t span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.09em;margin-top:2px}
+.mp-load-track{width:min(430px,84vw);height:8px;border-radius:var(--r-full);background:rgba(20,28,45,.08);overflow:hidden}
+.mp-load-track i{display:block;height:100%;border-radius:var(--r-full);
+  background:linear-gradient(90deg,var(--pri),#ffb066);transition:width .45s var(--ease)}
+.mp-load-actions{margin-top:4px;display:flex;gap:9px}
+
+/* estados */
+.mp-load.is-done .mp-ring{background:conic-gradient(var(--good) calc(var(--pct) * 1%),var(--good-soft) 0);
+  box-shadow:0 22px 60px rgba(31,170,90,.2),0 0 0 1px rgba(31,170,90,.3);animation:none}
+.mp-load.is-done .mp-ring .pct{color:var(--good);animation:none}
+.mp-load.is-error .mp-ring{background:conic-gradient(var(--pri2) calc(var(--pct) * 1%),var(--pri-soft) 0);
+  box-shadow:0 22px 60px rgba(237,95,2,.2),0 0 0 1px var(--pri-line);animation:none}
+.mp-load.is-error .mp-ring .pct{color:var(--pri2);animation:none}
+.mp-load.is-error .mp-load-title{color:var(--pri2)}
+
+/* ─── 4. LIGHTBOX de mídia (escuro é correto: é vídeo/imagem) ── */
+.mp-lightbox{position:fixed;inset:0;z-index:9900;display:grid;place-items:center;padding:28px;
+  background:rgba(12,15,22,.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  animation:mpFade .16s var(--ease) both}
+.mp-lightbox-inner{position:relative;max-width:min(1200px,94vw);max-height:88vh;display:flex;flex-direction:column;gap:12px;
+  animation:mpIn .22s var(--spring) both}
+.mp-lightbox-inner>img,.mp-lightbox-inner>video{max-width:100%;max-height:78vh;border-radius:14px;display:block;
+  background:#0c0f16;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.mp-lightbox-bar{display:flex;align-items:center;gap:12px;color:#fff}
+.mp-lightbox-bar .lb-name{font-family:var(--fm);font-size:11.5px;color:rgba(255,255,255,.65);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.mp-lightbox-close{position:absolute;top:-6px;right:-6px;width:38px;height:38px;border-radius:50%;display:grid;
+  place-items:center;background:#fff;color:var(--text);box-shadow:var(--sh-lg);transition:.13s var(--ease)}
+.mp-lightbox-close svg{width:17px;height:17px}
+.mp-lightbox-close:hover{background:var(--pri);color:#fff;transform:scale(1.06)}
+
+/* botões sobre mídia (substitui rgba(0,0,0,.72) inline) */
+.ov-btns{position:absolute;top:7px;right:7px;display:flex;gap:5px;z-index:2}
+.ov-btn{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;
+  background:rgba(12,15,22,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  color:#fff;border:1px solid rgba(255,255,255,.18);transition:.13s var(--ease)}
+.ov-btn svg{width:14px;height:14px}
+.ov-btn:hover{background:var(--pri);border-color:transparent;transform:translateY(-1px)}
+
+/* ─── 5. AJUSTES DE DENSIDADE / TABS EM ABAS INTERNAS ────────── */
+/* barra de abas rolável quando há muitas abas (clientes/criação) */
+.tabbar{overflow-x:auto;scrollbar-width:none}
+.tabbar::-webkit-scrollbar{display:none}
+.tabx{white-space:nowrap;flex:none;border-radius:10px 10px 0 0}
+
+/* sub-abas (pílulas) para o segundo nível dentro de um app */
+.subtabs{display:flex;gap:6px;flex-wrap:wrap}
+.subtab{padding:7px 14px;border-radius:var(--r-full);font-size:12.5px;font-weight:500;color:var(--text2);
+  border:1px solid var(--line2);background:#fff;transition:.13s var(--ease)}
+.subtab:hover{border-color:var(--pri-line);color:var(--pri2)}
+.subtab.on{background:var(--pri-soft);border-color:var(--pri-line);color:var(--pri2);font-weight:600}
+
+/* details usados como cartão dobrável (catálogo) */
+details.panel{padding:0}
+details.panel>summary{padding:14px 16px;list-style:none}
+details.panel[open]>summary{border-bottom:1px solid var(--line)}
+details.panel>.stack,details.panel>.grid2,details.panel>.split{padding:14px 16px}
+details.panel>.stack{margin-top:0!important}
+
+/* estado vazio padronizado */
+.empty{display:flex;flex-direction:column;align-items:center;gap:9px;padding:34px 20px;text-align:center;
+  border:1px dashed var(--line2);border-radius:14px;background:rgba(20,28,45,.015)}
+.empty .em-ic{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;
+  background:var(--pri-soft);border:1px solid var(--pri-line);color:var(--pri)}
+.empty .em-ic svg{width:22px;height:22px}
+.empty b{font-family:var(--fh);font-size:15px;font-weight:700}
+.empty .hint{max-width:340px}
+
+/* skeleton de carregamento (substitui "Carregando…" cru) */
+.sk-line{height:12px;border-radius:7px;background:linear-gradient(90deg,rgba(20,28,45,.07),rgba(20,28,45,.13),rgba(20,28,45,.07));
+  background-size:200% 100%;animation:skShine 1.3s linear infinite}
+@keyframes skShine{0%{background-position:0 0}100%{background-position:-200% 0}}
+.sk-row{display:flex;align-items:center;gap:13px;padding:13px 15px;border-radius:12px;background:#fff;border:1px solid var(--line)}
+.sk-row .sk-av{width:38px;height:38px;border-radius:10px;flex:none;
+  background:linear-gradient(90deg,rgba(20,28,45,.07),rgba(20,28,45,.13),rgba(20,28,45,.07));
+  background-size:200% 100%;animation:skShine 1.3s linear infinite}
+.sk-row .sk-main{flex:1;display:flex;flex-direction:column;gap:7px}
+
+/* ═══════════════════════════════════════════════════════════════
+   6. FLUXO DE CRIAÇÃO — Cliente · Briefing · Criação · Aprovação
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── callout (substitui #3a2f10 / #ffd479 do tema escuro) ────── */
+.callout{display:flex;gap:11px;padding:12px 14px;border-radius:12px;font-size:13px;line-height:1.55;
+  border:1px solid var(--line2);background:var(--glass2);color:var(--text2)}
+.callout .co-ic{width:20px;height:20px;flex:none;display:grid;place-items:center;margin-top:1px}
+.callout .co-ic svg{width:17px;height:17px}
+.callout b{color:var(--text)}
+.callout.warn{background:var(--warn-soft);border-color:rgba(217,130,0,.34);color:#8a5200}
+.callout.warn .co-ic,.callout.warn b{color:var(--warn)}
+.callout.danger{background:var(--pri-soft);border-color:var(--pri-line);color:#9a3d02}
+.callout.danger .co-ic,.callout.danger b{color:var(--pri2)}
+.callout.good{background:var(--good-soft);border-color:rgba(31,170,90,.32);color:#12683a}
+.callout.good .co-ic,.callout.good b{color:var(--good)}
+.callout.info{background:var(--cyan-soft);border-color:rgba(245,158,11,.3);color:#8a5200}
+.callout.info .co-ic{color:var(--cyan)}
+
+/* ─── segmented (substitui os toggles ◉ / ○) ──────────────────── */
+.segmented{display:inline-flex;padding:3px;border-radius:12px;background:rgba(20,28,45,.05);
+  border:1px solid var(--line);gap:2px}
+.segmented button{padding:7px 14px;border-radius:9px;font-size:12.5px;font-weight:500;color:var(--muted);
+  white-space:nowrap;transition:.13s var(--ease)}
+.segmented button:hover{color:var(--text2)}
+.segmented button.on{background:#fff;color:var(--pri2);font-weight:600;box-shadow:var(--sh)}
+
+/* ─── seleção de oferta / produto (Briefing) ──────────────────── */
+.offer{display:flex;align-items:flex-start;gap:11px;padding:12px 14px;border-radius:12px;cursor:pointer;
+  background:#fff;border:1px solid var(--line);transition:.13s var(--ease)}
+.offer:hover{border-color:var(--pri-line);box-shadow:var(--sh)}
+.offer.on{border-color:var(--pri-line);background:var(--pri-soft)}
+.offer>input[type=checkbox]{margin-top:2px;flex:none}
+.offer .of-main{flex:1;min-width:0}
+.offer .of-main b{font-size:13.5px;display:block}
+.offer .of-caps{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.of-cap{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:var(--r-full);
+  font-size:10.5px;font-weight:600;letter-spacing:.02em;background:rgba(20,28,45,.05);
+  border:1px solid var(--line);color:var(--muted)}
+.of-cap svg{width:11px;height:11px}
+.of-cap.has{background:var(--good-soft);border-color:rgba(31,170,90,.3);color:var(--good)}
+.offer-count{display:flex;align-items:center;gap:8px;padding:10px 13px;border-radius:11px;
+  background:var(--pri-soft);border:1px solid var(--pri-line);font-size:12.5px;color:var(--pri2);font-weight:600}
+.offer-count svg{width:15px;height:15px}
+
+/* ─── bloco de custo (antes de gastar dinheiro/créditos) ──────── */
+.cost{border:1px solid var(--pri-line);border-radius:14px;overflow:hidden;background:#fff}
+.cost-top{display:flex;align-items:center;gap:13px;padding:15px 16px;background:var(--pri-soft);
+  border-bottom:1px solid var(--pri-line)}
+.cost-top .c-ic{width:40px;height:40px;border-radius:12px;flex:none;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(140deg,var(--pri),var(--pri2));box-shadow:0 6px 14px rgba(255,122,24,.3)}
+.cost-top .c-ic svg{width:20px;height:20px}
+.cost-top .c-val{margin-left:auto;text-align:right;flex:none;white-space:nowrap}
+.cost-top .c-val b{display:block;font-family:var(--fh);font-size:26px;font-weight:700;color:var(--pri2);line-height:1.1}
+.cost-top .c-val span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.cost-top .c-txt b{font-family:var(--fh);font-size:14.5px;display:block}
+.cost-top .c-txt small{font-size:12px;color:var(--muted)}
+.cost-body{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.cost-lines{display:flex;flex-direction:column}
+.cost-lines .cl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;
+  border-bottom:1px solid var(--line);font-size:12.5px}
+.cost-lines .cl:last-child{border-bottom:none}
+.cost-lines .cl .k{color:var(--muted)}
+.cost-lines .cl .v{font-family:var(--fm);font-size:12px;color:var(--text);font-weight:500}
+
+/* ─── card da fila de aprovação ───────────────────────────────── */
+.rev{display:flex;gap:0;border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:#fff;
+  transition:.15s var(--ease)}
+.rev:hover{box-shadow:var(--sh)}
+.rev-rail{width:5px;flex:none;background:var(--line2)}
+.rev.pending .rev-rail{background:var(--warn)}
+.rev.changes .rev-rail{background:var(--cyan)}
+.rev.rejected .rev-rail{background:var(--pri)}
+.rev.approved .rev-rail{background:var(--good)}
+.rev-in{flex:1;min-width:0;display:flex;gap:14px;padding:14px}
+@media(max-width:620px){.rev-in{flex-direction:column}}
+.rev-thumb{width:132px;flex:none;border-radius:11px;overflow:hidden;border:1px solid var(--line);
+  background:#0c0f16;cursor:zoom-in;position:relative;aspect-ratio:4/5}
+.rev-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.rev-thumb .zoom{position:absolute;inset:0;display:grid;place-items:center;background:rgba(12,15,22,.45);
+  opacity:0;transition:.13s var(--ease);color:#fff}
+.rev-thumb:hover .zoom{opacity:1}
+.rev-thumb .zoom svg{width:20px;height:20px}
+@media(max-width:620px){.rev-thumb{width:100%;aspect-ratio:16/9}}
+.rev-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:9px}
+.rev-head{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap}
+.rev-head b{font-family:var(--fh);font-size:14.5px;line-height:1.3;flex:1;min-width:0}
+.rev-copy{font-size:12.5px;color:var(--text2);line-height:1.55;white-space:pre-wrap;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.rev-acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+
+/* linha compacta de aprovados */
+.rev-mini{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:11px;background:#fff;
+  border:1px solid var(--line);cursor:pointer;transition:.13s var(--ease)}
+.rev-mini:hover{border-color:var(--pri-line);box-shadow:var(--sh)}
+.rev-mini img{width:40px;height:40px;object-fit:cover;border-radius:9px;flex:none;background:#0c0f16}
+.rev-mini .rm-main{flex:1;min-width:0}
+.rev-mini .rm-main b{font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rev-mini .rm-main small{font-size:11.5px;color:var(--muted)}
+
+/* ─── grade de artes geradas (Criação) ────────────────────────── */
+.art-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
+.art{border:1px solid var(--line2);border-radius:13px;overflow:hidden;background:#fff;transition:.15s var(--ease)}
+.art:hover{border-color:var(--pri-line);box-shadow:var(--sh);transform:translateY(-2px)}
+.art .art-img{position:relative;aspect-ratio:4/5;background:#0c0f16;cursor:zoom-in}
+.art .art-img img{width:100%;height:100%;object-fit:cover;display:block}
+.art .art-meta{padding:10px 12px}
+.art .art-meta b{font-size:12.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.art .art-meta .row{margin-top:6px;gap:6px}
+.art.sel{border-color:var(--pri);box-shadow:0 0 0 2px var(--pri-soft)}
+
+/* ─── cabeçalho de passo do fluxo ─────────────────────────────── */
+.flow-head{display:flex;align-items:center;gap:13px;padding-bottom:14px;margin-bottom:2px;
+  border-bottom:1px solid var(--line)}
+.flow-head .fh-ic{width:38px;height:38px;border-radius:12px;flex:none;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(140deg,var(--pri),var(--pri2));box-shadow:0 6px 14px rgba(255,122,24,.28)}
+.flow-head .fh-ic svg{width:19px;height:19px}
+.flow-head .fh-txt{flex:1;min-width:0}
+.flow-head h3{font-family:var(--fh);font-size:17px;font-weight:700;line-height:1.25}
+.flow-head .fh-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+
+/* ─── cartão de projeto salvo (passo Cliente) ─────────────────── */
+.pj{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:12px;background:#fff;
+  border:1px solid var(--line);cursor:pointer;transition:.13s var(--ease)}
+.pj:hover{border-color:var(--pri-line);box-shadow:var(--sh)}
+.pj .pj-th{width:52px;height:52px;flex:none;border-radius:10px;overflow:hidden;background:#0c0f16;
+  border:1px solid var(--line);display:grid;place-items:center;color:var(--faint)}
+.pj .pj-th img{width:100%;height:100%;object-fit:cover;display:block}
+.pj .pj-main{flex:1;min-width:0}
+.pj .pj-main b{font-size:13.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pj .pj-main small{font-size:11.5px;color:var(--muted)}
+.pj.novo{border-style:dashed;background:rgba(20,28,45,.015);justify-content:center;color:var(--pri2);font-weight:600}
+.pj.novo:hover{background:var(--pri-soft)}
+
+/* ─── campo de ideia (entrada livre → IA vira briefing) ───────── */
+.idea{border:1px solid var(--pri-line);border-radius:14px;background:#fff;overflow:hidden}
+.idea-top{display:flex;align-items:center;gap:11px;padding:12px 15px;background:var(--pri-soft);
+  border-bottom:1px solid var(--pri-line)}
+.idea-top .i-ic{width:32px;height:32px;border-radius:10px;flex:none;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(140deg,var(--pri),var(--pri2));box-shadow:0 5px 12px rgba(255,122,24,.28)}
+.idea-top .i-ic svg{width:16px;height:16px}
+.idea-top .i-txt{flex:1;min-width:0}
+.idea-top .i-txt b{font-family:var(--fh);font-size:14px;display:block;line-height:1.3}
+.idea-top .i-txt small{font-size:11.5px;color:var(--muted)}
+.idea-body{padding:14px 15px;display:flex;flex-direction:column;gap:11px}
+.idea-body textarea.inp{min-height:104px;font-size:14px;line-height:1.6;resize:vertical;border-color:var(--line2)}
+.idea-body textarea.inp::placeholder{color:var(--faint)}
+.idea-foot{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.idea-foot .cnt{margin-left:auto;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+/* sugestões clicáveis para quem travou na página em branco */
+.idea-seeds{display:flex;gap:6px;flex-wrap:wrap}
+.idea-seed{padding:5px 11px;border-radius:var(--r-full);font-size:11.5px;color:var(--text2);
+  border:1px dashed var(--line2);background:rgba(20,28,45,.015);transition:.13s var(--ease)}
+.idea-seed:hover{border-style:solid;border-color:var(--pri-line);background:var(--pri-soft);color:var(--pri2)}
+
+/* saída da IA, ligada visualmente à entrada */
+.idea-out{position:relative;margin-top:14px;padding-top:16px;border-top:1px dashed var(--line2)}
+.idea-out::before{content:"";position:absolute;top:-9px;left:50%;transform:translateX(-50%) rotate(45deg);
+  width:14px;height:14px;background:#fff;border-right:1px dashed var(--line2);border-bottom:1px dashed var(--line2)}
+
+@media(max-width:640px){
+  .mp-modal{padding:0;place-items:end stretch}
+  .mp-modal-card{max-width:none;max-height:94vh;border-radius:18px 18px 0 0;
+    animation:mpSheet .24s var(--spring) both}
+  @keyframes mpSheet{from{transform:translateY(24px)}to{transform:none}}
+  .mp-ring{width:156px;height:156px}
+  .mp-ring::before{width:118px;height:118px}
+  .mp-ring .pct{font-size:32px}
+}
+@media(prefers-reduced-motion:reduce){
+  .mp-modal,.mp-modal-card,.mp-load,.mp-lightbox,.mp-lightbox-inner{animation:none!important}
+  .mp-ring.spin,.mp-ring.spin .pct,.sk-line,.sk-row .sk-av{animation:none!important}
+}

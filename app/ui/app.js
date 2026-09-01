@@ -534,6 +534,16 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.123', date: '2026-09-01',
+    items: [
+      { type: 'fix', text: 'Padrão visual aplicado nas telas que fugiam dele: os modais de Clientes, Criação e Agenda agora usam a janela clara padrão do app, sem fundo preto.' },
+      { type: 'fix', text: 'Confirmação de gasto real (vídeo e artes) deixou de ser o diálogo cru do navegador e passou a mostrar valor, quebra de custo e aviso dentro do app.' },
+      { type: 'fix', text: 'Devolutiva do cliente e avisos de composição saíram do âmbar escuro e viraram avisos claros; a fila de aprovação ganhou trilha de status por estado.' },
+      { type: 'feat', text: 'Briefing ganhou o campo "Qual é a ideia?": o operador escreve com as próprias palavras e a IA transforma em briefing editável.' },
+      { type: 'chore', text: 'Anel de carregamento unificado (um só, laranja) e ícones no lugar de emoji nos controles sobre a arte.' },
+    ],
+  },
+  {
     version: 'v1.27.122', date: '2026-08-31',
     items: [
       { type: 'feat', text: 'Itens À la carte agora são subprodutos completos, com descrição, objetivo, benefícios, site, redes, cores, logos, fotos e base de conhecimento próprias.' },

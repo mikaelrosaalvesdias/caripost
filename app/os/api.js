@@ -305,8 +305,8 @@
       #mp-upload-modal .mp-up-detail{font-size:14px;font-weight:600;color:#4b5568;min-height:22px}
       #mp-upload-modal .mp-up-eta{font-size:13px;color:#8b95a6;min-height:20px}
       #mp-upload-modal .mp-up-file{max-width:100%;font-family:"JetBrains Mono","Courier New",monospace;font-size:11px;color:#8b95a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      #mp-upload-modal.is-error .mp-up-ring{background:conic-gradient(#fb2f68 calc(var(--pct) * 1%),rgba(251,47,104,.14) 0);box-shadow:0 22px 70px rgba(251,47,104,.22)}
-      #mp-upload-modal.is-error .mp-up-pct{color:#fb2f68}
+      #mp-upload-modal.is-error .mp-up-ring{background:conic-gradient(#ed5f02 calc(var(--pct) * 1%),rgba(237,95,2,.14) 0);box-shadow:0 22px 70px rgba(237,95,2,.22)}
+      #mp-upload-modal.is-error .mp-up-pct{color:#ed5f02}
       #mp-upload-modal.is-done .mp-up-ring{background:conic-gradient(#1faa5a calc(var(--pct) * 1%),rgba(31,170,90,.14) 0);box-shadow:0 22px 70px rgba(31,170,90,.20)}
       #mp-upload-modal.is-done .mp-up-pct{color:#1faa5a}
     `;

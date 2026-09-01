@@ -96,6 +96,7 @@ function VideoCreator({ company }) {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
   const [proc, setProc] = React.useState({ open: false });   // mesma animação (ProcessModal) da geração de imagem
+  const [costAsk, setCostAsk] = React.useState(false);       // confirmação de GASTO REAL (substitui window.confirm)
   const videoStartRef = React.useRef(0);
   const lastPctRef = React.useRef(3);
   const brl = (usd) => {
@@ -126,10 +127,13 @@ function VideoCreator({ company }) {
     } catch (e) { /* mantém a cena atual */ }
     finally { setRegening(-1); }
   }
+  function pedirGerar() {
+    if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
+    setCostAsk(true);
+  }
   async function gerar() {
     if (!pf || !pf.configured) { setMsg('Erro: escolha um modelo de vídeo (configure a chave no painel de IA).'); return; }
-    const _custo = pf.is_credits ? ('≈ ' + pf.total_credits + ' créditos kie (' + pf.credits_per_clip + '/clipe' + (pf.credits_learned ? '' : ', estimado') + ')') : ('≈ R$ ' + pf.total_brl);
-    if (!window.confirm('O briefing virou ' + pf.scenes + ' cena(s) (~' + pf.total_seconds + 's) ' + _custo + '.\n\nISSO GASTA ' + (pf.is_credits ? 'CRÉDITOS' : 'DINHEIRO') + ' REAL. Confirmar?')) return;
+    setCostAsk(false);
     setBusy(true); setMsg(''); setStatus(null);
     videoStartRef.current = Date.now();
     lastPctRef.current = 3;
@@ -208,15 +212,27 @@ function VideoCreator({ company }) {
           <span className="hint" style={{ minWidth: 54, paddingTop: 8 }}>Cena {idx + 1}</span>
           <textarea className="inp" rows={2} value={d} style={{ flex: 1, resize: 'vertical' }}
             onChange={e => { const v = e.target.value; setScenes(s => s.map((x, i) => i === idx ? v : x)); }} />
-          <button className="btn ghost sm" disabled={regening === idx || planning} title="Regerar só esta cena (sem custo)" style={{ paddingTop: 6 }} onClick={() => regenScene(idx)}>{regening === idx ? '…' : '↻'}</button>
+          <button className="btn ghost sm" disabled={regening === idx || planning} title="Regerar só esta cena (sem custo)" style={{ paddingTop: 6 }} onClick={() => regenScene(idx)}>{regening === idx ? '…' : <Icon name="refresh" />}</button>
         </div>)}
-        <button className="btn ghost sm" disabled={planning} onClick={() => setNonce(n => n + 1)}>↻ Regerar roteiro inteiro</button>
+        <button className="btn ghost sm" disabled={planning} onClick={() => setNonce(n => n + 1)}><Icon name="refresh" />Regerar roteiro inteiro</button>
       </div>
     </Field>}
-    {pf && !pf.configured && !planning && <div className="hint" style={{ color: 'var(--pri)' }}>⚠ Escolha um modelo de vídeo acima (e configure a chave no painel de IA).</div>}
+    {pf && !pf.configured && !planning && <Callout kind="warn">Escolha um modelo de vídeo acima (e configure a chave no painel de IA).</Callout>}
     {status && status.status === 'done' && status.url && <video src={status.url} controls style={{ width: '100%', maxWidth: 300, borderRadius: 12 }} />}
     {msg && <div className={(msg.startsWith('Erro') || msg.startsWith('Falhou')) ? 'err' : 'ok'}>{msg}</div>}
-    <button className="btn pri" disabled={busy || !pf || !pf.configured} onClick={gerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.total_brl ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
+    <button className="btn pri" disabled={busy || !pf || !pf.configured} onClick={pedirGerar}>{busy ? 'Gerando… (pode levar minutos)' : ('Gerar vídeo' + (pf && pf.total_brl ? ' (≈ R$ ' + pf.total_brl + ')' : ''))}</button>
+    {costAsk && pf && <CostConfirm
+      kind={pf.is_credits ? 'credits' : 'money'}
+      title="Gerar vídeo branded"
+      amount={pf.is_credits ? String(pf.total_credits) : `R$ ${pf.total_brl}`}
+      unit={pf.is_credits ? 'créditos kie' : 'estimado'}
+      confirmLabel="Gerar vídeo"
+      lines={[
+        { k: 'Cenas', v: `${pf.scenes} (~${pf.total_seconds}s)` },
+        ...(pf.is_credits ? [{ k: 'Créditos por clipe', v: String(pf.credits_per_clip) }] : []),
+      ]}
+      note={pf.is_credits && !pf.credits_learned ? 'Valor estimado.' : ''}
+      onConfirm={gerar} onClose={() => setCostAsk(false)} />}
     {proc.open && <ProcessModal open={proc.open} title="Gerando vídeo" detail={proc.detail} pct={proc.pct} phase={proc.phase} onClose={() => setProc({ open: false })} />}
   </div>;
 }
@@ -303,7 +319,7 @@ function VideoApp() {
   const [tab, setTab] = React.useState('criar');
   React.useEffect(() => { window.mpApi.listCompanies().then(r => setCompanies(r || [])).catch(() => {}); }, []);
   function pick(id) { setCompanyId(id); setCompany((companies || []).find(x => x.id === id) || null); }
-  const TABS = [['criar', '🎬 Criar vídeo'], ['animar', '🎞️ Animar imagem'], ['editar', '✂️ Editar vídeo bruto']];
+  const TABS = [['criar', 'Criar vídeo'], ['animar', 'Animar imagem'], ['editar', 'Editar vídeo bruto']];
   return <div className="app">
     <div className="app-head">
       <div className="tb-ic" style={{ width: 40, height: 40, borderRadius: 12 }}><Icon name="video" style={{ width: 20, height: 20 }} /></div>
@@ -614,10 +630,11 @@ function StepCliente({ companyId, company, onPick, onContinue }) {
   const [posts, setPosts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [projetos, setProjetos] = React.useState([]);   // trabalhos salvos desta empresa (caixinhas p/ continuar)
+  const [delPj, setDelPj] = React.useState(null);       // projeto salvo a excluir (substitui window.confirm)
   React.useEffect(() => { setProjetos(companyId ? ContState.projetos(companyId) : []); }, [companyId]);
   function continuar(pid) { ContState.abrir(companyId, pid); onContinue && onContinue(); }      // CONTINUAR projeto salvo
   function novoProjeto() { ContState.novo(companyId); onContinue && onContinue(); }              // começar LIMPO
-  function excluirPj(pid) { if (!window.confirm('Excluir este projeto salvo?')) return; ContState.excluir(companyId, pid); setProjetos(ContState.projetos(companyId)); }
+  function excluirPj(pid) { ContState.excluir(companyId, pid); setProjetos(ContState.projetos(companyId)); setDelPj(null); }
   function continuarDb(p, urls) {   // reabre um carrossel do ACERVO (banco) como projeto → traz as artes pra Criação
     const m = p.meta || {};
     const ex = ContState.projetos(companyId).find(pj => (pj.carouselResults || []).some(v => v.post_id === p.id));
@@ -703,13 +720,17 @@ function StepCliente({ companyId, company, onPick, onContinue }) {
           {caixas.map(c => <div key={c.id} className="litem" style={{ padding: 8, cursor: 'pointer' }} onClick={() => c.__db ? continuarDb(c._post, c._urls) : continuar(c.id)} title="Continuar este trabalho">
             {c.thumb ? <img loading="lazy" decoding="async" src={c.thumb} style={{ width: 42, height: 52, borderRadius: 6, objectFit: 'cover', flex: 'none' }} /> : <span className="li-ic"><Icon name="post" /></span>}
             <div className="li-main"><b>{c.label || 'Projeto'}</b><small>{(c.fmt || 'carrossel')} · {c.nArtes || 0} arte(s){c.__db ? ' · acervo' : ''} · {c.ts ? new Date(c.ts).toLocaleDateString() : ''}</small></div>
-            {!c.__db && <button className="btn sm ghost" onClick={e => { e.stopPropagation(); excluirPj(c.id); }} title="Excluir"><Icon name="trash" /></button>}
+            {!c.__db && <button className="btn sm ghost" onClick={e => { e.stopPropagation(); setDelPj(c); }} title="Excluir"><Icon name="trash" /></button>}
           </div>)}
-          {!caixas.length && <div className="hint">Nenhum trabalho salvo ainda.</div>}
+          {!caixas.length && <EmptyState icon="layers" title="Nenhum trabalho salvo ainda">Comece do zero e o projeto aparece aqui pra continuar depois.</EmptyState>}
         </div>
         <button className="btn sm pri" onClick={novoProjeto}><Icon name="bolt" />Começar do zero (novo)</button>
       </>}
     </div>
+    {delPj && <Confirm title="Excluir este projeto salvo?"
+      message={`"${delPj.label || 'Projeto'}" sai da lista de trabalhos salvos. As peças já enviadas para aprovação continuam salvas.`}
+      confirmLabel="Excluir"
+      onConfirm={() => excluirPj(delPj.id)} onClose={() => setDelPj(null)} />}
   </div>;
 }
 
@@ -727,6 +748,7 @@ function StepBriefing({ company }) {
   const [offerRefs, setOfferRefs] = React.useState(Array.isArray(st.offer_refs) ? st.offer_refs : []);
   const [sources, setSources] = React.useState(st.sources || {});
   const [ideasCount, setIdeasCount] = React.useState(st.ideasCount || 5);
+  const [idea, setIdea] = React.useState(st.idea || '');   // ideia do operador em texto livre → vira briefing
   const [assunto, setAssunto] = React.useState(st.assunto || '');
   const [formato, setFormato] = React.useState(st.formato || 'carrossel');
   const [vsec, setVsec] = React.useState(st.videoSeconds || 0);   // duração do vídeo (0=livre) — TRAVA o briefing
@@ -784,7 +806,7 @@ function StepBriefing({ company }) {
     return () => { cancelled = true; };
   }, [company.id]);
 
-  function persist(patch) { ContState.set(company.id, { briefingMode: mode, briefing, objetivo, tom, cta, networks, sources, offer_refs: offerRefs, offerCatalogCompanyId: catalogCompanyId, assunto, formato, intent, eventId, videoSeconds: vsec, ...patch }); }
+  function persist(patch) { ContState.set(company.id, { briefingMode: mode, briefing, objetivo, tom, cta, networks, sources, offer_refs: offerRefs, offerCatalogCompanyId: catalogCompanyId, assunto, idea, formato, intent, eventId, videoSeconds: vsec, ...patch }); }
 
   const activeCatalog = catalogs.find(c => c.company_id === catalogCompanyId);
   const selectedProducts = [];
@@ -832,8 +854,9 @@ function StepBriefing({ company }) {
 
   async function gerarAuto() {
     const selProds = selectedProducts;
-    const seed = (assunto || '').trim();
-    if (!selProds.length && !seed) { setMsg('Selecione uma oferta do catálogo OU escreva/escolha um assunto institucional.'); return; }
+    // A ideia escrita pelo operador vale como tema quando não há assunto escolhido.
+    const seed = (assunto || '').trim() || (idea || '').trim();
+    if (!selProds.length && !seed) { setMsg('Escreva a ideia, escolha um assunto ou selecione uma oferta do catálogo.'); return; }
     if (intent === 'evento' && !eventId) { setMsg('Modo "Divulgar evento" precisa de um evento cadastrado selecionado (senão a IA inventaria datas). Escolha o evento ou troque o modo.'); return; }
     setBusy(true);
     try {
@@ -843,7 +866,7 @@ function StepBriefing({ company }) {
         // post/story = 1 arte RICA (capa pela máquina do carrossel, no backend); carrossel = plano completo.
         const isSingle = formato === 'post' || formato === 'story';
         const _vsecEff = (formato === 'video') ? (Number(vsec) || Number((ContState.get(company.id) || {}).videoSeconds) || 0) : 0;
-        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name), offer_refs: offerRefs, seconds: _vsecEff });
+        const r = await window.mpApi.generateBriefing({ company_id: company.id, theme: seed, idea: (idea || '').trim(), objetivo, formato, n_telas: isSingle ? 1 : 0, intent, event_id: eventId, apps: selProds.map(p => p.name), offer_refs: offerRefs, seconds: _vsecEff });
         const text = ((r && r.briefing) || '').trim();
         if (!text) { setMsg('Não consegui gerar agora. Tente de novo.'); return; }
         let tl = (r && r.telas) || [];
@@ -880,10 +903,13 @@ function StepBriefing({ company }) {
 
   return <div className="split">
     <div className="stack">
-      <div className="row" style={{ gap: 8 }}>
-        <button className={'btn sm' + (mode === 'auto' ? ' pri' : ' ghost')} onClick={() => { setMode('auto'); persist({ briefingMode: 'auto' }); }}>Automático</button>
-        <button className={'btn sm' + (mode === 'manual' ? ' pri' : ' ghost')} onClick={() => { setMode('manual'); persist({ briefingMode: 'manual' }); }}>Manual</button>
-      </div>
+      <FlowHead icon="sparkles" title="Briefing"
+        sub={`Escreva a ideia e a IA monta o plano de conteúdo para ${company.name}.`}
+        right={<Segmented value={mode} onChange={m => { setMode(m); persist({ briefingMode: m }); }}
+          options={[['auto', 'Automático'], ['manual', 'Manual']]} />} />
+      {mode === 'auto' && <IdeaInput value={idea} onChange={v => { setIdea(v); persist({ idea: v }); }}
+        onGenerate={gerarAuto} busy={busy}
+        seeds={['foco em família', 'tom leve', 'destacar o preço', 'urgência', 'prova social']} />}
       {mode === 'auto' && <Field label="Assunto / pauta (foca a IA no tema — opcional)">
         <input className="inp" value={assunto} onChange={e => { setAssunto(e.target.value); persist({ assunto: e.target.value }); }} placeholder="Ex.: segurança digital para a família" />
         {assuntoList.length > 0 && <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -913,7 +939,11 @@ function StepBriefing({ company }) {
       </Field>}
       {mode === 'auto' && <button className="btn pri" disabled={busy} onClick={gerarAuto}>{busy ? 'Gerando…' : (assunto.trim() ? ('Gerar ' + fmtLabel + ' do assunto' + (formato === 'video' ? ' · ' + (vsec ? vsec + 's' : 'livre') : '')) : 'Gerar briefing com IA (ofertas selecionadas)')}</button>}
       {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
-      <Field label="Briefing"><textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} /></Field>
+      {busy && !briefing
+        ? <SkeletonRows rows={2} />
+        : <Field label={mode === 'auto' ? 'Briefing gerado pela IA (editável)' : 'Briefing'}>
+            <textarea className="inp" rows={8} value={briefing} onChange={e => { setBriefing(e.target.value); persist({ briefing: e.target.value }); }} placeholder="Ex.: fale sobre o Look Diesel, destaque conforto e estilo…" style={{ resize: 'vertical', minHeight: 160 }} />
+          </Field>}
       {mode === 'auto' && formato === 'video' && <small className="hint">Vídeo: <b>trave a duração acima</b>, gere o roteiro, depois <b>Próximo</b> pra escolher o modelo e gerar (a duração já vai travada, com o custo na tela).</small>}
     </div>
     <div className="stack">
@@ -942,14 +972,11 @@ function StepBriefing({ company }) {
         <div className="sec mut">Produtos/serviços desta proposta</div>
         {(activeCatalog && activeCatalog.products || []).map(p => {
           const checked = offerRefs.some(ref => ref.source_company_id === catalogCompanyId && ref.product_id === p.id);
-          return <label key={p.id} className="litem" style={{ padding: 8, cursor: 'pointer' }}>
-            <input type="checkbox" checked={checked} onChange={e => toggleOffer(p, e.target.checked)} />
-            <div className="li-main" style={{ marginLeft: 8 }}><b>{p.name}</b><small>{p.category || 'oferta'}{p.has_logo ? ' · logo' : ''}{p.has_photo ? ' · foto real' : ''}{p.has_knowledge ? ' · base de conhecimento' : ''}</small></div>
-          </label>;
+          return <OfferPick key={p.id} product={p} checked={checked} onToggle={toggleOffer} />;
         })}
-        {activeCatalog && !activeCatalog.products.length && <div className="hint">Esta empresa ainda não possui ofertas cadastradas.</div>}
-        {!activeCatalog && <div className="hint">Cadastre produtos em uma empresa para usá-los na proposta.</div>}
-        <div className="hint"><b>{selectedProducts.length}</b> oferta(s) vinculada(s) a este conteúdo.</div>
+        {activeCatalog && !activeCatalog.products.length && <EmptyState icon="layers" title="Nenhuma oferta cadastrada">Cadastre produtos nesta empresa para usá-los na proposta.</EmptyState>}
+        {!activeCatalog && <EmptyState icon="layers" title="Sem catálogo">Cadastre produtos em uma empresa para usá-los na proposta.</EmptyState>}
+        <div className="offer-count"><Icon name="link" />{selectedProducts.length} oferta(s) vinculada(s) a este conteúdo</div>
       </div>
     </div>
   </div>;
@@ -1012,6 +1039,8 @@ function CarrosselCreator({ company, format }) {
   const [useStudio, setUseStudio] = React.useState(st.useStudio || false);   // ESTÚDIO IA: arte inteira por referências (logo+manual+refs+KB)
   const [infId, setInfId] = React.useState(st.influencerId || '');
   const [viewer, setViewer] = React.useState(null);   // {vi, si}
+  const [editAsk, setEditAsk] = React.useState(null); // {rv, vi, si} — edição com IA (substitui window.prompt)
+  const [editInst, setEditInst] = React.useState('');
   const [templates, setTemplates] = React.useState([]);
   const [templateId, setTemplateId] = React.useState('');
   function loadTemplates() {
@@ -1214,7 +1243,7 @@ function CarrosselCreator({ company, format }) {
                 {grp.models.map(m => <option key={m.id} value={m.id}>{optLabel(m)}</option>)}
               </optgroup>)}
             </select>}
-          {versions.length > 1 && <button className="btn sm ghost" onClick={() => delVer(i)}>✕</button>}
+          {versions.length > 1 && <button className="btn sm ghost" onClick={() => delVer(i)}><Icon name="x" /></button>}
         </div>)}
         {versions.length < (isClientUser() ? clientMaxVer() : 4) && <button className="btn sm ghost" onClick={addVer}>{(isClientUser() || !modelChoice) ? '+ versão' : '+ versão (outro modelo)'}</button>}
       </div>
@@ -1239,48 +1268,61 @@ function CarrosselCreator({ company, format }) {
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="sec mut">Versão {vi + 1}{isClientUser() ? '' : ` · ${rv.model}`}{rv.cost ? ` · R$ ${rv.cost.toFixed(2)}` : (isClientUser() ? '' : ' · grátis')}</div>
         <div className="row" style={{ gap: 6 }}>
-          {(rv.base_urls || []).some(Boolean) && <button className="btn sm ghost" disabled={busy} title="Reusa as fotos já geradas e só redesenha a arte — não paga IA" onClick={() => regerarArte(rv, vi)}>↻ Regerar arte (grátis)</button>}
+          {(rv.base_urls || []).some(Boolean) && <button className="btn sm ghost" disabled={busy} title="Reusa as fotos já geradas e só redesenha a arte — não paga IA" onClick={() => regerarArte(rv, vi)}><Icon name="refresh" />Regerar arte (grátis)</button>}
           <button className="btn sm pri" disabled={busy} onClick={() => enviarAprovacao(rv, vi)}>Enviar esta versão → Aprovação</button>
         </div>
       </div>
-      {rv.warning && <div className="err" style={{ fontSize: 12 }}>⚠ {rv.warning}</div>}
+      {rv.warning && <Callout kind="warn">{rv.warning}</Callout>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 8 }}>
         {rv.slides.map((s, si) => <div key={si} style={{ position: 'relative' }}>
           <img loading="lazy" decoding="async" src={s.url} onClick={() => setViewer({ vi, si })} style={{ width: '100%', borderRadius: 8, cursor: 'zoom-in', display: 'block' }} />
-          <button className="btn sm" disabled={busy} title="Regenerar SÓ esta tela (paga só ela; as outras reusam a foto)" onClick={() => regerarSlide(rv, vi, si)}
-            style={{ position: 'absolute', top: 4, right: 4, padding: '2px 8px', fontSize: 12, background: 'rgba(0,0,0,.72)', color: '#fff', borderRadius: 6, border: 'none' }}>↻</button>
-          <button className="btn sm" disabled={busy} title="Editar com IA: descreva a mudança — o resto da arte é preservado" onClick={async () => {
-            const inst = prompt('O que mudar nesta arte? (o resto é preservado)'); if (!inst) return;
-            setBusy(true); setMsg('Editando com IA…');
-            try { const r = await window.mpApi.editArt(company.id, s.url, inst);
-              if (r && r.url) { setResults(rs => rs.map((v, k) => k === vi ? { ...v, slides: v.slides.map((x, j) => j === si ? { ...x, url: r.url } : x) } : v)); setMsg('✓ Arte editada.'); }
-              else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
-            } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
-          }} style={{ position: 'absolute', top: 4, right: 36, padding: '2px 8px', fontSize: 12, background: 'rgba(0,0,0,.72)', color: '#fff', borderRadius: 6, border: 'none' }}>✏️</button>
-          <button className="btn sm" disabled={busy} title="Animar imagem: vira um clipe curto com movimento sutil" onClick={async () => {
-            setBusy(true); setMsg('Animando (1-2 min)…');
-            try { const r = await window.mpApi.animateArt(company.id, s.url);
-              if (r && r.url) { setMsg('✓ Animação pronta.'); window.open(r.url, '_blank'); }
-              else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
-            } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
-          }} style={{ position: 'absolute', top: 4, right: 68, padding: '2px 8px', fontSize: 12, background: 'rgba(0,0,0,.72)', color: '#fff', borderRadius: 6, border: 'none' }}>🎞️</button>
+          <div className="ov-btns">
+            <button className="ov-btn" disabled={busy} title="Regerar SÓ esta tela (paga só ela; as outras reusam a foto)"
+              onClick={() => regerarSlide(rv, vi, si)}><Icon name="refresh" /></button>
+            <button className="ov-btn" disabled={busy} title="Editar com IA: descreva a mudança — o resto da arte é preservado"
+              onClick={() => { setEditInst(''); setEditAsk({ url: s.url, vi, si }); }}><Icon name="pen" /></button>
+            <button className="ov-btn" disabled={busy} title="Animar imagem: vira um clipe curto com movimento sutil" onClick={async () => {
+              setBusy(true); setMsg('Animando (1-2 min)…');
+              try { const r = await window.mpApi.animateArt(company.id, s.url);
+                if (r && r.url) { setMsg('✓ Animação pronta.'); window.open(r.url, '_blank'); }
+                else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
+              } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
+            }}><Icon name="teaser" /></button>
+          </div>
         </div>)}
       </div>
     </div>)}
     {viewer && (() => {
       const rv = results[viewer.vi]; const sl = rv.slides; const si = viewer.si;
       const go = d => setViewer(v => ({ vi: v.vi, si: Math.max(0, Math.min(sl.length - 1, v.si + d)) }));
-      return <div onClick={() => setViewer(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.92)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 16, boxSizing: 'border-box' }}>
-        <button onClick={e => { e.stopPropagation(); setViewer(null); }} title="Fechar (Esc)" style={{ position: 'fixed', top: 16, right: 20, zIndex: 100000, background: '#fff', color: '#111', border: 'none', borderRadius: 999, width: 44, height: 44, fontSize: 22, lineHeight: '44px', cursor: 'pointer', fontWeight: 700 }}>✕</button>
-        <button onClick={e => { e.stopPropagation(); go(-1); }} disabled={si === 0} style={{ position: 'fixed', left: 20, top: '50%', transform: 'translateY(-50%)', zIndex: 100000, background: 'rgba(255,255,255,.92)', color: '#111', border: 'none', borderRadius: 999, width: 52, height: 52, fontSize: 22, cursor: si === 0 ? 'default' : 'pointer', opacity: si === 0 ? .4 : 1 }}>◀</button>
-        <div onClick={e => e.stopPropagation()} style={{ textAlign: 'center', maxHeight: '96vh', overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <img loading="lazy" decoding="async" src={sl[si].url} style={{ maxHeight: '70vh', maxWidth: '86vw', borderRadius: 12, display: 'block', objectFit: 'contain' }} />
-          <div style={{ color: '#fff', marginTop: 10, opacity: .9 }}>{si + 1} / {sl.length} · versão {viewer.vi + 1} ({rv.model}) · {sl[si].image_ok ? 'foto IA' : 'editorial (sem foto)'}</div>
-          {sl[si].prompt && <div style={{ color: '#ddd', marginTop: 8, maxWidth: '86vw', fontSize: 12, textAlign: 'left', maxHeight: '14vh', overflow: 'auto', background: 'rgba(255,255,255,.07)', padding: 10, borderRadius: 8 }}><b style={{ color: '#fff' }}>Instrução enviada ao modelo:</b> {sl[si].prompt}{sl[si].image_error ? ' — ❌ ' + sl[si].image_error : ''}</div>}
-        </div>
-        <button onClick={e => { e.stopPropagation(); go(1); }} disabled={si === sl.length - 1} style={{ position: 'fixed', right: 20, top: '50%', transform: 'translateY(-50%)', zIndex: 100000, background: 'rgba(255,255,255,.92)', color: '#111', border: 'none', borderRadius: 999, width: 52, height: 52, fontSize: 22, cursor: si === sl.length - 1 ? 'default' : 'pointer', opacity: si === sl.length - 1 ? .4 : 1 }}>▶</button>
-      </div>;
+      const caption = `${si + 1} / ${sl.length} · versão ${viewer.vi + 1} (${rv.model}) · ${sl[si].image_ok ? 'foto IA' : 'editorial (sem foto)'}`;
+      return <Lightbox src={sl[si].url} kind="image" name={caption} onClose={() => setViewer(null)}
+        actions={<>
+          <button className="btn sm ghost" disabled={si === 0} onClick={() => go(-1)}>Anterior</button>
+          <button className="btn sm ghost" disabled={si === sl.length - 1} onClick={() => go(1)}>Próxima<Icon name="arrowR" /></button>
+          {sl[si].prompt && <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'rgba(255,255,255,.72)', maxHeight: '5.4em', overflowY: 'auto' }}>
+            <b style={{ color: '#fff' }}>Instrução enviada ao modelo:</b> {sl[si].prompt}{sl[si].image_error ? ' — ' + sl[si].image_error : ''}
+          </span>}
+        </>} />;
     })()}
+    {editAsk && <Modal title="Editar arte com IA" icon="pen" size="sm" busy={busy} onClose={() => setEditAsk(null)}
+      sub="Descreva só o que muda — o resto da arte é preservado."
+      foot={<>
+        <button className="btn ghost" disabled={busy} onClick={() => setEditAsk(null)}>Cancelar</button>
+        <button className="btn pri" disabled={busy || !editInst.trim()} onClick={async () => {
+          const { url, vi, si } = editAsk; const inst = editInst.trim();
+          setEditAsk(null); setBusy(true); setMsg('Editando com IA…');
+          try { const r = await window.mpApi.editArt(company.id, url, inst);
+            if (r && r.url) { setResults(rs => rs.map((v, k) => k === vi ? { ...v, slides: v.slides.map((x, j) => j === si ? { ...x, url: r.url } : x) } : v)); setMsg('✓ Arte editada.'); }
+            else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
+          } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
+        }}><Icon name="sparkles" />Editar arte</button>
+      </>}>
+      <Field label="O que mudar nesta arte?">
+        <textarea className="inp" rows={3} value={editInst} autoFocus onChange={e => setEditInst(e.target.value)}
+          placeholder="Ex.: trocar o fundo por um ambiente de sala de estar, manter o texto e o logo" />
+      </Field>
+    </Modal>}
   </div>;
 }
 
@@ -1316,6 +1358,7 @@ function StepCriacaoPost({ company }) {
   const [imgDefault, setImgDefault] = React.useState('');
   const [templates, setTemplates] = React.useState([]);
   const [templateId, setTemplateId] = React.useState('');
+  const [costAsk, setCostAsk] = React.useState(null);   // {total, est} — confirmação de gasto (substitui window.confirm)
   function loadTemplates() {
     return window.mpApi.imageTemplates(company.id, 'post').then(r => {
       const t = r.templates || []; setTemplates(t); setTemplateId(id => id || (t[0] && t[0].id) || '');
@@ -1374,12 +1417,19 @@ function StepCriacaoPost({ company }) {
     return r || {};
   }
 
-  async function gerar() {
+  function pedirGerar() {
     const chosen = allApps.filter(p => sel[p.id]);
     if (!chosen.length) { setMsg('Selecione ao menos um app (ou Institucional).'); return; }
     let total = 0, est = 0;
     chosen.forEach(p => { const c = qty[p.id] || 1; total += c; for (let k = 0; k < c; k++) { const pm = (imgModels.find(m => m.id === modelFor(p.id, k)) || {}).price_brl; est += pm || 0; } });
-    if (est >= 1.5 && !window.confirm(`Vai gerar ${total} imagens ≈ R$ ${est.toFixed(2)}.\n\nContinuar?`)) return;
+    if (est >= 1.5) { setCostAsk({ total, est }); return; }
+    gerar();
+  }
+
+  async function gerar() {
+    const chosen = allApps.filter(p => sel[p.id]);
+    if (!chosen.length) { setMsg('Selecione ao menos um app (ou Institucional).'); return; }
+    setCostAsk(null);
     setBusy(true);
     const net = networks[0] || 'instagram';
     const out = [...drafts];
@@ -1502,9 +1552,18 @@ function StepCriacaoPost({ company }) {
           allApps.filter(p => sel[p.id]).forEach(p => { const c = qty[p.id] || 1; n += c; for (let k = 0; k < c; k++) { const pm = (imgModels.find(m => m.id === modelFor(p.id, k)) || {}).price_brl; e += pm || 0; } });
           return `${n} peças` + (e ? ` · estimativa ≈ R$ ${e.toFixed(2)}` : '');
         })()}</div>
-        <button className="btn pri" disabled={busy} onClick={gerar}>{busy ? 'Gerando…' : 'Gerar'}</button>
+        <button className="btn pri" disabled={busy} onClick={pedirGerar}>{busy ? 'Gerando…' : 'Gerar'}</button>
       </div>
     </div>
+    {costAsk && <CostConfirm kind="money"
+      title={`Gerar ${costAsk.total} artes`}
+      amount={`R$ ${costAsk.est.toFixed(2)}`} unit="estimado"
+      confirmLabel={`Gerar ${costAsk.total} artes`}
+      lines={[
+        { k: 'Telas', v: String(costAsk.total) },
+        { k: 'Custo médio por arte', v: `R$ ${(costAsk.est / costAsk.total).toFixed(2)}` },
+      ]}
+      onConfirm={gerar} onClose={() => setCostAsk(null)} />}
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <div className="grid2">
       {drafts.map(d => <div key={d.uid} className="panel stack">
@@ -1528,7 +1587,7 @@ function StepCriacaoPost({ company }) {
           : d.media_url
             ? <img loading="lazy" decoding="async" src={d.media_url} style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)' }} />
             : <div className="hint" style={{ textAlign: 'center', padding: 16, border: '1px dashed var(--line)', borderRadius: 8 }}>{d.video_status === 'rendering' ? 'Renderizando vídeo…' : d.image_error ? ('Imagem falhou: ' + d.image_error) : 'Sem mídia'}</div>}
-        {d.compose_warning && <div style={{ background: '#3a2f10', color: '#ffd479', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>⚠ {d.compose_warning} <button className="btn sm ghost" disabled={busy} onClick={() => regenImage(d.uid)} style={{ marginLeft: 6 }}>Tentar de novo</button></div>}
+        {d.compose_warning && <Callout kind="warn">{d.compose_warning} <button className="btn sm ghost" disabled={busy} onClick={() => regenImage(d.uid)} style={{ marginLeft: 6 }}>Tentar de novo</button></Callout>}
         <input className="inp" value={d.title} onChange={e => update(d.uid, { title: e.target.value })} placeholder="Título interno" />
         <textarea className="inp" rows={5} value={d.copy} onChange={e => update(d.uid, { copy: e.target.value })} style={{ resize: 'vertical' }} placeholder="Copy" />
         <input className="inp" value={d.hashtags} onChange={e => update(d.uid, { hashtags: e.target.value })} placeholder="#hashtags" />
@@ -1549,6 +1608,7 @@ function StepAprovacao({ company }) {
   const [recipient, setRecipient] = React.useState('');
   const [linkUrl, setLinkUrl] = React.useState(st.approvalUrl || '');
   const [sending, setSending] = React.useState(false);
+  const [del_, setDel] = React.useState(null);   // post a excluir (substitui window.confirm)
 
   const load = React.useCallback(() => {
     window.mpApi.listPosts().then(r => setPosts((r.posts || []).filter(p => p.company_id === company.id))).catch(() => {});
@@ -1606,7 +1666,7 @@ function StepAprovacao({ company }) {
     finally { setBusy(false); }
   }
   async function transition(id, to) { try { await window.mpApi.transitionPost(id, to); load(); } catch (e) { setMsg('Erro: ' + e.message); } }
-  async function del(id) { if (!window.confirm('Excluir este post?')) return; try { await window.mpApi.deletePost(id); load(); } catch (e) { setMsg('Erro: ' + e.message); } }
+  async function del(id) { try { await window.mpApi.deletePost(id); setDel(null); load(); } catch (e) { setMsg('Erro: ' + e.message); } }
 
   async function regenWithFeedback(p) {
     const m = p.meta || {};
@@ -1676,7 +1736,8 @@ function StepAprovacao({ company }) {
       <button className="btn pri" disabled={busy} onClick={enviarTodos}><Icon name="send" />Enviar peças p/ aprovação</button>
       <button className="btn" disabled={busy} onClick={aprovarTudo}><Icon name="check" />Aprovar tudo (teste)</button>
       <button className="btn sm ghost" onClick={load}><Icon name="refs" />Atualizar</button>
-      <button className="btn sm ghost" onClick={() => setShowAll(s => !s)}>{showAll ? '◉ Só esta produção' : '○ Histórico completo'}</button>
+      <Segmented value={showAll ? 'all' : 'run'} onChange={v => setShowAll(v === 'all')}
+        options={[['run', 'Só esta produção'], ['all', 'Histórico completo']]} />
     </div>
     <div className="hint">{showAll ? 'Mostrando TODO o histórico da empresa.' : 'Mostrando só as peças desta produção (run atual).'} Modo teste: "Aprovar tudo" cria as peças e marca como aprovado direto, sem mandar pro cliente.</div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
@@ -1713,43 +1774,35 @@ function StepAprovacao({ company }) {
       <div className="hint">Configure WhatsApp (Evolution) e SMTP no app <b>Notificações</b>.</div>
     </div>
     <div className="sec mut">Aguardando aprovação ({review.length})</div>
-    {review.map(p => <div key={p.id} className="panel stack">
-      <b>{p.title || 'Post'} · <small>{(p.networks || []).join(', ')}</small></b>
-      {p.media_url && <img loading="lazy" decoding="async" src={p.media_url} onClick={() => setPreview(p)} title="Clique para expandir" style={{ width: '100%', maxWidth: 360, borderRadius: 8, border: '1px solid var(--line)', cursor: 'zoom-in' }} />}
-      {p.review_decision === 'changes' && <div style={{ background: '#3a2f10', color: '#ffd479', borderRadius: 8, padding: '8px 12px' }}>⚠ Cliente aprovou <b>com ressalvas</b>: {p.review_comment}</div>}
-      {p.review_decision === 'rejected' && <div className="err">✕ Cliente <b>reprovou</b>: {p.review_comment}</div>}
-      <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{p.copy}</div>
-      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-        {(p.review_decision === 'changes' || p.review_decision === 'rejected') && <button className="btn sm pri" disabled={busy} onClick={() => regenWithFeedback(p)}><Icon name="bolt" />Regenerar com o feedback</button>}
-        <button className="btn sm" onClick={() => approveOne(p)}><Icon name="check" />Aprovar</button>
-        <button className="btn sm ghost" onClick={() => del(p.id)}><Icon name="trash" />Excluir</button>
-      </div>
-    </div>)}
-    {!review.length && <div className="hint">Nada aguardando.</div>}
+    {review.map(p => <ReviewCard key={p.id} post={p} busy={busy}
+      onApprove={approveOne} onRegen={regenWithFeedback}
+      onDelete={x => setDel(x)} onOpen={setPreview} />)}
+    {!review.length && <EmptyState icon="check" title="Nada aguardando">Gere peças na Criação e envie para aprovação.</EmptyState>}
     <div className="sec mut">Aprovados ({approved.length})</div>
     {approved.map(p => <div key={p.id} className="litem" style={{ padding: 8, gap: 8, cursor: 'pointer' }} onClick={() => setPreview(p)}>
       {p.media_url && <img loading="lazy" decoding="async" src={p.media_url} style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6 }} />}
       <div className="li-main"><b>{p.title || 'Post'}</b><small>{p.status === 'SCHEDULED' ? 'agendado' : (p.status === 'PUBLISHED' ? 'publicado' : 'aprovado')}{p.reviewed_at ? ' · cliente em ' + new Date(p.reviewed_at).toLocaleString('pt-BR') : ''}</small></div>
-      <button className="btn sm ghost" onClick={e => { e.stopPropagation(); del(p.id); }}><Icon name="trash" /></button>
+      <button className="btn sm ghost" onClick={e => { e.stopPropagation(); setDel(p); }}><Icon name="trash" /></button>
     </div>)}
 
-    {preview && <div onClick={() => setPreview(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'grid', placeItems: 'center', zIndex: 9999, padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} className="panel stack" style={{ maxWidth: 440, maxHeight: '92vh', overflow: 'auto' }}>
-        <div className="rowx" style={{ justifyContent: 'space-between' }}>
-          <b>{preview.title || 'Post'}</b>
-          <button className="btn sm ghost" onClick={() => setPreview(null)}><Icon name="x" /></button>
-        </div>
+    {del_ && <Confirm title="Excluir esta peça?"
+      message="A peça sai desta produção. As já aprovadas continuam salvas."
+      confirmLabel="Excluir"
+      onConfirm={() => del(del_.id)} onClose={() => setDel(null)} />}
+
+    {preview && <Modal title={preview.title || 'Post'} icon="eye" size="sm" onClose={() => setPreview(null)}>
+      <div className="stack">
         {preview.media_url && <img loading="lazy" decoding="async" src={preview.media_url} style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)' }} />}
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <Pill kind={preview.status === 'APPROVED' ? 'good' : 'cy'} dot>{preview.status}</Pill>
           {preview.review_decision && <Pill kind={preview.review_decision === 'rejected' ? 'pri' : ''}>{preview.review_decision === 'approved' ? 'cliente: 100%' : preview.review_decision === 'changes' ? 'cliente: ressalvas' : 'cliente: reprovou'}</Pill>}
           {(preview.networks || []).map(n => <Pill key={n} kind="cy">{n}</Pill>)}
         </div>
-        {preview.review_comment && <div style={{ background: '#3a2f10', color: '#ffd479', borderRadius: 8, padding: '8px 12px' }}>Devolutiva do cliente: {preview.review_comment}</div>}
+        {preview.review_comment && <Callout kind="warn">Devolutiva do cliente: {preview.review_comment}</Callout>}
         <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{preview.copy}</div>
         {preview.hashtags && preview.hashtags.length ? <div className="hint" style={{ color: 'var(--pri2)' }}>{(preview.hashtags || []).join(' ')}</div> : null}
       </div>
-    </div>}
+    </Modal>}
   </div>;
 }
 
@@ -1762,6 +1815,7 @@ function StepAgenda({ company }) {
   const [when, setWhen] = React.useState({});
   const [busy, setBusy] = React.useState('');
   const [msg, setMsg] = React.useState('');
+  const [del_, setDel] = React.useState(null);        // post a excluir (substitui window.confirm)
   const [storyOn, setStoryOn] = React.useState({});   // por post: publicar a CAPA como Story junto do feed
   const [collabs, setCollabs] = React.useState({});   // por post: lista de @ colaboradores (collab) — editável
   const [collabIn, setCollabIn] = React.useState({});  // input de @ por post
@@ -1841,7 +1895,7 @@ function StepAgenda({ company }) {
     return 'text';
   }
 
-  async function del(id) { if (!window.confirm('Excluir este post?')) return; try { await window.mpApi.deletePost(id); load(); } catch (e) { setMsg('Erro: ' + e.message); } }
+  async function del(id) { try { await window.mpApi.deletePost(id); setDel(null); load(); } catch (e) { setMsg('Erro: ' + e.message); } }
 
   async function doPublish(p, scheduledAt) {
     const channels = channelsFor(p);
@@ -1942,10 +1996,14 @@ function StepAgenda({ company }) {
         <button className="btn sm pri" disabled={busy === p.id} onClick={() => doPublish(p, null)}><Icon name="send" />Publicar agora</button>
         <input className="inp" type="datetime-local" value={when[p.id] || ''} onChange={e => setWhen(w => ({ ...w, [p.id]: e.target.value }))} />
         <button className="btn sm" disabled={busy === p.id} onClick={() => agendar(p)}><Icon name="clock" />Agendar</button>
-        <button className="btn sm ghost" disabled={busy === p.id} onClick={() => del(p.id)}><Icon name="trash" />Excluir</button>
+        <button className="btn sm ghost" disabled={busy === p.id} onClick={() => setDel(p)}><Icon name="trash" />Excluir</button>
       </div>
     </div>)}
-    {!posts.length && <div className="hint">Nenhum post aprovado. Aprove na etapa anterior.</div>}
+    {!posts.length && <EmptyState icon="calendar" title="Nenhum post aprovado">Aprove as peças na etapa anterior para agendar aqui.</EmptyState>}
+    {del_ && <Confirm title="Excluir esta peça?"
+      message="A peça sai da agenda. As já publicadas continuam no histórico."
+      confirmLabel="Excluir"
+      onConfirm={() => del(del_.id)} onClose={() => setDel(null)} />}
   </div>;
 }
 
@@ -2166,9 +2224,8 @@ function AcervoApp() {
       </div>)}
       {!items.length && <div className="hint">Nada nesta categoria ainda.</div>}
     </div>
-    {sel && <div onClick={() => setSel(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'grid', placeItems: 'center', zIndex: 9999, padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} className="panel stack" style={{ maxWidth: 440, maxHeight: '92vh', overflow: 'auto' }}>
-        <div className="rowx" style={{ justifyContent: 'space-between' }}><b>{sel.title || 'Peça'}</b><button className="btn sm ghost" onClick={() => setSel(null)}><Icon name="x" /></button></div>
+    {sel && <Modal title={sel.title || 'Peça'} icon="image" size="sm" onClose={() => setSel(null)}>
+      <div className="stack">
         <img loading="lazy" decoding="async" src={sel.media_url} style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)' }} />
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <Pill kind={tone(SL[sel.status])} dot>{SL[sel.status] || sel.status}</Pill>
@@ -2179,7 +2236,7 @@ function AcervoApp() {
         <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{sel.copy}</div>
         {sel.hashtags && sel.hashtags.length ? <div className="hint" style={{ color: 'var(--pri2)' }}>{(sel.hashtags || []).join(' ')}</div> : null}
       </div>
-    </div>}
+    </Modal>}
   </div>;
 }
 

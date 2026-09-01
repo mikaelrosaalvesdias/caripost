@@ -462,15 +462,14 @@ function CalendarApp() {
         </div>)}
       </div>
     </div>
-    {sel && <div onClick={() => setSel(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'grid', placeItems: 'center', zIndex: 9999, padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} className="panel stack" style={{ maxWidth: 420, maxHeight: '90vh', overflow: 'auto' }}>
-        <div className="rowx" style={{ justifyContent: 'space-between' }}><b>{sel.title || 'Post'}</b><button className="btn sm ghost" onClick={() => setSel(null)}><Icon name="x" /></button></div>
+    {sel && <Modal title={sel.title || 'Post'} icon="calendar" size="sm" onClose={() => setSel(null)}>
+      <div className="stack">
         {sel.media_url && <img loading="lazy" decoding="async" src={sel.media_url} style={{ width: '100%', borderRadius: 8 }} />}
         <Pill kind={sel.status === 'PUBLISHED' ? 'good' : 'cy'} dot>{sel.status === 'PUBLISHED' ? 'publicado' : 'agendado'} · {fmt(sel)}</Pill>
         <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>{sel.copy}</div>
         <div className="hint">Redes: {(sel.networks || []).join(', ') || '—'}</div>
       </div>
-    </div>}
+    </Modal>}
   </div>;
 }
 

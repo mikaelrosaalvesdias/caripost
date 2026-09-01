@@ -2,6 +2,15 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.123 - 2026-09-01
+
+- **fix(os): padrão visual aplicado nas telas que fugiam dele.** Os 7 modais com scrim preto (Clientes, Criação, Agenda) passaram a usar o `<Modal>` claro do app; o visualizador de carrossel virou `<Lightbox>` mantendo navegação e a instrução enviada ao modelo.
+- **fix(os): nenhum diálogo do navegador no fluxo de criação.** Os 6 `window.confirm` (inclusive os de GASTO REAL de dinheiro/créditos) viraram `<CostConfirm>`/`<Confirm>` com valor, quebra de custo e aviso; o `window.prompt` da edição de arte virou modal com campo de texto.
+- **fix(os): tema escuro residual removido.** Os blocos âmbar `#3a2f10`/`#ffd479` viraram `<Callout>`; a fila de aprovação virou `<ReviewCard>` com trilha de status (aguardando / ressalvas / reprovado / aprovado) e o toggle `◉/○` virou `<Segmented>`.
+- **feat(os): campo da ideia no Briefing.** `<IdeaInput>` — o operador escreve a ideia em texto livre e a IA transforma em briefing, que segue editável. A ideia vale como tema quando não há assunto escolhido e vai no payload (`idea`) para o backend priorizá-la quando passar a lê-la.
+- **chore(os): base do padrão.** `os-patch.css` anexado ao `os.css` (adiciona `.hint`/`.row`, que eram usadas em centenas de pontos sem existir) e novo `app/os/ui-modals.jsx` com os componentes canônicos; `ProcessModal`/`AnalyzeLoadingModal` duplicados saíram do `apps-core.jsx` (um único anel laranja, sem o rosa `#fb2f68`).
+- Versao: main.py/UI/OS 1.27.123, cache bust OS `v=127123`.
+
 ## v1.27.122 - 2026-08-31
 
 - **feat(clientes): subprodutos e itens a la carte completos.** Cada adicional passa a ter descricao, categoria, site, redes, objetivo, beneficios/funcoes, paleta, logos, imagens e base de conhecimento proprios, com edicao e exclusao no cadastro do produto.
