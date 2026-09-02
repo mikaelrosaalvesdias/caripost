@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.126 - 2026-09-02
+
+- **fix(os): o que faltava do patch do designer.** A demo do patch tem `<FlowHead>` nos **5 passos** do fluxo e usa `<ArtCard>` nas artes — antes só o Briefing tinha cabeçalho e o `ArtCard` nunca foi ligado. Agora: Marca-alvo, Briefing, Artes geradas, Fila de aprovação e Agendamento têm cabeçalho, e as telas do carrossel saem em `.art-grid` com `<ArtCard>` (selo de status, ações em ícone no hover).
+- **fix(os): tela "Criação" (app do desktop) no padrão.** É outra tela (`CriacaoApp`, legado de runs de vídeo) e não estava no patch: ganhou `<FlowHead>`, `<SkeletonRows>` no carregamento e `<EmptyState>` quando não há run.
+- **fix(clientes): cabeçalho do cadastro.** O detalhe da empresa abria direto nos banners; agora abre com `<FlowHead>` (nome, segmento, selo do estágio e excluir em ícone) e o erro de refresh virou `<Callout>`.
+- Versao: main.py/UI/OS 1.27.126, cache bust OS `v=127126`.
+
 ## v1.27.124 - 2026-09-01
 
 - **fix(os): nenhum diálogo do navegador em lugar nenhum do app.** Varredura do resto do OS: 16 `window.confirm`, 49 `alert()` e 5 `prompt()` viraram diálogos do próprio app. O kit (`ui-modals.jsx`) ganhou `mpConfirm`, `mpAlert` e `mpPrompt` — versões imperativas, com a mesma cara do `<Modal>`/`<Confirm>`, que devolvem Promise.

@@ -303,18 +303,21 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
     : [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo'], ['acesso', 'Acesso & Funções']];
 
   return <div className="panel stack">
+    <FlowHead icon="building" title={company.name || 'Cliente'}
+      sub={[company.segment, company.site_url].filter(Boolean).join(' · ') || 'Cadastro do cliente'}
+      right={<div className="row" style={{ gap: 6 }}>
+        <Pill kind={stage.kind || 'cy'} dot>{stage.label}</Pill>
+        <button className="btn sm ghost" onClick={delCompany} title="Excluir empresa"><Icon name="trash" /></button>
+      </div>} />
     <CompanyLifecycleBanner company={company} onSaved={async () => {
       const refreshed = await load(true);
       if (onSaved) await onSaved(true);
       return refreshed;
     }} />
     <CompanyEnrichmentPanel company={company} onRefresh={load} onReview={() => setTab('visual')} />
-    {refreshError && <div className="err">{refreshError}</div>}
-    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-      <div className="tabbar" style={{ flex: 1 }}>
-        {tabs.map(([k, l]) => <button key={k} className={'tabx' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>)}
-      </div>
-      <button className="btn sm ghost" onClick={delCompany} title="Excluir empresa"><Icon name="trash" />Excluir empresa</button>
+    {refreshError && <Callout kind="danger" icon="x">{refreshError}</Callout>}
+    <div className="tabbar">
+      {tabs.map(([k, l]) => <button key={k} className={'tabx' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>)}
     </div>
     {tab === 'fluxo' && (prospectMode ? <CompanyProspectFlow company={company} onSaved={load} /> : <CompanyFluxo company={company} onSaved={load} />)}
     {tab === 'acesso' && !prospectMode && <CompanyAcesso company={company} onSaved={load} />}

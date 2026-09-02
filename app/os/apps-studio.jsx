@@ -290,13 +290,15 @@ function CriacaoApp() {
 
   return <div className="app" style={{ padding: 0 }}>
     <div style={{ padding: '22px 22px 0' }}>
-      <AppHead icon="post" title="Criação de Posts" desc="Monta o post final: capa, título, descrição e tags — a partir de um run analisado." />
+      <FlowHead icon="post" title="Criação de Posts"
+        sub="Monta o post final: capa, título, descrição e tags — a partir de um run analisado."
+        right={sel ? <Pill kind="cy" dot>{(sel.snip || sel.id || '').slice(0, 28)}</Pill> : null} />
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: '250px 1fr', borderTop: '1px solid var(--line)', flex: 1, minHeight: 0 }}>
       <div style={{ borderRight: '1px solid var(--line)', padding: 14, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', maxHeight: 540 }}>
         <div className="sec mut" style={{ marginBottom: 2 }}>Runs</div>
-        {loading && <div className="hint">Carregando…</div>}
-        {!loading && !runs.length && <div className="hint">Nenhum run. Analise um vídeo primeiro.</div>}
+        {loading && <SkeletonRows rows={4} />}
+        {!loading && !runs.length && <EmptyState icon="layers" title="Nenhum run ainda">Analise um vídeo no app Analisar para ele aparecer aqui.</EmptyState>}
         {runs.map(r => <button key={r.id} className="panel" style={{ padding: 8, textAlign: 'left', borderColor: sel?.id === r.id ? 'var(--pri-line)' : undefined, cursor: 'pointer' }} onClick={() => _select(r)}>
           <div style={{ fontFamily: 'var(--fm)', fontSize: 10.5, color: 'var(--muted)' }}>{r.id.slice(0, 8)}</div>
           <div style={{ fontSize: 11.5, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.snip}</div>

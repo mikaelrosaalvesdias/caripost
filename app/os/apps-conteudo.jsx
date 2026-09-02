@@ -678,7 +678,11 @@ function StepCliente({ companyId, company, onPick, onContinue }) {
     onPick(id, full);
   }
 
-  return <div className="split">
+  return <div className="stack">
+    <FlowHead icon="users" title="Escolher a marca-alvo"
+      sub="A identidade da arte é sempre desta empresa — a oferta pode vir do catálogo de outra."
+      right={company ? <Pill kind="cy" dot>{company.name}</Pill> : null} />
+    <div className="split">
     <div className="stack">
       <Field label="Buscar marca-alvo"><input className="inp" value={q} onChange={e => setQ(e.target.value)} placeholder="Nome do prospect, cliente ou marca interna…" /></Field>
       {loading && <div className="hint">Carregando clientes…</div>}
@@ -731,6 +735,7 @@ function StepCliente({ companyId, company, onPick, onContinue }) {
       message={`"${delPj.label || 'Projeto'}" sai da lista de trabalhos salvos. As peças já enviadas para aprovação continuam salvas.`}
       confirmLabel="Excluir"
       onConfirm={() => excluirPj(delPj.id)} onClose={() => setDelPj(null)} />}
+    </div>
   </div>;
 }
 
@@ -1264,32 +1269,36 @@ function CarrosselCreator({ company, format }) {
     </Field>}
     <button className="btn pri" disabled={busy} onClick={gerar}>{busy ? 'Renderizando…' : (fmt === 'carrossel' ? `Gerar carrossel (${totalImgs} imagens)` : `Gerar ${fmtName.toLowerCase()} (${versions.length} ${versions.length === 1 ? 'versão' : 'versões'})`)}</button>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
-    {results.map((rv, vi) => <div key={vi} className="stack" style={{ gap: 6 }}>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="sec mut">Versão {vi + 1}{isClientUser() ? '' : ` · ${rv.model}`}{rv.cost ? ` · R$ ${rv.cost.toFixed(2)}` : (isClientUser() ? '' : ' · grátis')}</div>
-        <div className="row" style={{ gap: 6 }}>
+    {results.map((rv, vi) => <div key={vi} className="panel stack">
+      <FlowHead icon="image" title={`Artes geradas · versão ${vi + 1}`}
+        sub={`${rv.slides.length} ${rv.slides.length === 1 ? 'tela' : 'telas'}${isClientUser() ? '' : ' · ' + rv.model}${rv.cost ? ' · R$ ' + rv.cost.toFixed(2) : (isClientUser() ? '' : ' · grátis')}`}
+        right={<div className="row" style={{ gap: 6 }}>
           {(rv.base_urls || []).some(Boolean) && <button className="btn sm ghost" disabled={busy} title="Reusa as fotos já geradas e só redesenha a arte — não paga IA" onClick={() => regerarArte(rv, vi)}><Icon name="refresh" />Regerar arte (grátis)</button>}
-          <button className="btn sm pri" disabled={busy} onClick={() => enviarAprovacao(rv, vi)}>Enviar esta versão → Aprovação</button>
-        </div>
-      </div>
+          <button className="btn sm pri" disabled={busy} onClick={() => enviarAprovacao(rv, vi)}>Enviar para Aprovação<Icon name="arrowR" /></button>
+        </div>} />
       {rv.warning && <Callout kind="warn">{rv.warning}</Callout>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 8 }}>
-        {rv.slides.map((s, si) => <div key={si} style={{ position: 'relative' }}>
-          <img loading="lazy" decoding="async" src={s.url} onClick={() => setViewer({ vi, si })} style={{ width: '100%', borderRadius: 8, cursor: 'zoom-in', display: 'block' }} />
-          <div className="ov-btns">
+      <div className="art-grid">
+        {rv.slides.map((s, si) => <ArtCard key={si} src={s.url}
+          label={si === 0 ? 'Capa' : `Tela ${si + 1}`}
+          sub={s.image_ok ? 'foto IA' : 'editorial (sem foto)'}
+          badges={[s.image_error
+            ? <Pill key="e" kind="pri" dot>falhou</Pill>
+            : <Pill key="ok" kind="good" dot>pronta</Pill>]}
+          onOpen={() => setViewer({ vi, si })}
+          actions={<>
             <button className="ov-btn" disabled={busy} title="Regerar SÓ esta tela (paga só ela; as outras reusam a foto)"
-              onClick={() => regerarSlide(rv, vi, si)}><Icon name="refresh" /></button>
+              onClick={e => { e.stopPropagation(); regerarSlide(rv, vi, si); }}><Icon name="refresh" /></button>
             <button className="ov-btn" disabled={busy} title="Editar com IA: descreva a mudança — o resto da arte é preservado"
-              onClick={() => { setEditInst(''); setEditAsk({ url: s.url, vi, si }); }}><Icon name="pen" /></button>
-            <button className="ov-btn" disabled={busy} title="Animar imagem: vira um clipe curto com movimento sutil" onClick={async () => {
+              onClick={e => { e.stopPropagation(); setEditInst(''); setEditAsk({ url: s.url, vi, si }); }}><Icon name="pen" /></button>
+            <button className="ov-btn" disabled={busy} title="Animar imagem: vira um clipe curto com movimento sutil" onClick={async e => {
+              e.stopPropagation();
               setBusy(true); setMsg('Animando (1-2 min)…');
               try { const r = await window.mpApi.animateArt(company.id, s.url);
                 if (r && r.url) { setMsg('✓ Animação pronta.'); window.open(r.url, '_blank'); }
                 else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
-              } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
+              } catch (e2) { setMsg('Erro: ' + e2.message); } finally { setBusy(false); }
             }}><Icon name="teaser" /></button>
-          </div>
-        </div>)}
+          </>} />)}
       </div>
     </div>)}
     {viewer && (() => {
@@ -1732,12 +1741,14 @@ function StepAprovacao({ company }) {
   const approved = scoped.filter(p => p.status === 'APPROVED' || p.status === 'SCHEDULED');
 
   return <div className="stack">
+    <FlowHead icon="shield" title="Fila de aprovação"
+      sub={`${review.length} ${review.length === 1 ? 'peça aguardando decisão' : 'peças aguardando decisão'} · ${approved.length} aprovada(s)`}
+      right={<Segmented value={showAll ? 'all' : 'run'} onChange={v => setShowAll(v === 'all')}
+        options={[['run', 'Só esta produção'], ['all', 'Histórico completo']]} />} />
     <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <button className="btn pri" disabled={busy} onClick={enviarTodos}><Icon name="send" />Enviar peças p/ aprovação</button>
       <button className="btn" disabled={busy} onClick={aprovarTudo}><Icon name="check" />Aprovar tudo (teste)</button>
       <button className="btn sm ghost" onClick={load}><Icon name="refs" />Atualizar</button>
-      <Segmented value={showAll ? 'all' : 'run'} onChange={v => setShowAll(v === 'all')}
-        options={[['run', 'Só esta produção'], ['all', 'Histórico completo']]} />
     </div>
     <div className="hint">{showAll ? 'Mostrando TODO o histórico da empresa.' : 'Mostrando só as peças desta produção (run atual).'} Modo teste: "Aprovar tudo" cria as peças e marca como aprovado direto, sem mandar pro cliente.</div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
@@ -1856,6 +1867,8 @@ function StepAgenda({ company }) {
     (deliveryState.drafts || []).forEach(d => addPiece(d.media_url, d.title || d.label || d.product || 'Peça', d.uid));
 
     return <div className="stack">
+      <FlowHead icon="calendar" title="Agendar publicação"
+        sub={`${posts.length} ${posts.length === 1 ? 'peça aprovada pronta para publicar' : 'peças aprovadas prontas para publicar'}`} />
       <div className="panel stack" style={{ borderColor: 'var(--cyan)' }}>
         <div className="sec cy"><Icon name="send" />Proposta pronta para entrega</div>
         <div className="hint">Baixe as peças ou compartilhe o link de aprovação. Nenhuma rede social desta marca será conectada ou publicada.</div>
