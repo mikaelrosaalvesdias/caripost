@@ -503,3 +503,25 @@ function mpPrompt(label, initial, opts) {
 }
 
 Object.assign(window, { mpAlert, mpConfirm, mpPrompt });
+
+/* ── mpToast — confirmação curta que NÃO depende do ciclo de vida do componente.
+   O `msg` de estado some quando o pai recarrega os dados e remonta a seção;
+   este aviso vive fora da árvore React da tela e some sozinho. ── */
+function mpToast(message, kind) {
+  let host = document.getElementById('mp-toast-root');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'mp-toast-root';
+    document.body.appendChild(host);
+  }
+  const el = document.createElement('div');
+  el.className = 'mp-toast' + (kind ? ' ' + kind : '');
+  el.setAttribute('role', 'status');
+  el.textContent = String(message);
+  host.appendChild(el);
+  setTimeout(() => { el.classList.add('is-out'); }, 2600);
+  setTimeout(() => { el.remove(); }, 3100);
+  return el;
+}
+
+Object.assign(window, { mpToast });

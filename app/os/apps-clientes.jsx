@@ -530,7 +530,9 @@ function CompanyProdutos({ company }) {
   const ungrouped = products.filter(product => !groups.some(group => String(group.id) === String(catalogProductGroupId(product))));
   if (ungrouped.length) sections.push({ id: '', name: 'Sem grupo', description: 'Produtos antigos ou ainda não organizados.', products: ungrouped });
 
-  return <div className="stack">
+  return <ClientSection icon="layers" title="Produtos & Serviços"
+    sub="Grupo → produto → plano. À la carte e subprodutos ficam separados do plano."
+    side={<Pill kind="cy" dot>usado pela IA</Pill>}>
     <div className="panel stack" style={{ borderColor: 'var(--cyan)' }}>
       <div className="sec cy"><Icon name="layers" />Catálogo próprio</div>
       <div className="hint">Organize em <b>grupo → produto → plano</b>. À la carte e subprodutos ficam separados do plano: por exemplo, Streaming → Zapping → Full/Lite, com Telecine e Premiere vinculados à parte.</div>
@@ -547,22 +549,21 @@ function CompanyProdutos({ company }) {
       <button className="btn" onClick={() => setCopyOpen(true)}><Icon name="copy" />Copiar de outro cliente</button>
     </div>
     {copyOpen && <CopyProductsModal company={company} onClose={() => setCopyOpen(false)} onDone={(n) => { setCopyOpen(false); setMsg(n ? `${n} produto(s) copiado(s).` : 'Nada copiado.'); load(); }} />}
-    {loading && <div className="hint">Carregando produtos…</div>}
-    {!loading && !products.length && <div className="hint">Nenhum produto ainda. Adicione os produtos que a empresa trabalha.</div>}
-    {!loading && sections.map(section => <details key={section.id || '__ungrouped'} className="panel" open>
-      <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <div><b>{section.name}</b>{section.description && <div className="hint" style={{ marginTop: 3 }}>{section.description}</div>}</div>
-          <Pill kind={section.id ? 'cy' : 'warn'}>{section.products.length} produto(s)</Pill>
-        </div>
-      </summary>
-      <div className="stack" style={{ marginTop: 12 }}>
-        {!section.products.length && <div className="hint">Nenhum produto neste grupo.</div>}
-        {section.products.map(product => <ProductCard key={product.id} company={company} product={product} groups={groups} onChanged={load} />)}
-      </div>
-    </details>)}
+    {loading && <SkeletonRows rows={3} />}
+    {!loading && !products.length && <EmptyState icon="layers" title="Nenhum produto ainda">
+      Cadastre o que a empresa vende — é o que a IA anuncia nas peças.
+    </EmptyState>}
+    {!loading && !!sections.length && <div className="cli-tree">
+      {sections.map(section => <CatalogNode key={section.id || '__ungrouped'} title={section.name}
+        sub={section.description} count={section.products.length}
+        open={sections.length === 1 || !!section.id}>
+        {section.products.length
+          ? section.products.map(product => <ProductCard key={product.id} company={company} product={product} groups={groups} onChanged={load} />)
+          : <div className="hint">Nenhum produto neste grupo.</div>}
+      </CatalogNode>)}
+    </div>}
     <CompanyCatalogLinks company={company} />
-  </div>;
+  </ClientSection>;
 }
 
 function ProductGroupsEditor({ company, groups, products, onChanged, onCreated }) {
@@ -593,7 +594,7 @@ function ProductGroupsEditor({ company, groups, products, onChanged, onCreated }
         productCount={products.filter(product => String(catalogProductGroupId(product)) === String(group.id)).length}
         onChanged={onChanged} />)}
     </div>}
-    {!groups.length && <div className="hint">Nenhum grupo cadastrado. Crie o primeiro para começar a organizar o catálogo.</div>}
+    {!groups.length && <EmptyState icon="layers" title="Nenhum grupo cadastrado">Crie o primeiro para começar a organizar o catálogo.</EmptyState>}
     <div className="split" style={{ gap: 8 }}>
       <input className="inp" value={name} onChange={e => setName(e.target.value)} placeholder="Novo grupo (ex.: Streaming)" onKeyDown={e => e.key === 'Enter' && create()} />
       <input className="inp" value={description} onChange={e => setDescription(e.target.value)} placeholder="Descrição opcional" onKeyDown={e => e.key === 'Enter' && create()} />
@@ -700,7 +701,7 @@ function CompanyCatalogLinks({ company }) {
     try {
       await window.mpApi.deleteCatalogLink(company.id, link.id);
       await load();
-      setMsg('Vínculo removido.');
+      setMsg('Vínculo removido.'); mpToast('Salvo!');
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setBusy(''); }
   }
@@ -715,7 +716,7 @@ function CompanyCatalogLinks({ company }) {
     </div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     {loading && <div className="hint">Carregando vínculos…</div>}
-    {!loading && !links.length && <div className="hint">Nenhuma oferta de catálogo vinculada a {company.name}.</div>}
+    {!loading && !links.length && <EmptyState icon="link" title="Nenhuma oferta vinculada">Vincule uma oferta do catálogo de outra empresa a {company.name}.</EmptyState>}
     {!loading && links.map(link => {
       const group = link.group || {};
       const product = link.product || {};
@@ -1278,7 +1279,7 @@ function ProductCard({ company, product, groups, onChanged }) {
         functions: functions.split('\n').map(s => s.trim()).filter(Boolean),
         socials: { ...(product.socials || {}), instagram },
       });
-      setMsg('Salvo.'); onChanged();
+      setMsg('Salvo.'); mpToast('Salvo!'); onChanged();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setBusy(false); }
   }
@@ -1476,7 +1477,7 @@ function ProductPlanEditor({ company, plan, onChanged, onError }) {
         active,
         sort_order: Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0,
       });
-      setMsg('Plano salvo.'); onChanged();
+      setMsg('Plano salvo.'); mpToast('Salvo!'); onChanged();
     } catch (e) { const text = 'Erro: ' + e.message; setMsg(text); if (onError) onError(text); }
     finally { setBusy(false); }
   }
@@ -1664,7 +1665,7 @@ function ProductAdditionalEditor({ company, solution, onChanged, onError }) {
         socials: { ...(solution.socials || {}), instagram: instagram.trim() },
         colors: catalogCleanColors(colors, solution.colors), active,
       });
-      setMsg('Subproduto salvo e disponível para o briefing das artes.'); onChanged();
+      setMsg('Subproduto salvo e disponível para o briefing das artes.'); mpToast('Salvo!'); onChanged();
     } catch (e) { reportError(e, setMsg); }
     finally { setBusy(false); }
   }
@@ -2133,34 +2134,40 @@ function CompanyGeral({ company, onSaved }) {
         city: city || null, state: state || null, phone: phone || null,
         social_instagram: ig, social_facebook: fb, social_tiktok: tt,
       });
-      setMsg('Salvo!'); onSaved();
+      setMsg('Salvo!'); mpToast('Salvo!'); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setSaving(false); }
   }
 
-  return <div className="stack">
-    <div className="split">
-      <Field label="Nome"><input className="inp" value={name} onChange={e => setName(e.target.value)} /></Field>
-      <Field label="Segmento"><input className="inp" value={segment} onChange={e => setSegment(e.target.value)} placeholder="Ex: Saúde, Educação" /></Field>
+  return <ClientSection icon="doc" title="Dados Gerais"
+    sub="Nome, segmento e canais oficiais. O site alimenta a importação de identidade."
+    side={<Pill kind="cy" dot>usado pela IA</Pill>}>
+
+    <div className="cli-form">
+      <div className="cli-req"><Field label="Nome"><input className="inp" value={name} onChange={e => setName(e.target.value)} /></Field></div>
+      <div className="cli-req"><Field label="Segmento"><input className="inp" value={segment} onChange={e => setSegment(e.target.value)} placeholder="Ex: Saúde, Educação" /></Field></div>
+      <div className="cli-req wide"><Field label="Website oficial"><input className="inp" value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://…" /></Field></div>
     </div>
-    <div className="split">
-      <Field label="Website"><input className="inp" value={website} onChange={e => setWebsite(e.target.value)} /></Field>
-      <Field label="Email"><input className="inp" value={email} onChange={e => setEmail(e.target.value)} /></Field>
-    </div>
-    <div className="split">
-      <Field label="Cidade"><input className="inp" value={city} onChange={e => setCity(e.target.value)} /></Field>
-      <Field label="Estado"><input className="inp" value={state} onChange={e => setState(e.target.value)} placeholder="SP" /></Field>
-    </div>
-    <Field label="Telefone"><input className="inp" value={phone} onChange={e => setPhone(e.target.value)} placeholder="(11) 99999-9999" /></Field>
-    <div className="sec mut">Redes sociais</div>
-    <div className="split">
-      <Field label="Instagram"><input className="inp" value={ig} onChange={e => setIg(e.target.value)} placeholder="@usuario" /></Field>
-      <Field label="Facebook"><input className="inp" value={fb} onChange={e => setFb(e.target.value)} /></Field>
-    </div>
-    <Field label="TikTok"><input className="inp" value={tt} onChange={e => setTt(e.target.value)} /></Field>
-    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
-    <button className="btn sm pri" disabled={saving} onClick={save}>{saving ? 'Salvando…' : 'Salvar'}</button>
-  </div>;
+
+    <OptionalFields title="Contato e localização (opcional)">
+      <div className="cli-form">
+        <div className="cli-opt"><Field label="E-mail"><input className="inp" value={email} onChange={e => setEmail(e.target.value)} /></Field></div>
+        <div className="cli-opt"><Field label="Telefone"><input className="inp" value={phone} onChange={e => setPhone(e.target.value)} placeholder="(11) 99999-9999" /></Field></div>
+        <div className="cli-opt"><Field label="Cidade"><input className="inp" value={city} onChange={e => setCity(e.target.value)} /></Field></div>
+        <div className="cli-opt"><Field label="Estado"><input className="inp" value={state} onChange={e => setState(e.target.value)} placeholder="SP" /></Field></div>
+      </div>
+    </OptionalFields>
+
+    <OptionalFields title="Redes sociais (opcional)">
+      <div className="cli-form">
+        <div className="cli-opt"><Field label="Instagram"><input className="inp" value={ig} onChange={e => setIg(e.target.value)} placeholder="@usuario" /></Field></div>
+        <div className="cli-opt"><Field label="Facebook"><input className="inp" value={fb} onChange={e => setFb(e.target.value)} /></Field></div>
+        <div className="cli-opt wide"><Field label="TikTok"><input className="inp" value={tt} onChange={e => setTt(e.target.value)} /></Field></div>
+      </div>
+    </OptionalFields>
+
+    <SaveBar busy={saving} msg={msg} onSave={save} />
+  </ClientSection>;
 }
 
 function CompanyLogos({ company, onSaved, onLogosLoaded }) {
@@ -2233,13 +2240,12 @@ function CompanyLogos({ company, onSaved, onLogosLoaded }) {
   }
 
   return <div className="stack">
-    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <div className="sec" style={{ margin: 0 }}>Logos da empresa <Pill kind="cy">{logos.length}</Pill></div>
+    <DenseBar title="Logos" count={logos.length}>
       <label className="btn sm pri" data-testid="logo-upload" style={{ cursor: busy ? 'wait' : 'pointer' }} onClick={e => { if (busy) e.preventDefault(); }}>
-        <Icon name="plus" />{busy ? 'Enviando…' : 'Adicionar logos'}
+        <Icon name="upload" />{busy ? 'Enviando…' : 'Adicionar logos'}
         <input disabled={busy} type="file" accept="image/png,image/jpeg,image/webp" multiple style={{ display: 'none' }} onChange={e => { upload(e.target.files); e.target.value = ''; }} />
       </label>
-    </div>
+    </DenseBar>
     <div className="hint">Envie quantas logos precisar, inclusive versões para fundo claro e escuro. Escolha uma principal; as demais continuam disponíveis. PNG, JPEG ou WebP, até 10 MB cada.</div>
     {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12 }}>
@@ -2252,11 +2258,11 @@ function CompanyLogos({ company, onSaved, onLogosLoaded }) {
         </div>
         <div className="row" style={{ justifyContent: 'space-between', marginTop: 7, gap: 6 }}>
           <div className="hint" style={{ fontSize: 10 }}>{meta.variant || meta.from || (l.source === 'WEB' ? 'site' : 'manual')}</div>
-          {meta.is_primary ? <Pill kind="good">★ Principal</Pill> : <button className={'btn sm ' + (candidate ? 'pri' : 'ghost')} data-testid="logo-primary" disabled={busy} onClick={() => makePrimary(l.id)}>{candidate ? 'Aprovar e usar' : '☆ Usar'}</button>}
+          {meta.is_primary ? <Pill kind="good" dot>Principal</Pill> : <button className={'btn sm ' + (candidate ? 'pri' : 'ghost')} data-testid="logo-primary" disabled={busy} onClick={() => makePrimary(l.id)}><Icon name="star" />{candidate ? 'Aprovar e usar' : 'Usar'}</button>}
           <button className="btn sm ghost" data-testid="logo-delete" disabled={busy} title="Excluir logo" onClick={() => remove(l.id)}><Icon name="trash" /></button>
         </div>
       </div>;})}
-      {!logos.length && <div className="hint">Sem logos ainda.</div>}
+      {!logos.length && <EmptyState icon="image" title="Nenhuma logo ainda">Envie o PNG com fundo transparente ou use a importação de identidade.</EmptyState>}
     </div>
   </div>;
 }
@@ -2409,16 +2415,18 @@ function CompanyVisual({ company, onSaved }) {
     finally { setRefBusy(''); }
   }
 
-  return <div className="stack">
+  return <ClientSection icon="image" title="Identidade Visual"
+    sub="Logos, paleta e referências aprovadas — é daqui que sai o visual das artes."
+    side={<Pill kind="cy" dot>usado pela IA</Pill>}>
+    <div className="cli-dense">
     <CompanyLogos key={company.id} company={company} onSaved={onSaved} onLogosLoaded={setLogoAssets} />
-    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <div className="sec" style={{ margin: 0 }}>Paleta de cores <Pill kind="cy">{pal.length}</Pill></div>
+    <DenseBar title="Paleta" count={pal.length}>
       <button className="btn sm ghost" data-testid="palette-add" onClick={() => addPaletteColor()}><Icon name="plus" />Adicionar cor</button>
-    </div>
+    </DenseBar>
     <div className="hint">Adicione ou remova quantas cores precisar. A cor com estrela é a <b>principal</b> e passa a comandar a identidade nas próximas gerações. Use o conta-gotas da tela/site ou clique num ponto exato de uma logo.</div>
-    {identityRunning && <div className="hint">Aguarde a importação terminar antes de salvar a revisão da paleta.</div>}
+    {identityRunning && <Callout kind="warn">Aguarde a importação terminar antes de salvar a revisão da paleta.</Callout>}
     <div className="stack" style={{ gap: 8 }}>
-      {!pal.length && <div className="hint">Nenhuma cor detectada. Puxe a identidade novamente ou adicione manualmente.</div>}
+      {!pal.length && <EmptyState icon="image" title="Nenhuma cor detectada">Puxe a identidade novamente ou adicione manualmente.</EmptyState>}
       {pal.map((c, i) => {
         const isPrimary = i === primaryIndex;
         const pickerHex = paletteTools.normalizeHex(c.hex) || '#000000';
@@ -2431,7 +2439,7 @@ function CompanyVisual({ company, onSaved }) {
             onBlur={e => { const hex = paletteTools.normalizeHex(e.target.value); if (hex) setPalAt(i, { hex }); }}
             placeholder="#RRGGBB" style={{ width: 104 }} />
           <button className={'btn sm ' + (isPrimary ? 'pri' : 'ghost')} data-testid="palette-primary" disabled={isPrimary} onClick={() => markPrimary(i)}>
-            {isPrimary ? '★ Principal' : '☆ Tornar principal'}
+            {isPrimary ? 'Principal' : 'Tornar principal'}
           </button>
           <button className="btn sm ghost" data-testid="palette-screen-picker" title="Aponte uma cor em qualquer lugar da tela ou do site" onClick={() => pickFromScreen(i)}>⌾ Tela/site</button>
           <button className="btn sm ghost" data-testid="palette-image-picker" title="Clique num ponto exato de uma logo ou arte" onClick={() => openImageSampler(i)}>⌖ Logo/arte</button>
@@ -2508,9 +2516,10 @@ function CompanyVisual({ company, onSaved }) {
           </div>
         </div>;
       })}
-      {!refs.length && <div className="hint">Nenhuma arte de referência cadastrada.</div>}
+      {!refs.length && <EmptyState icon="image" title="Nenhuma arte de referência">Aprove referências para a IA seguir o estilo visual da marca.</EmptyState>}
     </div>
-  </div>;
+    </div>
+  </ClientSection>;
 }
 
 function CompanyCriacao({ company }) {
@@ -2559,13 +2568,13 @@ function CompanyCriacao({ company }) {
   }
   async function save() {
     setBusy(true); setMsg('');
-    try { const ov = buildOverride(); await window.mpApi.saveCreativeConfig(company.id, ov); setBaseOv(ov); setEdits({}); setMsg('Salvo! As próximas gerações deste cliente usam sua configuração.'); }
+    try { const ov = buildOverride(); await window.mpApi.saveCreativeConfig(company.id, ov); setBaseOv(ov); setEdits({}); setMsg('Salvo! As próximas gerações deste cliente usam sua configuração.'); mpToast('Salvo!'); }
     catch (e) { setMsg('Erro: ' + (e.message || e)); } finally { setBusy(false); }
   }
   async function resetAll() {
     if (!await mpConfirm('Restaurar TODAS as configurações criativas deste cliente para o padrão?')) return;
     setBusy(true); setMsg('');
-    try { await window.mpApi.saveCreativeConfig(company.id, {}); setBaseOv({}); setEdits({}); setMsg('Restaurado para o padrão.'); }
+    try { await window.mpApi.saveCreativeConfig(company.id, {}); setBaseOv({}); setEdits({}); setMsg('Restaurado para o padrão.'); mpToast('Salvo!'); }
     catch (e) { setMsg('Erro: ' + (e.message || e)); } finally { setBusy(false); }
   }
 
@@ -2618,7 +2627,7 @@ function CompanyVideo({ company }) {
       if (sys.trim() === dSys.trim()) delete out.video.system_prompt; else out.video.system_prompt = sys;
       if (!Object.keys(out.video).length) delete out.video;
       await window.mpApi.saveCreativeConfig(company.id, out);
-      setOv(out); setMsg('Salvo! As próximas gerações de vídeo deste cliente usam este System Prompt.');
+      setOv(out); setMsg('Salvo! As próximas gerações de vídeo deste cliente usam este System Prompt.'); mpToast('Salvo!');
     } catch (e) { setMsg('Erro: ' + (e.message || e)); }
     finally { setBusy(false); }
   }
@@ -2658,20 +2667,20 @@ function CompanyVoz({ company, onSaved }) {
     setSaving(true); setMsg('');
     try {
       await window.mpApi.saveBrandKit(company.id, { voice, persona, visual_prompt_base: visual, audience, assuntos });
-      setDirty(false); setMsg('Salvo!'); onSaved();
+      setDirty(false); setMsg('Salvo!'); mpToast('Salvo!'); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setSaving(false); }
   }
-  return <div className="stack">
-    <div className="hint">A importação única no topo preenche estes campos. Aqui você apenas revisa e ajusta o texto final.</div>
-    <Field label="Público & modelo de negócio (a IA segue isto à risca em todo conteúdo)"><textarea className="inp" rows={3} value={audience} onChange={e => { setAudience(e.target.value); setDirty(true); }} placeholder="Ex.: A Cariap vende SVAs para PROVEDORES de internet (ISPs), que revendem/agregam os apps ao plano dos assinantes. O conteúdo fala COM o provedor, posicionando os apps como valor agregado para reter e monetizar a base." style={{ resize: 'vertical' }} /></Field>
-    <Field label="Tom de voz"><input className="inp" value={voice} onChange={e => { setVoice(e.target.value); setDirty(true); }} placeholder="Ex: próximo, confiante, sem jargão técnico" /></Field>
+  return <ClientSection icon="mic" title="Voz & Persona"
+    sub="A importação única no topo preenche estes campos. Aqui você revisa e ajusta o texto final."
+    side={<Pill kind="cy" dot>usado pela IA</Pill>}>
+    <div className="cli-req"><Field label="Público & modelo de negócio (a IA segue isto à risca em todo conteúdo)"><textarea className="inp" rows={3} value={audience} onChange={e => { setAudience(e.target.value); setDirty(true); }} placeholder="Ex.: A Cariap vende SVAs para PROVEDORES de internet (ISPs), que revendem/agregam os apps ao plano dos assinantes. O conteúdo fala COM o provedor, posicionando os apps como valor agregado para reter e monetizar a base." style={{ resize: 'vertical' }} /></Field></div>
+    <div className="cli-req"><Field label="Tom de voz"><input className="inp" value={voice} onChange={e => { setVoice(e.target.value); setDirty(true); }} placeholder="Ex: próximo, confiante, sem jargão técnico" /></Field></div>
     <Field label="Persona da marca"><textarea className="inp" rows={4} value={persona} onChange={e => { setPersona(e.target.value); setDirty(true); }} placeholder="Descreva a persona..." style={{ resize: 'vertical' }} /></Field>
     <Field label="Base para prompt visual"><textarea className="inp" rows={3} value={visual} onChange={e => { setVisual(e.target.value); setDirty(true); }} placeholder="Ex: fundo branco, produto em destaque" style={{ resize: 'vertical' }} /></Field>
     <Field label="Assuntos / Pautas (um por linha — aparecem como sugestão na Criação)"><textarea className="inp" rows={5} value={assuntos} onChange={e => { setAssuntos(e.target.value); setDirty(true); }} placeholder={"Ex.:\nsegurança digital para a família\ncomo reter assinantes com apps\nentretenimento ilimitado no plano"} style={{ resize: 'vertical' }} /></Field>
-    {msg && <div className={msg.startsWith('Erro') ? 'err' : 'ok'}>{msg}</div>}
-    <button className="btn sm pri" disabled={saving} onClick={save}>{saving ? 'Salvando…' : 'Salvar'}</button>
-  </div>;
+    <SaveBar busy={saving} msg={msg} onSave={save} />
+  </ClientSection>;
 }
 
 function CompanyConcorrentes({ company, onSaved }) {

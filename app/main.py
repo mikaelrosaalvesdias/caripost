@@ -73,7 +73,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Caripost (internal)", version="1.27.128")
+app = FastAPI(title="Caripost (internal)", version="1.27.132")
 
 
 @app.middleware("http")

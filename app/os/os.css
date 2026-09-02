@@ -1269,3 +1269,14 @@ details.panel>.stack{margin-top:0!important}
 @media(prefers-reduced-motion:reduce){
   .rd-ring,.cri-cover,.cri-run,.cli-asset,.cri-count .cc-bar i{transition:none!important}
 }
+
+/* ── mp-toast — confirmação curta (salvar, copiar…) ── */
+#mp-toast-root{position:fixed;left:50%;bottom:78px;transform:translateX(-50%);z-index:2147483000;
+  display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.mp-toast{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;
+  padding:10px 16px;border-radius:var(--r-full);font-size:12.5px;font-weight:600;
+  color:#12683a;background:var(--good-soft);border:1px solid rgba(31,170,90,.34);
+  box-shadow:var(--sh);animation:mpToastIn .18s var(--ease) both}
+.mp-toast.danger{color:var(--pri2);background:var(--pri-soft);border-color:var(--pri-line)}
+.mp-toast.is-out{opacity:0;transform:translateY(6px);transition:opacity .3s,transform .3s}
+@keyframes mpToastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}

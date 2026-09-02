@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.132', date: '2026-09-02',
+    items: [
+      { type: 'feat', text: 'Cadastro do cliente: Dados Gerais e Voz & Persona com campos obrigatorios em destaque, opcionais recolhidos e barra de salvar no rodape; Identidade Visual e Produtos organizados em faixas e arvore de catalogo.' },
+      { type: 'fix', text: 'Salvar agora confirma na tela: antes a mensagem sumia sozinha por causa do recarregamento dos dados.' },
+      { type: 'fix', text: 'Catalogo de produtos volta a abrir expandido quando a empresa tem um unico grupo.' },
+    ],
+  },
+  {
     version: 'v1.27.127', date: '2026-09-02',
     items: [
       { type: 'feat', text: 'Cadastro do cliente: as 13 abas viraram uma navegação lateral em 5 grupos, o cadastro ocupa a janela inteira e há um anel de completude mostrando o que falta para a marca poder gerar conteúdo.' },

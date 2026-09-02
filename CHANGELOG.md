@@ -2,6 +2,15 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.132 - 2026-09-02
+
+- **feat(clientes): passos 5 e 6 do patch v2 — padrão de formulário.** `Dados Gerais` e `Voz & Persona` viraram `<ClientSection>` com obrigatórios em duas colunas, opcionais recolhidos em `<OptionalFields>` e `<SaveBar>` no rodapé. `Identidade Visual` ganhou faixas `<DenseBar>` com contagem (Logos, Paleta) e `Produtos & Serviços` virou árvore `<CatalogNode>`; estados vazios de logos, paleta, referências, grupos, produtos e ofertas vinculadas agora usam `<EmptyState>`.
+- **fix(clientes): salvar dá retorno visível.** O `msg` de estado sumia no re-render disparado pelo próprio `onSaved()`, então salvar não confirmava nada na tela. Novo `mpToast()` no kit — aviso curto fora da árvore React da seção, some sozinho em ~3s — disparado nas confirmações de gravação.
+- **fix(clientes): catálogo não fica escondido.** No passo 6 o grupo passou a abrir só quando tem id, o que escondia todo o catálogo de quem tem um único grupo "Sem grupo". Grupo único volta a abrir por padrão.
+- **fix(clientes): estrelas ☆/★ viraram ícone e selo** nos botões de logo e paleta.
+- **hotfix:** a v1.27.131 subiu com erro de sintaxe em `apps-clientes.jsx` (substituição em massa que injetou `;` dentro de arrow sem chaves) e derrubou o app Clientes. Revertido o trecho, validado com o compilador de JSX e republicado.
+- Versao: main.py/UI/OS 1.27.132, cache bust OS `v=127132`.
+
 ## v1.27.128 - 2026-09-02
 
 - **fix(criacao): barra de ações fica dentro da janela.** O `.cri` do patch v2 depende de uma cadeia de altura limitada, mas o corpo da janela do OS é `display:block` — o `.app` crescia com o conteúdo (1428px numa janela de 682px), o `.cri-scroll` não rolava por dentro e o `Publicar` caía para fora. O `.app` do app Criação passa a ocupar 100% do corpo da janela.
