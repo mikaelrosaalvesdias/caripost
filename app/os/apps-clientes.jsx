@@ -30,6 +30,15 @@ function ClientesApp() {
   React.useEffect(() => { if (window.mpApi) load(); }, [load]);
 
   const visibleCompanies = companies.filter(company => stageFilter === 'all' || companyStage(company).key === stageFilter);
+
+  // O cadastro assume a janela inteira: a lista não empurra mais o conteúdo pra cima.
+  if (selectedId) return <div className="app cli-shell">
+    <CompanyDetail companyId={selectedId}
+      onBack={() => { setSelectedId(null); load(); }}
+      onSaved={load}
+      onDeleted={() => { setSelectedId(null); load(); }} />
+  </div>;
+
   return <div className="app">
     <AppHead icon="building" title="Empresas" desc="Prospecte, converta e opere clientes sem duplicar cadastros."
       right={<button className="btn sm pri" onClick={() => { setCreating(c => !c); setSelectedId(null); }}><Icon name="plus" />Nova empresa</button>} />
@@ -52,18 +61,21 @@ function ClientesApp() {
     }} onCancel={() => setCreating(false)} />}
 
     <div className="stack">
-      {loading && <div className="hint">Carregando empresas…</div>}
+      {loading && <SkeletonRows rows={4} />}
       {loadError && <div className="err">Não foi possível atualizar a lista: {loadError} <button className="btn sm ghost" onClick={load}>Tentar novamente</button></div>}
-      {!loading && !visibleCompanies.length && <div className="hint">Nenhuma empresa neste estágio.</div>}
-      {visibleCompanies.map(c => <React.Fragment key={c.id}>
-        <div className="litem" style={{ padding: 14, cursor: 'pointer', borderColor: selectedId === c.id ? 'var(--cyan)' : undefined }}
-          onClick={() => { setSelectedId(id => id === c.id ? null : c.id); setCreating(false); }}>
+      {!loading && !visibleCompanies.length && <EmptyState icon="building" title="Nenhuma empresa neste estágio">
+        Cadastre um prospecto ou troque o filtro acima.
+        <div className="row" style={{ justifyContent: 'center', marginTop: 11 }}>
+          <button className="btn sm pri" onClick={() => setCreating(true)}><Icon name="plus" />Nova empresa</button>
+        </div>
+      </EmptyState>}
+      {visibleCompanies.map(c =>
+        <div key={c.id} className="litem" style={{ padding: 14, cursor: 'pointer' }}
+          onClick={() => { setSelectedId(c.id); setCreating(false); }}>
           <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(140deg,var(--pri),var(--pri2))', flex: 'none', display: 'grid', placeItems: 'center', fontFamily: 'var(--fh)', fontWeight: 700, fontSize: 18, color: '#fff' }}>{(c.name || '?')[0]}</div>
           <div className="li-main"><b style={{ fontSize: 14 }}>{c.name}</b><small>{c.segment || 'Sem segmento'} · {c.post_count || 0} posts</small></div>
           <Pill kind={companyStage(c).kind} dot>{companyStage(c).label}</Pill>
-        </div>
-        {selectedId === c.id && <CompanyDetail companyId={c.id} onSaved={load} onDeleted={() => { setSelectedId(null); load(); }} />}
-      </React.Fragment>)}
+        </div>)}
     </div>
   </div>;
 }
@@ -237,8 +249,9 @@ function CompanyEnrichmentPanel({ company, onRefresh, onReview }) {
   </div>;
 }
 
-function CompanyDetail({ companyId, onSaved, onDeleted }) {
+function CompanyDetail({ companyId, onSaved, onDeleted, onBack }) {
   const [company, setCompany] = React.useState(null);
+  const [prodCount, setProdCount] = React.useState(null);   // só para a completude — rota que já existe
   const [tab, setTab] = React.useState('fluxo');
   const [loading, setLoading] = React.useState(true);
   const [refreshError, setRefreshError] = React.useState('');
@@ -251,6 +264,13 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
   }, [companyId]);
 
   React.useEffect(() => { load(); }, [load]);
+
+  React.useEffect(() => {
+    if (!window.mpApi) return;
+    window.mpApi.listProducts(companyId)
+      .then(pr => setProdCount((pr || []).length))
+      .catch(() => setProdCount(0));
+  }, [companyId]);
 
   const enrichmentState = company?.brand_kit?.extras?.enrichment?.state || '';
   React.useEffect(() => {
@@ -290,25 +310,28 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
     catch (e) { mpAlert('Erro: ' + e.message); }
   }
 
-  if (loading) return <div className="panel"><div className="hint">Carregando…</div></div>;
+  if (loading) return <div className="panel"><SkeletonRows rows={3} /></div>;
   if (!company) return <div className="panel stack">
-    <div className="err">{refreshError || 'Não foi possível carregar a empresa.'}</div>
+    <Callout kind="danger" icon="x">{refreshError || 'Não foi possível carregar a empresa.'}</Callout>
     <button className="btn sm pri" onClick={() => load()}><Icon name="refresh" />Tentar novamente</button>
   </div>;
 
   const stage = companyStage(company);
   const prospectMode = stage.key === 'prospect' || stage.key === 'lost';
-  const tabs = prospectMode
-    ? [['fluxo', 'Proposta'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['voz', 'Voz & Persona'], ['criacao', 'Criação & Prompts'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo']]
-    : [['fluxo', 'Fluxo'], ['geral', 'Dados Gerais'], ['visual', 'Identidade Visual'], ['produtos', 'Produtos & Serviços'], ['influencers', 'Influencers'], ['events', 'Eventos'], ['voz', 'Voz & Persona'], ['video', 'Vídeo'], ['criacao', 'Criação & Prompts'], ['conexoes', 'Conexões'], ['concorrentes', 'Concorrentes'], ['gerar', 'Gerar Conteúdo'], ['acesso', 'Acesso & Funções']];
+  // MESMAS chaves de tab de antes — só a forma de exibir muda
+  const allowed = prospectMode
+    ? ['fluxo', 'geral', 'visual', 'produtos', 'voz', 'criacao', 'concorrentes', 'gerar']
+    : ['fluxo', 'geral', 'visual', 'produtos', 'influencers', 'events', 'voz', 'video', 'criacao', 'conexoes', 'concorrentes', 'gerar', 'acesso'];
+  const groups = cliSectionsFor(allowed, prospectMode ? { fluxo: 'Proposta' } : null);
+  const readiness = computeBrandReadiness(company, prodCount == null ? null : new Array(prodCount));
+  const secStatus = cliSectionStatus(readiness);
 
-  return <div className="panel stack">
-    <FlowHead icon="building" title={company.name || 'Cliente'}
-      sub={[company.segment, company.site_url].filter(Boolean).join(' · ') || 'Cadastro do cliente'}
-      right={<div className="row" style={{ gap: 6 }}>
-        <Pill kind={stage.kind || 'cy'} dot>{stage.label}</Pill>
-        <button className="btn sm ghost" onClick={delCompany} title="Excluir empresa"><Icon name="trash" /></button>
-      </div>} />
+  return <ClientHero company={company} stage={stage} onBack={onBack}
+    right={<>
+      <button className="btn sm pri" onClick={() => openContentForCompany(company)}><Icon name="bolt" />Gerar conteúdo</button>
+      <button className="btn sm ghost" onClick={delCompany} title="Excluir empresa"><Icon name="trash" /></button>
+    </>}>
+    <div className="panel"><BrandReadiness readiness={readiness} onGo={setTab} /></div>
     <CompanyLifecycleBanner company={company} onSaved={async () => {
       const refreshed = await load(true);
       if (onSaved) await onSaved(true);
@@ -316,9 +339,9 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
     }} />
     <CompanyEnrichmentPanel company={company} onRefresh={load} onReview={() => setTab('visual')} />
     {refreshError && <Callout kind="danger" icon="x">{refreshError}</Callout>}
-    <div className="tabbar">
-      {tabs.map(([k, l]) => <button key={k} className={'tabx' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>)}
-    </div>
+    <div className="cli-body">
+      <SectionNav groups={groups} value={tab} onChange={setTab} status={secStatus} />
+      <div className="cli-pane">
     {tab === 'fluxo' && (prospectMode ? <CompanyProspectFlow company={company} onSaved={load} /> : <CompanyFluxo company={company} onSaved={load} />)}
     {tab === 'acesso' && !prospectMode && <CompanyAcesso company={company} onSaved={load} />}
     {tab === 'geral' && <CompanyGeral company={company} onSaved={load} />}
@@ -332,7 +355,9 @@ function CompanyDetail({ companyId, onSaved, onDeleted }) {
     {tab === 'conexoes' && !prospectMode && <CompanyConexoes company={company} />}
     {tab === 'concorrentes' && <CompanyConcorrentes company={company} onSaved={load} />}
     {tab === 'gerar' && <CompanyGerar company={company} />}
-  </div>;
+      </div>
+    </div>
+  </ClientHero>;
 }
 
 function openContentForCompany(company) {

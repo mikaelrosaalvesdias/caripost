@@ -255,6 +255,10 @@ function CriacaoApp() {
   const [frames, setFrames] = React.useState([]);
   const [frameSel, setFrameSel] = React.useState(0);
   const [loading, setLoading] = React.useState(true);
+  const [net, setNet] = React.useState('Instagram');
+  const [title, setTitle] = React.useState('');
+  const [desc, setDesc] = React.useState('');
+  const NET_MAX = { Instagram: 2200, Facebook: 63206, TikTok: 2200 };
 
   React.useEffect(() => {
     if (!window.mpApi) return;
@@ -279,6 +283,10 @@ function CriacaoApp() {
     try {
       const d = await window.mpApi.getRun(run.id);
       setDetail(d);
+      const g = (d.result || {}).grok || {};
+      const sg = (d.result || {}).suggested || {};
+      setTitle(g.title || '');
+      setDesc(g.description || sg.description_template || '');
       window.mpApi.getRunFrames(run.id).then(f => setFrames(f || [])).catch(() => {});
     } catch (_) {}
   }
@@ -294,44 +302,74 @@ function CriacaoApp() {
         sub="Monta o post final: capa, título, descrição e tags — a partir de um run analisado."
         right={sel ? <Pill kind="cy" dot>{(sel.snip || sel.id || '').slice(0, 28)}</Pill> : null} />
     </div>
-    <div style={{ display: 'grid', gridTemplateColumns: '250px 1fr', borderTop: '1px solid var(--line)', flex: 1, minHeight: 0 }}>
-      <div style={{ borderRight: '1px solid var(--line)', padding: 14, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', maxHeight: 540 }}>
-        <div className="sec mut" style={{ marginBottom: 2 }}>Runs</div>
-        {loading && <SkeletonRows rows={4} />}
-        {!loading && !runs.length && <EmptyState icon="layers" title="Nenhum run ainda">Analise um vídeo no app Analisar para ele aparecer aqui.</EmptyState>}
-        {runs.map(r => <button key={r.id} className="panel" style={{ padding: 8, textAlign: 'left', borderColor: sel?.id === r.id ? 'var(--pri-line)' : undefined, cursor: 'pointer' }} onClick={() => _select(r)}>
-          <div style={{ fontFamily: 'var(--fm)', fontSize: 10.5, color: 'var(--muted)' }}>{r.id.slice(0, 8)}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.snip}</div>
-        </button>)}
+    <div className="cri">
+      {/* LISTA DE RUNS */}
+      <div className="cri-list">
+        <div className="cri-list-h">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="sec mut" style={{ margin: 0 }}>Runs analisados</span>
+            <Pill kind="cy">{runs.length}</Pill>
+          </div>
+        </div>
+        <div className="cri-list-b">
+          {loading && <SkeletonRows rows={4} />}
+          {!loading && !runs.length && <EmptyState icon="layers" title="Nenhum run ainda">
+            Analise um vídeo no app <b>Analisar</b> para ele aparecer aqui.
+          </EmptyState>}
+          {runs.map(r => <RunRow key={r.id} run={r} on={sel && sel.id === r.id} onClick={() => _select(r)} />)}
+        </div>
       </div>
-      <div className="split" style={{ padding: 20, overflowY: 'auto', maxHeight: 540 }}>
-        <div className="stack">
-          <div className="sec cy">Prévia do post</div>
-          <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ aspectRatio: '16/9', position: 'relative', background: '#000' }}>
-              {frames[frameSel]
-                ? <img loading="lazy" decoding="async" src={frameSrc(frames[frameSel])} alt="capa" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-                : sel?.video_object_key ? <RealThumb objectKey={sel.video_object_key} /> : null}
+
+      {/* COMPOSIÇÃO */}
+      <div className="cri-main">
+        <div className="cri-scroll">
+          <div className="stack">
+            <div className="sec cy">Prévia do post</div>
+            <PostPreview net={net}
+              cover={frames[frameSel] ? frameSrc(frames[frameSel]) : null}
+              title={title} desc={desc} tags={(sug.tags || [])}
+              empty={frames.length ? null : 'Este run não tem frames extraídos'} />
+          </div>
+          <div className="stack">
+            <Field label="Rede de destino">
+              <Segmented value={net} onChange={setNet}
+                options={[['Instagram', 'Instagram'], ['Facebook', 'Facebook'], ['TikTok', 'TikTok']]} />
+            </Field>
+            <Field label="Escolher capa">
+              {frames.length
+                ? <CoverPicker frames={frames} value={frameSel} onChange={setFrameSel} srcOf={frameSrc} />
+                : <EmptyState icon="image" title="Sem frames extraídos">
+                    A análise deste run não gerou frames. Reprocesse no app Analisar.
+                  </EmptyState>}
+            </Field>
+            <div>
+              <Field label="Título"><input className="inp" value={title} onChange={e => setTitle(e.target.value)} /></Field>
+              <CharCount value={title} max={150} />
             </div>
-            <div style={{ padding: 16 }}>
-              <b style={{ fontFamily: 'var(--fh)', fontSize: 15 }}>{grok.title || sel?.snip || 'Sem título'}</b>
-              <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '8px 0 12px', lineHeight: 1.5, maxHeight: 80, overflow: 'auto' }}>{grok.description || sug.description_template || 'Sem descrição gerada.'}</p>
-              <div className="rowx" style={{ flexWrap: 'wrap' }}>{(sug.tags || []).slice(0, 8).map(t => <span key={t} className="chip tag">#{t}</span>)}</div>
+            <div>
+              <Field label="Descrição"><textarea className="inp" rows="5" value={desc} onChange={e => setDesc(e.target.value)} /></Field>
+              <CharCount value={desc} max={NET_MAX[net] || 2200} />
             </div>
           </div>
         </div>
-        <div className="stack">
-          {frames.length > 0 && <Field label="Escolher capa"><div className="thumbs">{frames.slice(0, 8).map((f, i) =>
-            <div key={i} className={'thumb' + (i === frameSel ? ' sel' : '')} onClick={() => setFrameSel(i)}>
-              <img loading="lazy" decoding="async" src={frameSrc(f)} alt={'f' + i} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-            </div>)}</div></Field>}
-          <Field label="Título"><input className="inp" defaultValue={grok.title || ''} key={sel?.id + '_t'} /></Field>
-          <Field label="Descrição"><textarea className="inp" rows="3" defaultValue={grok.description || sug.description_template || ''} key={sel?.id + '_d'} /></Field>
-          <div className="rowx" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn" disabled={!sel} onClick={() => { window.mpCtx.file = { object_key: sel.video_object_key, n: sel.snip, run_id: sel.id }; window.__mpOpen && window.__mpOpen('teaser'); }}><Icon name="scissors" />Gerar teaser</button>
-            <button className="btn" disabled={!sel} onClick={() => { window.mpCtx.file = { object_key: sel.video_object_key, n: sel.snip, run_id: sel.id }; window.__mpOpen && window.__mpOpen('legenda'); }}><Icon name="captions" />Queimar legenda</button>
-            <button className="btn pri" disabled={!sel} onClick={() => { window.mpCtx.file = { object_key: sel.video_object_key, n: sel.snip, run_id: sel.id }; window.__mpOpen && window.__mpOpen('publisher'); }}><Icon name="broadcast" />Publicar</button>
-          </div>
+
+        {/* AÇÕES — preparo à esquerda, Publicar como ação final */}
+        <div className="cri-actions">
+          <span className="ca-steps">
+            <Icon name="check" />run analisado
+            <Icon name="chevR" />{frames.length ? 'capa ' + (frameSel + 1) : 'sem capa'}
+            <Icon name="chevR" />{net}
+          </span>
+          <button className="btn" disabled={!sel} onClick={() => { window.mpCtx.file = { object_key: sel.video_object_key, n: sel.snip, run_id: sel.id }; window.__mpOpen && window.__mpOpen('teaser'); }}>
+            <Icon name="scissors" />Gerar teaser
+          </button>
+          <button className="btn" disabled={!sel} onClick={() => { window.mpCtx.file = { object_key: sel.video_object_key, n: sel.snip, run_id: sel.id }; window.__mpOpen && window.__mpOpen('legenda'); }}>
+            <Icon name="captions" />Queimar legenda
+          </button>
+          <span className="ca-sep" />
+          <button className="btn pri" disabled={!sel} onClick={() => { window.mpCtx.file = { object_key: sel.video_object_key, n: sel.snip, run_id: sel.id }; window.__mpOpen && window.__mpOpen('publisher'); }}>
+            <Icon name="broadcast" />Publicar
+          </button>
         </div>
       </div>
     </div>

@@ -534,6 +534,13 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.127', date: '2026-09-02',
+    items: [
+      { type: 'feat', text: 'Cadastro do cliente: as 13 abas viraram uma navegação lateral em 5 grupos, o cadastro ocupa a janela inteira e há um anel de completude mostrando o que falta para a marca poder gerar conteúdo.' },
+      { type: 'feat', text: 'App Criação: lista de runs com miniatura, duração e data; escolha de capa com marca de seleção; rede de destino na prévia; contador de caracteres; e Publicar separado dos passos de preparo.' },
+    ],
+  },
+  {
     version: 'v1.27.124', date: '2026-09-01',
     items: [
       { type: 'fix', text: 'Nenhuma tela do app usa mais as caixas de diálogo do navegador: confirmações, avisos e pedidos de texto agora acontecem dentro do Caripost, com o visual do app.' },

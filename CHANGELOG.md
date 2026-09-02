@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.127 - 2026-09-02
+
+- **feat(clientes): cadastro com navegação lateral e completude de marca.** As 13 abas viraram 5 grupos numa lateral (Essencial para a IA · Oferta · Produção · Relacionamento · Operação) com pontinho de estado por seção; o cadastro passa a ocupar a janela inteira, com `← Todas as empresas`, em vez de expandir embaixo da linha da lista. No topo, anel de completude mostrando o que falta para a marca poder gerar conteúdo (logo, cores, tom de voz, produto), com chips clicáveis que levam direto à seção.
+- **feat(criacao): app Criação legível.** Runs com thumb, duração e data em vez de hash cru; seletor de capa com marca de seleção; rede de destino visível na prévia; contador de caracteres por rede; e as ações separadas — preparo (teaser, legenda) à esquerda, `Publicar` como ação final.
+- **chore(os):** `os-patch2.css` anexado ao `os.css` e novo `app/os/ui-cadastro.jsx` (patch v2 do designer). Chaves de `tab`, componentes de aba, rotas e nomes de campo inalterados.
+- Versao: main.py/UI/OS 1.27.127, cache bust OS `v=127127`.
+
 ## v1.27.126 - 2026-09-02
 
 - **fix(os): o que faltava do patch do designer.** A demo do patch tem `<FlowHead>` nos **5 passos** do fluxo e usa `<ArtCard>` nas artes — antes só o Briefing tinha cabeçalho e o `ArtCard` nunca foi ligado. Agora: Marca-alvo, Briefing, Artes geradas, Fila de aprovação e Agendamento têm cabeçalho, e as telas do carrossel saem em `.art-grid` com `<ArtCard>` (selo de status, ações em ícone no hover).
