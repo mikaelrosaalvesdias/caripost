@@ -296,7 +296,10 @@ function CriacaoApp() {
   const grok = res.grok || {};
   const frameSrc = window.frameSrc;
 
-  return <div className="app" style={{ padding: 0 }}>
+  // height:100% — o corpo da janela é `block` com altura definida; sem isto o .app
+  // cresce com o conteúdo, o .cri-scroll não rola por dentro e a barra de ações
+  // (Publicar) sai para fora da janela.
+  return <div className="app" style={{ padding: 0, height: '100%', minHeight: 0 }}>
     <div style={{ padding: '22px 22px 0' }}>
       <FlowHead icon="post" title="Criação de Posts"
         sub="Monta o post final: capa, título, descrição e tags — a partir de um run analisado."

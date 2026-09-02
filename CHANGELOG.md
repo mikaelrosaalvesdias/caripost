@@ -2,6 +2,11 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.128 - 2026-09-02
+
+- **fix(criacao): barra de ações fica dentro da janela.** O `.cri` do patch v2 depende de uma cadeia de altura limitada, mas o corpo da janela do OS é `display:block` — o `.app` crescia com o conteúdo (1428px numa janela de 682px), o `.cri-scroll` não rolava por dentro e o `Publicar` caía para fora. O `.app` do app Criação passa a ocupar 100% do corpo da janela.
+- Versao: main.py/UI/OS 1.27.128, cache bust OS `v=127128`.
+
 ## v1.27.127 - 2026-09-02
 
 - **feat(clientes): cadastro com navegação lateral e completude de marca.** As 13 abas viraram 5 grupos numa lateral (Essencial para a IA · Oferta · Produção · Relacionamento · Operação) com pontinho de estado por seção; o cadastro passa a ocupar a janela inteira, com `← Todas as empresas`, em vez de expandir embaixo da linha da lista. No topo, anel de completude mostrando o que falta para a marca poder gerar conteúdo (logo, cores, tom de voz, produto), com chips clicáveis que levam direto à seção.
