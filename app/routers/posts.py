@@ -719,23 +719,6 @@ def offer_catalog(request: Request, company_id: str = ""):
     return {"target_company_id": str(company_id), "catalogs": catalogs}
 
 
-@router.get("/{post_id}")
-def get_post(post_id: str, request: Request):
-    err = _api_key_required(request)
-    if err:
-        return err
-    post = post_get(post_id)
-    if not post:
-        return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
-    denied = __cad__(request, post.get("company_id"))
-    if denied:
-        return denied
-    denied = __cad__(request, post.get("company_id"))
-    if denied:
-        return denied
-    return {"post": post}
-
-
 @router.post("")
 async def create_post(request: Request):
     err = _api_key_required(request)
@@ -1561,8 +1544,61 @@ async def edit_art(request: Request):
     return {"ok": True, "url": new_url, "cost_usd": round(cost or 0.0, 4)}
 
 
+_RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
 @router.post("/render-carousel")
 async def render_carousel(request: Request):
+    """Com {"async_job": true} devolve {job_id} na hora e renderiza em segundo plano (GET /render-job/{id}).
+    Necessário porque o Cloudflare corta requisições > 100s (524) e o Estúdio IA leva minutos —
+    o servidor terminava o carrossel mas o navegador nunca recebia o resultado."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    body = await request.json()
+    if not body.pop("async_job", False):
+        return await _render_carousel_sync(request)
+    import asyncio, json, time, uuid
+    now = time.time()
+    for _k in [k for k, v in _RENDER_JOBS.items() if now - v.get("t", now) > 6 * 3600]:
+        _RENDER_JOBS.pop(_k, None)
+    job_id = uuid.uuid4().hex
+    job = {"status": "running", "company_id": str(body.get("company_id") or ""), "t": now}
+    _RENDER_JOBS[job_id] = job
+
+    async def _run():
+        try:
+            res = await _render_carousel_sync(request)
+            if isinstance(res, JSONResponse):
+                job.update(status="error", http_status=res.status_code, result=json.loads(res.body or b"{}"))
+            else:
+                job.update(status="done", result=res)
+        except Exception as exc:
+            job.update(status="error", http_status=500, result={"detail": str(exc)})
+
+    job["task"] = asyncio.create_task(_run())   # guarda a referência (senão o GC pode matar a task)
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/render-job/{job_id}")
+def render_job_status(job_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    job = _RENDER_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"detail": "Job de renderização não encontrado (servidor reiniciou?). Veja o rascunho em Arquivos/Acervo."}, status_code=404)
+    denied = __cad__(request, job.get("company_id")) if job.get("company_id") else None
+    if denied:
+        return denied
+    out = {"job_id": job_id, "status": job["status"]}
+    if job["status"] != "running":
+        out["result"] = job.get("result")
+        out["http_status"] = job.get("http_status", 200)
+    return out
+
+
+async def _render_carousel_sync(request: Request):
     """Renderiza um conjunto de TELAS (vindas do plano do briefing) em imagens, com a identidade
     da marca. model vazio/'editorial' = só tipografia (grátis); senão gera um fundo por IA (híbrido)."""
     err = _api_key_required(request)
@@ -3443,3 +3479,21 @@ async def generate_trends_report(company_id: str, request: Request):
         return {"report": report}
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=500)
+
+
+# Rota coringa GET /{post_id} fica no FIM: registrada antes, ela engolia /image-templates e /video-status (404 "Post não encontrado").
+@router.get("/{post_id}")
+def get_post(post_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    post = post_get(post_id)
+    if not post:
+        return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
+    return {"post": post}

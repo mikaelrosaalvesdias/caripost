@@ -1384,8 +1384,25 @@
       const r = await mpFetch('/api/posts/offer-catalog?company_id=' + _enc(companyId || ''));
       return r.catalogs || [];
     },
+    // Job + polling: o Cloudflare corta requisições > 100s (524) e o Estúdio IA leva minutos.
     async renderCarousel(payload) {
-      return mpFetch('/api/posts/render-carousel', { method: 'POST', body: JSON.stringify(payload) });
+      const start = await mpFetch('/api/posts/render-carousel', { method: 'POST', body: JSON.stringify({ ...payload, async_job: true }) });
+      if (!start || !start.job_id) return start;   // backend antigo: resposta direta
+      let netErrors = 0;
+      for (let i = 0; i < 360; i++) {   // até ~30 min
+        await new Promise(r => setTimeout(r, 5000));
+        let st;
+        try { st = await mpFetch('/api/posts/render-job/' + _enc(start.job_id)); netErrors = 0; }
+        catch (e) { if (e.status === 404 || e.message === 'unauthorized' || ++netErrors > 6) throw e; continue; }
+        if (st.status === 'done') return st.result || {};
+        if (st.status === 'error') {
+          const r = st.result || {};
+          const error = new Error(r.detail || r.error || 'Falha na renderização');
+          error.status = st.http_status; error.data = r;
+          throw error;
+        }
+      }
+      throw new Error('A renderização passou de 30 min. Confira o rascunho em Arquivos/Acervo.');
     },
     async imageTemplates(companyId, type) {
       return mpFetch('/api/posts/image-templates?company_id=' + _enc(companyId || '') + '&type=' + _enc(type || 'carrossel')).catch(() => ({ templates: [] }));

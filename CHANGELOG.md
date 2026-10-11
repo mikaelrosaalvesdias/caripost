@@ -2,6 +2,12 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.133 - 2026-10-10
+
+- Fix: gerar carrossel/post (Estúdio IA) voltava a funcionar. A geração leva minutos e o Cloudflare corta requisições com mais de 100s — o servidor terminava as imagens mas a tela nunca recebia. Agora `render-carousel` roda como job (`async_job` → `GET /api/posts/render-job/{id}`) e o app acompanha até ficar pronto.
+- Fix: `GET /api/posts/image-templates` e `/video-status` davam 404 "Post não encontrado" (engolidos pela rota `GET /{post_id}`, agora movida pro fim).
+- Fix: "Publicar agora" não marca mais o post como PUBLICADO antes de saber o resultado; espera a rede responder e mostra o erro real (ex.: conexão do Instagram expirada → reconectar).
+
 ## v1.27.132 - 2026-09-02
 
 - **feat(clientes): passos 5 e 6 do patch v2 — padrão de formulário.** `Dados Gerais` e `Voz & Persona` viraram `<ClientSection>` com obrigatórios em duas colunas, opcionais recolhidos em `<OptionalFields>` e `<SaveBar>` no rodapé. `Identidade Visual` ganhou faixas `<DenseBar>` com contagem (Logos, Paleta) e `Produtos & Serviços` virou árvore `<CatalogNode>`; estados vazios de logos, paleta, referências, grupos, produtos e ofertas vinculadas agora usam `<EmptyState>`.

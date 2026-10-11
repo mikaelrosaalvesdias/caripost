@@ -209,7 +209,8 @@ function PublisherApp() {
       try {
         const r = await window.mpApi.socialPostStatus(postId);
         const st = r.post?.status || '';
-        setSocialMsg('Status social: ' + st);
+        const errs = (r.post?.channels || []).filter(c => c.error_message).map(c => c.platform + ': ' + c.error_message);
+        setSocialMsg((st === 'failed' || st === 'partial_failed' ? 'Erro: ' : '') + 'Status social: ' + st + (errs.length ? ' — ' + errs.join(' · ') : ''));
         if (['published', 'failed', 'partial_failed', 'cancelled'].includes(st)) {
           clearInterval(socialPollRef.current);
           socialPollRef.current = null;

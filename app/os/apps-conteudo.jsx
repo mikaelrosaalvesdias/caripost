@@ -1926,12 +1926,28 @@ function StepAgenda({ company }) {
       const isCarousel = meta.content_type === 'carousel' && Array.isArray(meta.carousel_urls) && meta.carousel_urls.length > 1;
       const abs = toAbs(p.media_url);
       const assetUrls = isCarousel ? meta.carousel_urls.map(toAbs).filter(Boolean) : (abs ? [abs] : []);
-      await window.mpApi.socialCreatePost({
+      const created = await window.mpApi.socialCreatePost({
         brandId: company.id, sourcePostId: p.id, channels,
         assetUrls,
         contentType: isCarousel ? 'carousel' : (meta.content_type === 'story' ? 'story' : contentType(p)), scheduledAt: scheduledAt || null,
         collaborators: curCollabs(p),               // COLLAB: lista editável (influencer + quem você adicionar)
       });
+      // "Publicar agora" roda em segundo plano no servidor: espera o resultado REAL antes de marcar publicado.
+      const sid = created && created.post && created.post.id;
+      if (!scheduledAt && sid) {
+        let sp = null;
+        for (let i = 0; i < 60; i++) {   // até ~4 min
+          await new Promise(r => setTimeout(r, 4000));
+          try { sp = (await window.mpApi.socialPostStatus(sid)).post; } catch (_) { continue; }
+          if (sp && ['published', 'failed', 'partial_failed', 'cancelled'].includes(sp.status)) break;
+        }
+        if (!sp || sp.status !== 'published') {
+          const errs = ((sp && sp.channels) || []).filter(c => c.error_message).map(c => c.platform + ': ' + c.error_message);
+          const expired = errs.some(m => /expired|expirad|revogad|access token/i.test(m));
+          throw new Error((expired ? 'A conexão com a rede expirou — reconecte o Instagram/Facebook no cadastro do cliente. ' : 'O post NÃO foi publicado. ')
+            + (errs.join(' · ') || ('status: ' + ((sp && sp.status) || 'sem resposta'))));
+        }
+      }
       try {
         if (scheduledAt) {
           if (window.mpApi.updatePost) await window.mpApi.updatePost(p.id, { scheduled_at: scheduledAt });
