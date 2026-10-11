@@ -1,0 +1,112 @@
+{
+  "_fonte": "apresentacoes.cariap.com.br (/opt/links/docs/apps: PDFs + logos) + disparador (cariap-negocio.json: preços B2C do FAQ comercial)",
+  "produtos": [
+    {"key": "zapping", "name": "Zapping", "category": "TV ao vivo por streaming",
+     "colors": {"primary": "#EF426F", "secondary": "#40071B", "accent": "#1A030B"},
+     "description": "TV ao vivo pela internet: canais abertos e fechados em HD, replay de até 7 dias, Modo Turbo (menor atraso), Modo Esportes e até 5 telas simultâneas. App próprio para Smart TV (LG, Samsung, Android TV), Roku, Chromecast, Apple TV, Fire Stick, celular e web.",
+     "objective": "Levar a experiência de TV por assinatura completa para o cliente do provedor, sem antena nem decodificador.",
+     "functions": ["Canais ao vivo em HD", "Replay de até 7 dias", "Modo Turbo (menor atraso)", "Modo Esportes com estatísticas", "Até 5 telas simultâneas", "Chromecast, Smart TV, Roku, Apple TV, Fire Stick"],
+     "plans": [
+       {"name": "Zapping Full", "description": "Pacote completo de canais ao vivo. Preço de referência B2C: R$ 89,90/mês (preço dinâmico definido pela fornecedora).", "features": ["Grade completa de canais abertos e fechados", "Replay de 7 dias e Modo Turbo", "5 telas simultâneas", "Aceita conteúdos adicionais (Premiere, Telecine, Combate, Adultos, Nosso Futebol+)"]},
+       {"name": "Zapping Lite+", "description": "Pacote de entrada da Zapping. Preço de referência B2C: R$ 19,90/mês (preço dinâmico definido pela fornecedora).", "features": ["Canais ao vivo essenciais em HD", "Mesmo app e recursos da Zapping", "Aceita conteúdos adicionais (Premiere, Telecine, Combate, Adultos, Nosso Futebol+)"]}
+     ],
+     "solutions": [
+       {"name": "Premiere", "logo": "addon/premiere.png", "colors": {"primary": "#1E1530", "secondary": "#FFFFFF", "accent": "#EF426F"}, "description": "Conteúdo adicional Zapping: inclui 8 canais Premiere — transmissão do Brasileirão Séries A e B, Copa do Brasil e dos principais estaduais."},
+       {"name": "Telecine", "logo": "addon/telecine.png", "colors": {"primary": "#1E1530", "secondary": "#FFFFFF", "accent": "#EF426F"}, "description": "Conteúdo adicional Zapping: inclui 6 canais Telecine — os canais das superestreias e das maiores bilheterias do cinema."},
+       {"name": "Combate", "logo": "addon/combate.png", "colors": {"primary": "#1E1530", "secondary": "#FFFFFF", "accent": "#EF426F"}, "description": "Conteúdo adicional Zapping: canal 100% de luta, voltado para os amantes das artes marciais."},
+       {"name": "Canais Adultos", "logo": "addon/adultos.png", "colors": {"primary": "#1E1530", "secondary": "#FFFFFF", "accent": "#EF426F"}, "description": "Conteúdo adicional Zapping: inclui Playboy TV, Venus, Sextreme e Sexy Hot."},
+       {"name": "Nosso Futebol+", "logo": "addon/nosso-futebol.png", "colors": {"primary": "#1E1530", "secondary": "#FFFFFF", "accent": "#EF426F"}, "description": "Conteúdo adicional Zapping: transmissão da Copa do Nordeste e 8 jogos por rodada do Brasileirão Série C."}
+     ],
+     "logo": "zapping", "kb": "zapping"},
+
+    {"key": "e-saude", "name": "E-Saúde", "plans": [
+       {"name": "Telemedicina 24h", "description": "Atendimento imediato com clínico geral e pediatra, 24 horas por dia, 7 dias por semana. Sem limite de uso, acesso via app ou web, sem fila. O usuário não paga por consulta, só a mensalidade.", "features": ["Clínico geral e pediatra 24h, 7 dias", "Sem limite de uso", "Atendimento em até 9 minutos", "Acesso com CPF + data de nascimento", "Receita oficial com CRM e QR Code"]},
+       {"name": "Clínica Online Essencial", "description": "Cuidado completo para você e sua família, onde estiver: 2 agendamentos por mês com especialidades + telemedicina 24h ilimitada, apoio à NR-1 (saúde física e mental).", "features": ["2 especialidades agendadas por mês (sem retorno)", "Telemedicina 24h ilimitada (clínico e pediatra)", "5 especialidades: Dermatologia, Psicologia, Psiquiatria, Nutrição, Endocrinologia", "Apoio à NR-1: saúde física e mental"]},
+       {"name": "Clínica Online Individual", "description": "2 consultas por mês com especialistas (23 especialidades), com direito a um retorno por consulta, agendamento prático em um só link e telemedicina ilimitada. Ideal para cuidados contínuos, diagnósticos precisos e prevenção.", "features": ["2 consultas por mês com retorno", "23 especialidades médicas", "Atendimento humanizado com agendamento", "Telemedicina ilimitada"]},
+       {"name": "Clínica Online Familiar", "description": "Inclui titular, cônjuge e 3 filhos de até 21 anos: 5 consultas por mês com especialistas (23 especialidades), retorno por consulta e telemedicina ilimitada. Ideal para cuidar da família.", "features": ["Titular + cônjuge + 3 filhos até 21 anos", "5 consultas por mês com retorno", "23 especialidades médicas", "Telemedicina ilimitada"]}
+     ]},
+
+    {"key": "ayabooks", "name": "Aya Books", "category": "Leitura digital (ebooks e audiobooks)",
+     "colors": {"primary": "#0E1255", "secondary": "#29B0B3", "accent": "#358199"},
+     "description": "Biblioteca digital da AYA: 1 best-seller por mês para ler onde e quando quiser (Android e iOS), leitura off-line, leitura em voz alta (TTS) e audiobooks de Minibooks. Acervo com +2.117 ebooks e +500 livros gratuitos, curadoria de best-sellers (Veja, Amazon) e +250 editoras. Nota 4,7/5 nas lojas.",
+     "objective": "Dar ao assinante do provedor um benefício de leitura de alto valor percebido, com otimização tributária (SVA, alíquota 0%).",
+     "functions": ["1 best-seller por mês (com troca)", "Leitura off-line", "Leitura em voz alta (TTS)", "Audiobooks de Minibooks", "Estante e personalização de leitura"],
+     "plans": [
+       {"name": "Aya Books — Ebooks", "description": "1 best-seller por mês em ebook: escolha o livro do mês seguinte, leia off-line e quantas vezes quiser, com leitura em voz alta.", "features": ["1 best-seller por mês", "Troca por outro best-seller do acervo", "Leitura off-line, sem consumir internet", "Leitura em voz alta (TTS)"]},
+       {"name": "Aya Books — Audiobooks", "description": "Minibooks em áudio: ouça no seu ritmo, com audiobooks de Minibooks e leitura em voz alta.", "features": ["Audiobooks de Minibooks", "Ouça no seu ritmo", "App Android e iOS"]}
+     ],
+     "logo": "ayabooks", "kb": "ayabooks"},
+
+    {"key": "bancah", "name": "Aya Bancah", "category": "Revistas e jornais digitais",
+     "colors": {"primary": "#0E1B20", "secondary": "#0EADCF", "accent": "#236372"},
+     "description": "Suas revistas e jornais favoritos onde e quando quiser: marca-páginas, multiplataforma (smartphone, tablet e computador), índice, busca por tema, download off-line e favoritos.",
+     "objective": "Benefício de informação e entretenimento para o assinante do provedor.",
+     "functions": ["Principais revistas e jornais", "Download off-line e favoritos", "Busca por tema e índice", "Smartphone, tablet e computador"],
+     "logo": "bancah", "kb": "bancah"},
+
+    {"key": "ensinah", "name": "Aya Ensinah", "category": "Educação (complemento escolar)",
+     "colors": {"primary": "#4340E9", "secondary": "#847AEB", "accent": "#CF3F8C"},
+     "description": "App de complemento escolar com apostilas digitais do Ensino Fundamental ao Médio, agenda e controle de tempo de estudo, cards de estudo e cronômetro pomodoro.",
+     "objective": "Benefício educacional para as famílias assinantes do provedor.",
+     "functions": ["Apostilas digitais do Fundamental ao Médio", "Agenda e controle de tempo de estudo", "Cards de estudo", "Cronômetro pomodoro"],
+     "logo": "ensinah", "kb": "ensinah"},
+
+    {"key": "deezer", "name": "Deezer", "plans": [
+       {"name": "Deezer Premium", "description": "Streaming de música sem anúncios, com mais de 120 milhões de faixas. Preço de referência B2C: R$ 24,90/mês (preço dinâmico definido pela fornecedora).", "features": ["120 milhões de músicas", "Sem anúncios", "Modo off-line"]}
+     ]},
+    {"key": "looke", "name": "Looke", "plans": [
+       {"name": "Looke Mensal", "description": "Streaming brasileiro de filmes e séries, com Looke Kids para o público infantil. Preço de referência B2C: R$ 16,90/mês (preço dinâmico definido pela fornecedora).", "features": ["Filmes e séries", "Looke Kids: entretenimento infantil seguro", "Para toda a família"]}
+     ]},
+    {"key": "exitlag", "name": "ExitLag", "plans": [
+       {"name": "ExitLag Mensal", "description": "Otimização de conexão para jogos online: menos lag e ping estável. Preço de referência B2C: R$ 19,99/mês (preço dinâmico definido pela fornecedora).", "features": ["Menos lag e perda de pacotes", "Rotas otimizadas para jogos", "Exclusividade por ASN do provedor"]}
+     ]},
+
+    {"key": "exacloud", "name": "Exa Cloud", "category": "Armazenamento em nuvem",
+     "colors": {"primary": "#0048C7", "secondary": "#7DA1DF", "accent": "#FFFFFF"},
+     "description": "A maneira mais segura de guardar fotos, vídeos, músicas, agenda, contatos e arquivos na nuvem, com compartilhamento fácil.",
+     "objective": "Benefício de segurança e praticidade para o assinante do provedor.",
+     "functions": ["Backup de fotos e vídeos", "Músicas, agenda e contatos", "Compartilhamento de arquivos"],
+     "logo": "exacloud", "kb": "exacloud"},
+    {"key": "exaseguranca", "name": "Exa Segurança", "category": "Segurança digital",
+     "colors": {"primary": "#0148C8", "secondary": "#83A4DF", "accent": "#FFFFFF"},
+     "description": "Navegue sem preocupação: antivírus, navegador seguro, QR Code seguro, VPN, proteção de apps com senha e monitoramento 24h.",
+     "objective": "Proteção digital para a família do assinante do provedor.",
+     "functions": ["Antivírus", "Navegador seguro e VPN", "QR Code seguro", "Proteção de apps com senha", "Monitoramento 24h"],
+     "logo": "exaseguranca", "kb": "exaseguranca"},
+    {"key": "exagestao", "name": "Exa Gestão Digital", "category": "Segurança e localização familiar",
+     "colors": {"primary": "#457ACF", "secondary": "#E1E8F1", "accent": "#0148C8"},
+     "description": "Gestão Digital: você conectado, informado e protegido — áreas seguras, localização em tempo real e grupos só para convidados, com linha do tempo de paradas e caminhos.",
+     "objective": "Segurança e tranquilidade para famílias assinantes do provedor.",
+     "functions": ["Localização em tempo real", "Áreas seguras", "Grupos só para convidados", "Linha do tempo de paradas"],
+     "logo": "exagestao", "kb": "exagestao"},
+
+    {"key": "superconhecimento", "name": "Super Conhecimento", "category": "Cursos online com certificado",
+     "colors": {"primary": "#FFC702", "secondary": "#7C6127", "accent": "#000000"},
+     "description": "Portal de cursos online com certificado (horas complementares): Pacote Completo com mais de 300 cursos de diversas áreas.",
+     "objective": "Benefício educacional que fideliza e reduz inadimplência.",
+     "functions": ["+300 cursos", "Certificado de horas complementares", "Diversas áreas"],
+     "plans": [
+       {"name": "Super Conhecimento Básico", "description": "Pacote Completo de cursos online com certificado. Preço de referência B2C: R$ 29,90/mês (preço dinâmico definido pela fornecedora).", "features": ["+300 cursos", "Certificados"]}
+     ],
+     "logo": "superconhecimento", "kb": "superconhecimento"},
+
+    {"key": "braz-movel", "name": "Braz Móvel", "category": "Telefonia móvel (MVNO)",
+     "colors": {"primary": "#FFD323", "secondary": "#FFE26B", "accent": "#1A1A1A"},
+     "description": "Operação móvel (MVNO) para provedores oferecerem planos de celular com a própria marca — pioneira no mercado de MVNOs no Brasil.",
+     "objective": "Permitir que o provedor venda serviço móvel e aumente receita e fidelização.",
+     "functions": ["Plano de celular com a marca do provedor", "Combo internet + móvel"],
+     "logo": "braz-movel", "kb": "braz-movel"},
+    {"key": "nik", "name": "Nik", "category": "Nutrição e saúde (IA)",
+     "colors": {"primary": "#271843", "secondary": "#C9EA4A", "accent": "#FFFFFF"},
+     "description": "Nutrição inteligente na palma da mão: todo mês um livro digital de saúde, assistente com IA baseada em fontes oficiais e conteúdo mensal.",
+     "objective": "Dar valor percebido de saúde ao assinante do provedor.",
+     "functions": ["Livro digital de saúde todo mês", "Assistente com IA", "Fontes oficiais", "Plano flexível"],
+     "logo": "nik", "kb": "nik"},
+    {"key": "provider-x", "name": "Provider X", "category": "Soluções white label B2B para provedores",
+     "colors": {"primary": "#33027E", "secondary": "#1E0350", "accent": "#C9A1F5"},
+     "description": "Soluções white label para provedores (OnlineGuard, WiFi Fácil, AtendAI): uma máquina de receita B2B dentro da operação do provedor.",
+     "objective": "Gerar receita B2B recorrente para o provedor.",
+     "functions": ["OnlineGuard", "WiFi Fácil", "AtendAI"],
+     "logo": "provider-x", "kb": "provider-x"}
+  ]
+}
