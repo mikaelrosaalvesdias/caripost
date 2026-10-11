@@ -1,0 +1,209 @@
+{
+ "_doc": "Datas fixas (MM-DD) e móveis (calculadas em app/services/agency.py). 'apps' = ganchos sugeridos por produto (nome do catálogo); a IA só usa se o app existir no catálogo da empresa.",
+ "fixas": [
+  {
+   "md": "01-01",
+   "nome": "Ano Novo",
+   "apps": []
+  },
+  {
+   "md": "03-08",
+   "nome": "Dia Internacional da Mulher",
+   "apps": []
+  },
+  {
+   "md": "03-15",
+   "nome": "Dia do Consumidor",
+   "apps": []
+  },
+  {
+   "md": "03-31",
+   "nome": "Dia Mundial do Backup",
+   "apps": [
+    "Exa Cloud"
+   ]
+  },
+  {
+   "md": "04-07",
+   "nome": "Dia Mundial da Saúde",
+   "apps": [
+    "E-Saúde"
+   ]
+  },
+  {
+   "md": "04-23",
+   "nome": "Dia Mundial do Livro",
+   "apps": [
+    "Aya Books"
+   ]
+  },
+  {
+   "md": "05-01",
+   "nome": "Dia do Trabalhador",
+   "apps": []
+  },
+  {
+   "md": "05-17",
+   "nome": "Dia Mundial das Telecomunicações e da Internet",
+   "apps": []
+  },
+  {
+   "md": "06-12",
+   "nome": "Dia dos Namorados",
+   "apps": [
+    "Looke",
+    "Deezer"
+   ]
+  },
+  {
+   "md": "06-19",
+   "nome": "Dia do Cinema Brasileiro",
+   "apps": [
+    "Looke"
+   ]
+  },
+  {
+   "md": "06-24",
+   "nome": "São João / Festas Juninas",
+   "apps": [
+    "Deezer"
+   ]
+  },
+  {
+   "md": "07-13",
+   "nome": "Dia Mundial do Rock",
+   "apps": [
+    "Deezer"
+   ]
+  },
+  {
+   "md": "07-20",
+   "nome": "Dia do Amigo",
+   "apps": []
+  },
+  {
+   "md": "08-11",
+   "nome": "Dia do Estudante",
+   "apps": [
+    "Aya Ensinah",
+    "Super Conhecimento"
+   ]
+  },
+  {
+   "md": "08-29",
+   "nome": "Dia do Gamer",
+   "apps": [
+    "ExitLag"
+   ]
+  },
+  {
+   "md": "09-15",
+   "nome": "Dia do Cliente",
+   "apps": []
+  },
+  {
+   "md": "10-10",
+   "nome": "Dia Mundial da Saúde Mental",
+   "apps": [
+    "E-Saúde"
+   ]
+  },
+  {
+   "md": "10-12",
+   "nome": "Dia das Crianças",
+   "apps": [
+    "Looke",
+    "Zapping",
+    "Aya Ensinah"
+   ]
+  },
+  {
+   "md": "10-15",
+   "nome": "Dia do Professor",
+   "apps": [
+    "Super Conhecimento",
+    "Aya Ensinah"
+   ]
+  },
+  {
+   "md": "10-29",
+   "nome": "Dia Nacional do Livro",
+   "apps": [
+    "Aya Books"
+   ]
+  },
+  {
+   "md": "10-31",
+   "nome": "Halloween",
+   "apps": [
+    "Looke"
+   ]
+  },
+  {
+   "md": "11-20",
+   "nome": "Dia da Consciência Negra",
+   "apps": []
+  },
+  {
+   "md": "11-21",
+   "nome": "Dia Mundial da Televisão",
+   "apps": [
+    "Zapping"
+   ]
+  },
+  {
+   "md": "11-22",
+   "nome": "Dia do Músico",
+   "apps": [
+    "Deezer"
+   ]
+  },
+  {
+   "md": "12-25",
+   "nome": "Natal",
+   "apps": []
+  },
+  {
+   "md": "12-31",
+   "nome": "Réveillon",
+   "apps": []
+  }
+ ],
+ "moveis": [
+  {
+   "regra": "carnaval",
+   "nome": "Carnaval",
+   "apps": [
+    "Deezer"
+   ]
+  },
+  {
+   "regra": "internet_segura",
+   "nome": "Dia da Internet Segura",
+   "apps": [
+    "Exa Segurança"
+   ]
+  },
+  {
+   "regra": "maes",
+   "nome": "Dia das Mães",
+   "apps": [
+    "Aya Books",
+    "Looke"
+   ]
+  },
+  {
+   "regra": "pais",
+   "nome": "Dia dos Pais",
+   "apps": [
+    "Zapping",
+    "ExitLag"
+   ]
+  },
+  {
+   "regra": "black_friday",
+   "nome": "Black Friday",
+   "apps": []
+  }
+ ]
+}

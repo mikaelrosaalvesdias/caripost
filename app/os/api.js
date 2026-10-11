@@ -1404,6 +1404,24 @@
       }
       throw new Error('A renderização passou de 30 min. Confira o rascunho em Arquivos/Acervo.');
     },
+    /* ════════ AGÊNCIA AUTOMÁTICA (calendário editorial) ════════ */
+    async agencyConfig(companyId) { return mpFetch('/api/agency/' + _enc(companyId) + '/config'); },
+    async agencySaveConfig(companyId, agency) {
+      return mpFetch('/api/agency/' + _enc(companyId) + '/config', { method: 'PUT', body: JSON.stringify({ agency }) });
+    },
+    async agencyPlans(companyId) { return mpFetch('/api/agency/' + _enc(companyId) + '/plans'); },
+    async agencyCreatePlan(companyId, body) {
+      return mpFetch('/api/agency/' + _enc(companyId) + '/plans', { method: 'POST', body: JSON.stringify(body || {}) });
+    },
+    async agencyPlan(planId) { return mpFetch('/api/agency/plans/' + _enc(planId)); },
+    async agencyDeletePlan(planId) { return mpFetch('/api/agency/plans/' + _enc(planId), { method: 'DELETE' }); },
+    async agencyApproveIdeas(planId) { return mpFetch('/api/agency/plans/' + _enc(planId) + '/approve-ideas', { method: 'POST', body: '{}' }); },
+    async agencyUpdateItem(itemId, data) {
+      return mpFetch('/api/agency/items/' + _enc(itemId), { method: 'PATCH', body: JSON.stringify(data || {}) });
+    },
+    async agencyRegenerate(itemId, comment) {
+      return mpFetch('/api/agency/items/' + _enc(itemId) + '/regenerate', { method: 'POST', body: JSON.stringify({ comment: comment || '' }) });
+    },
     async imageTemplates(companyId, type) {
       return mpFetch('/api/posts/image-templates?company_id=' + _enc(companyId || '') + '&type=' + _enc(type || 'carrossel')).catch(() => ({ templates: [] }));
     },

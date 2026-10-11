@@ -21,6 +21,7 @@ const APPS = {
   criacao:    { title: 'Criação',         icon: 'post',       C: 'CriacaoApp',    w: 1060, h: 730, grp: 'op' },
   publisher:  { title: 'Publicar',        icon: 'broadcast',  C: 'PublisherApp',  w: 980,  h: 690, grp: 'op' },
   calendar:   { title: 'Agenda',          icon: 'calendar',   C: 'CalendarApp',   w: 1100, h: 740, grp: 'op' },
+  agencia:    { title: 'Agência',         icon: 'sparkles',   C: 'AgenciaApp',    w: 1120, h: 800, grp: 'op' },
   // Gestão de Agência
   painel:      { title: 'Painel',          icon: 'grid',       C: 'PainelApp',     w: 1040, h: 720, grp: 'ges' },
   clientes:    { title: 'Clientes',        icon: 'building',   C: 'ClientesApp',    w: 980,  h: 720, grp: 'ges' },
@@ -34,7 +35,7 @@ const APPS = {
   wizard:     { title: 'Assistente',      icon: 'flow',       C: 'WizardApp',     w: 960,  h: 720, grp: null },
 };
 // TENANCY: usuário de CLIENTE (company_id no token) vê só os apps de operação da própria empresa.
-const CLIENT_APPS = ['conteudo', 'video', 'criacao', 'publisher', 'calendar', 'clientes', 'acervo', 'aprovacao', 'notificacoes', 'wizard'];
+const CLIENT_APPS = ['conteudo', 'agencia', 'video', 'criacao', 'publisher', 'calendar', 'clientes', 'acervo', 'aprovacao', 'notificacoes', 'wizard'];
 function isClientUser(u) {
   u = u || window.__mpUser;
   return !!(u && (u.role === 'owner' || u.role === 'agency'));   // cliente final OU agência compradora
@@ -57,7 +58,7 @@ const GROUPS = [
   ['op', 'Operação e Distribuição'],
   ['ges', 'Gestão de Agência'],
 ];
-const PINNED = ['conteudo', 'video', 'clientes', 'criacao', 'publisher', 'notificacoes'];
+const PINNED = ['conteudo', 'agencia', 'video', 'clientes', 'criacao', 'publisher', 'notificacoes'];
 
 const TOURS = {
   autoeditor: [

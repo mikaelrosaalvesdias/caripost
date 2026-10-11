@@ -56,6 +56,7 @@ from .routers.auto_editor import router as auto_editor_router
 from .routers.publisher import router as publisher_router
 from .routers.portal import router as portal_router
 from .routers.trends import router as trends_router
+from .routers.agency import router as agency_router
 from .routers.dmca import router as dmca_router
 from .routers.calendar_router import router as calendar_router
 from .routers.financial import router as financial_router
@@ -73,7 +74,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 
-app = FastAPI(title="Caripost (internal)", version="1.27.133")
+app = FastAPI(title="Caripost (internal)", version="1.27.136")
 
 
 @app.middleware("http")
@@ -153,6 +154,7 @@ app.include_router(posts_router)
 app.include_router(ai_settings_router)
 app.include_router(social_router)
 app.include_router(notify_router)
+app.include_router(agency_router)
 app.include_router(billing_router)
 app.include_router(template_video_router)
 

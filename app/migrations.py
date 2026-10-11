@@ -265,6 +265,49 @@ def _m7_solution_catalog_profile(conn: sqlite3.Connection) -> None:
     ensure_index(conn, "idx_assets_solution", "company_assets", "solution_id")
 
 
+def _m8_editorial_calendar(conn: sqlite3.Connection) -> None:
+    """Agência automática: plano editorial mensal por empresa + peças (ideia → arte → agendada)."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS editorial_plans ("
+        "id TEXT PRIMARY KEY, "
+        "company_id TEXT NOT NULL, "
+        "month TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'generating', "
+        "config TEXT NOT NULL DEFAULT '{}', "
+        "error TEXT, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+    ensure_index(conn, "idx_editorial_plans_company", "editorial_plans", "company_id")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS editorial_items ("
+        "id TEXT PRIMARY KEY, "
+        "plan_id TEXT NOT NULL, "
+        "company_id TEXT NOT NULL, "
+        "slot_at TEXT NOT NULL, "
+        "format TEXT NOT NULL, "
+        "pillar TEXT, "
+        "product TEXT, "
+        "date_hint TEXT, "
+        "title TEXT, "
+        "angle TEXT, "
+        "copy TEXT, "
+        "hashtags TEXT, "
+        "art_brief TEXT, "
+        "stage TEXT NOT NULL DEFAULT 'idea', "
+        "review_comment TEXT, "
+        "post_id TEXT, "
+        "social_post_id TEXT, "
+        "error TEXT, "
+        "meta TEXT NOT NULL DEFAULT '{}', "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "FOREIGN KEY (plan_id) REFERENCES editorial_plans(id) ON DELETE CASCADE)"
+    )
+    ensure_index(conn, "idx_editorial_items_plan", "editorial_items", "plan_id")
+    ensure_index(conn, "idx_editorial_items_company", "editorial_items", "company_id")
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline", _m1_baseline),
     (2, "billing", _m2_billing),
@@ -273,6 +316,7 @@ MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (5, "company_lifecycle", _m5_company_lifecycle),
     (6, "product_catalog", _m6_product_catalog),
     (7, "solution_catalog_profile", _m7_solution_catalog_profile),
+    (8, "editorial_calendar", _m8_editorial_calendar),
 ]
 
 
