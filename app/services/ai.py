@@ -266,8 +266,9 @@ def complete_ai(
     except Exception as e:
         es = str(e)
         # TRANSBORDO DE TEXTO: provedor caiu (403/saldo/cota/429/auth) → tenta os OUTROS em ordem (OmniRoute grátis por último).
-        if any(x in es for x in ("403", "429", "401", "402", "Forbidden", "额度", "余额", "quota", "insufficient", "balance")):
-            for alt in _alt_text_configs(provider):
+        if any(x in es for x in ("403", "429", "401", "402", "500", "502", "503", "504", "Forbidden", "额度", "余额", "quota",
+                                 "insufficient", "balance", "timed out", "Timeout")):
+            for alt in _alt_text_configs(provider, model):
                 try:
                     return _call_openai_compat(alt["provider"], alt["apiKey"], alt["model"], system, user, max_tokens)
                 except Exception:
@@ -275,10 +276,19 @@ def complete_ai(
         raise
 
 
-def _alt_text_configs(failed_provider: str):
+def _alt_text_configs(failed_provider: str, failed_model: str = ""):
     """Provedores de TEXTO alternativos p/ transbordo, em ordem: OpenRouter → OmniRoute (grátis) → CometAPI.
-    OmniRoute é último recurso (grátis, sua assinatura; pode comer acento) — texto imperfeito > legenda VAZIA."""
+    OmniRoute é último recurso (grátis, sua assinatura; pode comer acento) — texto imperfeito > legenda VAZIA.
+    Se quem caiu foi o próprio OmniRoute (429 de um modelo), tenta ANTES os outros modelos das assinaturas
+    e por último a kie (paga em créditos). Lista configurável no setting ai.textFallbacks (separado por vírgula)."""
     out = []
+    if failed_provider == "omniroute":
+        fb = (get_setting("ai.textFallbacks") or
+              "cx/gpt-5.5,antigravity/claude-sonnet-4-6,cc/claude-opus-4-8,kie/claude-sonnet-4-6")
+        key = _omniroute_key() or "x"
+        for m in [x.strip() for x in fb.split(",") if x.strip()]:
+            if m != failed_model:
+                out.append({"provider": "omniroute", "apiKey": key, "model": m})
     for p in ("openrouter", "omniroute", "cometapi"):
         if p == failed_provider:
             continue
@@ -4435,7 +4445,7 @@ def enrich_company_from_web(name: str, site_url: str = "", instagram: str = "", 
         "não invente variações quase iguais para completar quantidade. "
         "Não trate o nome da empresa, um @ ou uma URL como prova do que ela vende. Sem preços. Responda só o JSON."
     )
-    raw = _call_openai_compat(config["provider"], config["apiKey"], config["model"], system, user, 1600)
+    raw = complete_ai(config, system, user, 1600)   # complete_ai tem transbordo (429 do OmniRoute → outros modelos)
     m = _re.search(r'\{.*\}', raw, _re.S)
     data = _json.loads(m.group(0)) if m else {}
     for k in ("price", "preco", "preço", "pricing", "valor", "plano", "planos"):
@@ -4487,7 +4497,7 @@ def enrich_product_from_web(name: str, site_url: str = "", instagram: str = "") 
         '"alacarte":["itens entregues juntos / add-ons dentro do app, se houver (ex: Telecine, Premiere)"]}\n'
         "Se não houver cores claras, use {}. SEM PREÇOS. Responda só o JSON."
     )
-    raw = _call_openai_compat(config["provider"], config["apiKey"], config["model"], system, user, 1400)
+    raw = complete_ai(config, system, user, 1400)
     m = _re.search(r'\{.*\}', raw, _re.S)
     data = _json.loads(m.group(0)) if m else {}
     for k in ("price", "preco", "preço", "pricing", "valor", "plano", "planos"):
