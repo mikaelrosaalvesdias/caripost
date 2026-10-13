@@ -2181,7 +2181,7 @@ async def _render_carousel_sync(request: Request):
                         spillovers.append((i, "texto saiu quebrado (" + ", ".join(_miss[:3]) + ") → regenerando com correção soletrada"))
                 if not img_ok and _best_img is not None:        # todas quebraram → menos ruim + aviso honesto
                     img, img_ok, used_model = _best_img, True, get_image_ref_model()
-                    fails.append("tela " + str(i) + ": texto pode ter erro (" + ", ".join(_best_miss[:3]) + ") — clique regerar")
+                    fails.append(f"TEXTO::tela {i}: faltou ou saiu diferente na arte: " + ", ".join(_best_miss[:3]))
             if ai_bg and not ref_full and img is None and influencer and inf_photos and stype in ("cover", "cta"):
                 # EMOÇÃO + VARIAÇÃO: a IA (visão) escolhe do PORTFÓLIO a foto cuja expressão combina com o texto da tela;
                 # exclui as já usadas (capa e CTA pegam fotos diferentes → não fica repetitivo).
@@ -2388,9 +2388,17 @@ async def _render_carousel_sync(request: Request):
             ups = ", ".join(f"tela {idx}→{m}" for idx, m in spillovers[:5])
             resp["spillover"] = (f"{len(spillovers)} tela(s) transbordaram p/ outro modelo (o pedido falhou/sem saldo): "
                                  f"{ups}. Você não perdeu o carrossel — saiu com imagem real.")
+        text_warns = [f[len("TEXTO::"):] for f in fails if str(f).startswith("TEXTO::")]
+        fails = [f for f in fails if not str(f).startswith("TEXTO::")]
+        warn_parts = []
         if ai_bg and fails:
-            resp["warning"] = (f"O modelo de imagem FALHOU em {len(fails)}/{total} telas mesmo após o transbordo "
-                               f"(todos os provedores caíram) → saiu o editorial nessas. Motivo: {fails[0]}")
+            warn_parts.append(f"O modelo de imagem FALHOU em {len(fails)}/{total} telas mesmo após o transbordo "
+                              f"(todos os provedores caíram) → saiu o editorial nessas. Motivo: {fails[0]}")
+        if text_warns:   # a imagem saiu (Estúdio IA); só o conferidor de texto achou diferença — não é falha do modelo
+            warn_parts.append("Arte pronta, mas confira o texto: " + "; ".join(text_warns[:3])
+                              + ". Se estiver ruim, clique em regerar a tela.")
+        if warn_parts:
+            resp["warning"] = " ".join(warn_parts)
         return resp
     except Exception as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)
