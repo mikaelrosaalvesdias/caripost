@@ -1039,6 +1039,11 @@ async def generate_briefing_ep(request: Request):
             _attach_offer_refs(res.get("telas") or [], selected_products)
         # storyboard/scene_seconds: o ROTEIRO de vídeo que o briefing JÁ gerou — vai pro front e volta na
         # criação (preflight) p/ NÃO re-gerar (era o bug do "1 cena só / caixas vazias na criação").
+        try:   # alguns modelos devolvem PT sem acento e a arte copia fiel → revisor de acentuação
+            from ..services.ai import fix_accents_telas
+            res["telas"] = await asyncio.to_thread(fix_accents_telas, res.get("telas") or [])
+        except Exception:
+            pass
         return {"briefing": res.get("text", ""), "telas": res.get("telas", []), "formato": res.get("formato"),
                 "storyboard": res.get("storyboard", []), "scene_seconds": res.get("scene_seconds", []),
                 "audio_plan": res.get("audio_plan", {}),

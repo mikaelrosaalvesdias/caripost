@@ -187,7 +187,7 @@ _CHEAP_TEXT_MODELS = {
     "anthropic": "claude-haiku-4-5",
     "cometapi": "gpt-4o",
     # OmniRoute (grátis · assinaturas): Sonnet aguenta o JSON pesado do carrossel e preserva acento.
-    "omniroute": "antigravity/claude-sonnet-4-6",
+    "omniroute": "cx/gpt-5.6-sol",   # out/2026: antigravity sonnet vive em 429; gpt-5.5 saiu da conta Codex
 }
 
 
@@ -260,17 +260,22 @@ def complete_ai(
         if provider == "anthropic":
             return _call_anthropic(api_key, model, system, user, max_tokens)
         elif provider in ("openai", "openrouter", "omniroute", "cometapi"):
-            return _call_openai_compat(provider, api_key, model, system, user, max_tokens)
+            _r = _call_openai_compat(provider, api_key, model, system, user, max_tokens)
+            if provider == "omniroute" and not (_r or "").strip():
+                raise ValueError("resposta vazia do modelo")   # alguns mirrors devolvem 200 sem conteúdo → transborda
+            return _r
         else:
             raise ValueError(f"Provedor não suportado: {provider}")
     except Exception as e:
         es = str(e)
         # TRANSBORDO DE TEXTO: provedor caiu (403/saldo/cota/429/auth) → tenta os OUTROS em ordem (OmniRoute grátis por último).
-        if any(x in es for x in ("403", "429", "401", "402", "500", "502", "503", "504", "Forbidden", "额度", "余额", "quota",
+        if any(x in es for x in ("400", "403", "429", "401", "402", "500", "502", "503", "504", "vazia", "Forbidden", "额度", "余额", "quota",
                                  "insufficient", "balance", "timed out", "Timeout")):
             for alt in _alt_text_configs(provider, model):
                 try:
-                    return _call_openai_compat(alt["provider"], alt["apiKey"], alt["model"], system, user, max_tokens)
+                    _r = _call_openai_compat(alt["provider"], alt["apiKey"], alt["model"], system, user, max_tokens)
+                    if (_r or "").strip():
+                        return _r
                 except Exception:
                     continue
         raise
@@ -284,7 +289,7 @@ def _alt_text_configs(failed_provider: str, failed_model: str = ""):
     out = []
     if failed_provider == "omniroute":
         fb = (get_setting("ai.textFallbacks") or
-              "cx/gpt-5.5,antigravity/claude-sonnet-4-6,cc/claude-opus-4-8,kie/claude-sonnet-4-6")
+              "cc/claude-opus-4-8,cx/gpt-5.6-sol,cx/gpt-5.6-luna,cc/claude-haiku-4-5-20251001,antigravity/claude-sonnet-4-6,kie/claude-sonnet-4-6")
         key = _omniroute_key() or "x"
         for m in [x.strip() for x in fb.split(",") if x.strip()]:
             if m != failed_model:
@@ -5488,3 +5493,68 @@ def generate_social_strategy(
     if not isinstance(parsed.get("competitor_insights"), list):
         parsed["competitor_insights"] = []
     return parsed
+
+
+# ── REVISOR DE ACENTUAÇÃO (out/2026) ─────────────────────────────────────────────────────────────
+# Alguns modelos do OmniRoute devolvem PT-BR SEM acento ("nao", "voce") e a arte copia isso fiel.
+# Detecta palavras que SEMPRE levam acento e corrige SÓ os acentos com um modelo que preserva acento.
+_ACCENT_WORDS = {
+    "nao", "voce", "voces", "tambem", "ate", "ja", "so", "experiencia", "preco", "precos", "servico", "servicos",
+    "conexao", "conexoes", "informacao", "numero", "unico", "unica", "rapido", "rapida", "facil", "musica", "saude",
+    "video", "videos", "portfolio", "negocio", "negocios", "otimo", "proximo", "publico", "area", "ultimo", "ultima",
+    "beneficio", "beneficios", "familia", "agencia", "tecnico", "tecnica", "pratico", "pratica", "pagina", "estrategia",
+    "estrategico", "credito", "solucao", "solucoes", "conteudo", "conteudos", "acao", "acoes", "sao", "tecnologia",
+    "operacao", "regiao", "atencao", "alem", "apos", "possivel", "disponivel", "util", "uteis", "mes", "tres", "voo",
+    "audio", "historia", "aplicacao", "instalacao", "manutencao", "estabilidade", "minimo", "maximo", "rapidez",
+}
+
+
+def _strip_acc(s: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s or "") if unicodedata.category(c) != "Mn")
+
+
+def needs_accent_fix(texts: List[str]) -> bool:
+    import re as _re
+    words = _re.findall(r"[a-zà-ú]+", " ".join(texts).lower())
+    hits = sum(1 for w in words if w in _ACCENT_WORDS and w != "tecnologia" and w != "estabilidade" and w != "rapidez")
+    return hits >= 1
+
+
+def fix_accents(texts: List[str]) -> List[str]:
+    """Corrige SÓ a acentuação (as letras base não podem mudar). Em qualquer falha devolve o original."""
+    import json as _json
+    if not texts or not needs_accent_fix(texts):
+        return texts
+    models = [m.strip() for m in (get_setting("ai.accentModels") or "cc/claude-opus-4-8,cc/claude-haiku-4-5-20251001").split(",") if m.strip()]
+    user = ("Corrija APENAS a acentuação e o ç destes textos em português do Brasil (não mude nenhuma outra letra, "
+            "palavra, pontuação ou ordem). Responda SÓ um JSON: lista com o MESMO número de strings, na mesma ordem.\n"
+            + _json.dumps(texts, ensure_ascii=False))
+    for m in models:
+        try:
+            raw = _call_openai_compat("omniroute", _omniroute_key() or "x", m,
+                                      "Você é revisor de português. Responda somente JSON válido.", user, 3000)
+            s = raw.strip()
+            s = s[s.find("["): s.rfind("]") + 1]
+            out = _json.loads(s)
+            if (isinstance(out, list) and len(out) == len(texts)
+                    and all(isinstance(o, str) and _strip_acc(o).lower() == _strip_acc(t).lower() for o, t in zip(out, texts))):
+                return out
+        except Exception:
+            continue
+    return texts
+
+
+def fix_accents_telas(telas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    keys = ("eyebrow", "title", "subtitle", "body", "cta")
+    slots = [(i, k) for i, t in enumerate(telas or []) for k in keys if isinstance(t.get(k), str) and t.get(k)]
+    if not slots:
+        return telas
+    texts = [telas[i][k] for i, k in slots]
+    fixed = fix_accents(texts)
+    if fixed is texts:
+        return telas
+    out = [dict(t) for t in telas]
+    for (i, k), v in zip(slots, fixed):
+        out[i][k] = v
+    return out

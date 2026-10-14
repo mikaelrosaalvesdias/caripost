@@ -351,7 +351,7 @@ def _ai_fill(company: Dict[str, Any], cfg: Dict[str, Any], dates: List[Dict[str,
     if (main or {}).get("provider") == "omniroute":
         # gateway das assinaturas: tenta outros modelos antes de cair no pago (configurável em agency.models)
         # padrão: GPT-5.5 (assinatura Codex) → Sonnet (assinatura) → Opus (assinatura) → kie (PAGO em créditos, último)
-        models = cfg.get("models") or ["cx/gpt-5.5", (cheap or {}).get("model"), main.get("model"), "kie/claude-sonnet-4-6"]
+        models = cfg.get("models") or ["cx/gpt-5.6-sol", main.get("model"), "cx/gpt-5.6-luna", (cheap or {}).get("model"), "kie/claude-sonnet-4-6"]
         configs = [dict(main, model=m) for m in dict.fromkeys(m for m in models if m)]
     configs = [c for c in configs if c]
     if not configs:
@@ -414,6 +414,19 @@ def _generate_plan_sync(plan_id: str) -> None:
     plan = plan_get(plan_id, with_items=False)
     company = company_get(plan["company_id"])
     cfg = plan["config"] or agency_cfg(company)
+    _ov = ((company.get("brand_kit") or {}).get("creative_config") or {}).get("agency") or {}
+    if not (_ov.get("pillars") and _ov.get("style")):
+        # 1º calendário do cliente: IA monta a linha editorial SOB MEDIDA a partir do cadastro e salva.
+        plan_update(plan_id, error="montando a linha editorial deste cliente")
+        try:
+            tailored = ensure_tailored_config(company["id"])
+            for k in ("pillars", "style", "cta", "hashtags_base", "whatsapp"):
+                if tailored.get(k):
+                    cfg[k] = tailored[k]
+            plan_update(plan_id, config=json.dumps(cfg))
+            company = company_get(plan["company_id"])
+        except Exception as exc:
+            log.warning("agency: linha editorial sob medida falhou (%s) — seguindo com a padrão", exc)
     y, m = map(int, plan["month"].split("-"))
     dates = month_dates(y, m, company)
     slots = build_slots(y, m, cfg, dates)
@@ -496,3 +509,385 @@ def regenerate_item_sync(item_id: str, comment: str = "") -> Dict[str, Any]:
     row = _norm_item(items[0] if items else {}, slot, [p["name"] for p in product_list(company["id"]) or []])
     row.update(stage="idea", review_comment=comment or None, error=None if row["title"] else "A IA não respondeu — tente de novo.")
     return item_update(item_id, row)
+
+
+# ═════════════════════════════ MARCO B — produção das artes + agendamento ═════════════════════════════
+# Etapas da peça: idea → idea_ok → art_queued → producing → art (arte para aprovar) → art_ok (aprovada, esperando
+# Instagram) → scheduled → published | failed. Também: idea_rejected, art_rejected, skipped (passou da data sem OK).
+# As chamadas internas usam a PRÓPRIA API (mesmo caminho da tela: briefing → Estúdio IA → post → Publicar).
+
+_API = "http://127.0.0.1:8765"
+_TZ = "-03:00"                                   # horário de Brasília (sem horário de verão desde 2019)
+_WORKER: Dict[str, Any] = {"task": None}
+FORMAT_RENDER = {"post": "post", "carrossel": "carrossel", "reels": "story"}
+
+
+def _headers() -> Dict[str, str]:
+    from ..main_utils import _get_api_key
+    return {"X-API-Key": _get_api_key(), "Content-Type": "application/json"}
+
+
+async def _api(method: str, path: str, body: Optional[Dict[str, Any]] = None, timeout: float = 120.0) -> Dict[str, Any]:
+    import httpx
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as c:
+        r = await c.request(method, _API + path, headers=_headers(), json=body)
+    try:
+        data = r.json()
+    except Exception:
+        data = {"detail": r.text[:300]}
+    if r.status_code >= 400:
+        raise ValueError((data.get("detail") if isinstance(data, dict) else None) or f"HTTP {r.status_code}")
+    return data
+
+
+def slot_iso(item: Dict[str, Any]) -> str:
+    return (item.get("slot_at") or "")[:19] + _TZ
+
+
+def _slot_dt(item: Dict[str, Any]) -> datetime:
+    return datetime.fromisoformat(slot_iso(item))
+
+
+def items_by_stage(stages: List[str], company_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    q = f"SELECT * FROM editorial_items WHERE stage IN ({','.join('?' for _ in stages)})"
+    args: List[Any] = list(stages)
+    if company_id:
+        q += " AND company_id = ?"
+        args.append(company_id)
+    with get_conn() as conn:
+        return [_row(r) for r in conn.execute(q + " ORDER BY slot_at", args).fetchall()]
+
+
+def _offer_refs_for(company_id: str, product: str) -> List[Dict[str, str]]:
+    if not product:
+        return []
+    from ..db_companies import product_list
+    p = next((x for x in product_list(company_id) or [] if (x.get("name") or "").lower() == product.lower()), None)
+    return [{"source_company_id": company_id, "product_id": p["id"]}] if p else []
+
+
+async def produce_item(item_id: str) -> None:
+    """Gera a arte de UMA peça aprovada: telas pelo gerador aprovado (generate-briefing) + Estúdio IA (render-carousel).
+    A legenda aprovada no calendário substitui a gerada pelo render."""
+    item = item_get(item_id)
+    if not item or item["stage"] not in ("art_queued", "producing"):
+        return
+    item_update(item_id, {"stage": "producing", "error": None})
+    fmt = FORMAT_RENDER.get(item["format"], "post")
+    offers = _offer_refs_for(item["company_id"], item.get("product") or "")
+    theme = (item.get("title") or "").strip()
+    idea = " ".join(x for x in [item.get("angle"), ("Direção de arte: " + item["art_brief"]) if item.get("art_brief") else "",
+                                ("Pedido do aprovador: " + item["review_comment"]) if item.get("review_comment") else ""] if x)
+    try:
+        telas, last_err = [], None
+        for _att in range(3):          # o gerador de telas às vezes devolve JSON quebrado → tenta de novo
+            try:
+                br = await _api("POST", "/api/posts/generate-briefing", {
+                    "company_id": item["company_id"], "theme": theme, "idea": idea[:1800], "objetivo": "vender",
+                    "formato": fmt, "n_telas": 0 if fmt == "carrossel" else 1, "intent": "produtos",
+                    "apps": [item["product"]] if item.get("product") else [], "offer_refs": offers}, timeout=300)
+                telas = br.get("telas") or []
+                if telas or fmt != "carrossel":
+                    break
+            except Exception as exc:
+                last_err = exc
+                await asyncio.sleep(10 * (_att + 1))
+        if fmt != "carrossel":
+            telas = telas[:1] or [{"type": "cover", "title": theme[:64]}]
+        if not telas:
+            raise ValueError(f"o gerador não devolveu as telas ({last_err or 'vazio'})")
+        if theme:
+            telas[0] = dict(telas[0], title=theme)    # capa = título APROVADO no calendário
+        rr = await _api("POST", "/api/posts/render-carousel", {
+            "company_id": item["company_id"], "telas": telas, "model": "", "format": fmt,
+            "render_mode": "reference_full", "offer_refs": offers}, timeout=1800)
+        slides = [s.get("url") for s in (rr.get("slides") or []) if s.get("url")]
+        if not slides:
+            raise ValueError(rr.get("warning") or "nenhuma imagem gerada")
+        post_id = rr.get("post_id")
+        if post_id:
+            from ..db_companies import post_update
+            post_update(post_id, {"copy": item.get("copy") or "", "hashtags": item.get("hashtags") or "",
+                                  "title": theme or None})
+        meta = dict(item.get("meta") or {})
+        meta.update({"slides": slides, "telas": telas, "art_warning": rr.get("warning") or "", "art_cost": rr.get("cost") or 0})
+        item_update(item_id, {"stage": "art", "post_id": post_id, "meta": meta, "error": None})
+    except Exception as exc:
+        log.exception("agency produce %s", item_id)
+        item_update(item_id, {"stage": "idea_ok", "error": f"Falha ao gerar a arte: {str(exc)[:300]}"})
+
+
+async def _worker_loop() -> None:
+    try:
+        while True:
+            queue = items_by_stage(["art_queued", "producing"])
+            if not queue:
+                return
+            await produce_item(queue[0]["id"])
+    finally:
+        _WORKER["task"] = None
+
+
+def ensure_worker() -> bool:
+    t = _WORKER.get("task")
+    if t and not t.done():
+        return False
+    _WORKER["task"] = asyncio.create_task(_worker_loop())
+    return True
+
+
+def queue_production(plan_id: str, item_ids: Optional[List[str]] = None) -> int:
+    plan = plan_get(plan_id)
+    n = 0
+    for it in plan["items"]:
+        if item_ids and it["id"] not in item_ids:
+            continue
+        if it["stage"] in ("idea_ok", "art_rejected") or (item_ids and it["stage"] == "art"):
+            item_update(it["id"], {"stage": "art_queued", "error": None})
+            n += 1
+    if n:
+        ensure_worker()
+    return n
+
+
+async def approve_art(item_id: str) -> Dict[str, Any]:
+    """Arte aprovada → post APPROVED com data do calendário → agenda no Instagram (se conectado)."""
+    from ..db_companies import post_get, post_transition, post_update
+    item = item_get(item_id)
+    if not item or item["stage"] not in ("art", "art_ok"):
+        raise ValueError("A peça não está com arte pronta para aprovar.")
+    post = post_get(item["post_id"]) if item.get("post_id") else None
+    if not post:
+        raise ValueError("Post da arte não encontrado — gere a arte de novo.")
+    when = _slot_dt(item)
+    if when <= datetime.now(timezone.utc) + timedelta(minutes=10):
+        when = datetime.now(timezone.utc) + timedelta(minutes=15)     # data já passou → publica em 15 min
+    post_update(post["id"], {"scheduled_at": when.isoformat(), "copy": item.get("copy") or post.get("copy") or "",
+                             "hashtags": item.get("hashtags") or post.get("hashtags") or ""})
+    if post.get("status") == "DRAFT":
+        post_transition(post["id"], "REVIEW")
+    if (post_get(post["id"]) or {}).get("status") == "REVIEW":
+        post_transition(post["id"], "APPROVED")
+    item_update(item_id, {"stage": "art_ok", "error": None})
+    return await schedule_item(item_id)
+
+
+async def schedule_item(item_id: str) -> Dict[str, Any]:
+    """Cria o agendamento social (cron social_publish_scheduled publica na hora). Sem Instagram conectado →
+    fica 'art_ok' e o tick agenda sozinho quando a conta for conectada."""
+    from ..db_agency import social_connection_list
+    from ..db_companies import post_get, post_transition
+    item = item_get(item_id)
+    post = post_get(item["post_id"])
+    conns = [c for c in social_connection_list(brand_id=item["company_id"], platform="instagram")
+             if c.get("status") in ("connected", "active")]
+    if not conns:
+        return item_update(item_id, {"error": "Arte aprovada. Aguardando o Instagram ser conectado para agendar."})
+    urls = (item.get("meta") or {}).get("slides") or []
+    from ..routers.posts import _render_public_base
+    abs_urls = [(_render_public_base() + u) if u.startswith("/") else u for u in urls]
+    ctype = "carousel" if len(abs_urls) > 1 else ("story" if item["format"] == "reels" else "image")
+    try:
+        r = await _api("POST", "/api/social/posts", {
+            "brandId": item["company_id"], "sourcePostId": post["id"],
+            "channels": [{"socialConnectionId": conns[0]["id"]}], "assetUrls": abs_urls, "contentType": ctype,
+            "scheduledAt": post.get("scheduled_at"), "approved": True})
+    except Exception as exc:
+        return item_update(item_id, {"error": f"Não consegui agendar no Instagram: {str(exc)[:240]}"})
+    sp = (r.get("post") or {})
+    if post.get("status") == "APPROVED":
+        post_transition(post["id"], "SCHEDULED")
+    return item_update(item_id, {"stage": "scheduled", "social_post_id": sp.get("id"), "error": None})
+
+
+# ═════════════════════════════ MARCO D — piloto automático ═════════════════════════════
+
+def _app_link() -> str:
+    from ..routers.posts import _render_public_base
+    return _render_public_base() + "/os/index.html"
+
+
+async def _notify(company: Dict[str, Any], cfg: Dict[str, Any], text: str, trigger: str) -> None:
+    to = (cfg.get("notify_whatsapp") or "").strip()
+    if not to:
+        log.info("agency notify (%s) sem WhatsApp configurado: %s", company.get("name"), text[:120])
+        return
+    try:
+        from .notifier import notify
+        await notify(company_id=company["id"], channel="whatsapp", recipient=to,
+                     subject="Agência Caripost", message=text, trigger=trigger)
+    except Exception as exc:
+        log.warning("agency notify falhou: %s", exc)
+
+
+def _companies_enabled() -> List[Dict[str, Any]]:
+    from ..db_companies import company_get, company_list
+    out = []
+    for c in company_list() or []:
+        co = company_get(c["id"])
+        if co and agency_cfg(co).get("enabled"):
+            out.append(co)
+    return out
+
+
+def _next_month_str(today: Optional[date] = None) -> str:
+    t = today or datetime.now().date()
+    return f"{t.year + (t.month == 12):04d}-{(t.month % 12) + 1:02d}"
+
+
+async def monthly_job(force_day: Optional[int] = None) -> List[str]:
+    """Dia configurado (padrão 20): gera o calendário do mês seguinte p/ quem tem a agência ligada e avisa."""
+    today = datetime.now().date()
+    done = []
+    for co in _companies_enabled():
+        cfg = agency_cfg(co)
+        day = int(force_day or cfg.get("generate_day") or 20)
+        if today.day != day:
+            continue
+        month = _next_month_str(today)
+        if any(p["month"] == month for p in plan_list(co["id"])):
+            continue
+        y, m = map(int, month.split("-"))
+        if not build_slots(y, m, cfg, month_dates(y, m, co)):
+            continue
+        plan = plan_create(co["id"], month, cfg)
+        try:
+            await asyncio.to_thread(_generate_plan_sync, plan["id"])
+        except Exception as exc:
+            plan_update(plan["id"], status="error", error=str(exc)[:500])
+            continue
+        n = len(plan_get(plan["id"])["items"])
+        await _notify(co, cfg, f"Agência Caripost: o calendário de {month} da {co['name']} está pronto — {n} ideias "
+                               f"esperando sua aprovação no app Agência: {_app_link()}", "agency_month_ready")
+        done.append(co["name"])
+    return done
+
+
+async def tick() -> Dict[str, int]:
+    """A cada poucos minutos: retoma a fila de artes, agenda aprovadas quando o Instagram conectar, sincroniza
+    publicação, lembra artes pendentes (48h) e marca como 'pulada' peça que passou da data sem aprovação."""
+    stats = {"resumed": 0, "scheduled": 0, "published": 0, "failed": 0, "reminded": 0, "skipped": 0}
+    if items_by_stage(["art_queued", "producing"]) and ensure_worker():
+        stats["resumed"] = 1
+    now = datetime.now(timezone.utc)
+    for it in items_by_stage(["art_ok"]):
+        before = it.get("stage")
+        out = await schedule_item(it["id"])
+        if out and out.get("stage") == "scheduled" and before != "scheduled":
+            stats["scheduled"] += 1
+    from ..db_agency import social_post_get
+    from ..db_companies import company_get
+    for it in items_by_stage(["scheduled"]):
+        sp = social_post_get(it["social_post_id"]) if it.get("social_post_id") else None
+        st = (sp or {}).get("status")
+        if st == "published":
+            item_update(it["id"], {"stage": "published", "error": None}); stats["published"] += 1
+        elif st in ("failed", "partial_failed"):
+            errs = "; ".join(c.get("error_message") or "" for c in (sp.get("channels") or []) if c.get("error_message"))
+            item_update(it["id"], {"stage": "failed", "error": "Instagram recusou: " + (errs or st)})
+            co = company_get(it["company_id"])
+            await _notify(co, agency_cfg(co), f"Agência Caripost: a peça '{it.get('title')}' NÃO foi publicada "
+                                              f"({(errs or st)[:160]}). Veja no app Agência.", "agency_publish_failed")
+            stats["failed"] += 1
+    pending = items_by_stage(["idea", "idea_ok", "art_queued", "art"])
+    for it in pending:
+        when = _slot_dt(it)
+        meta = dict(it.get("meta") or {})
+        if when < now:
+            item_update(it["id"], {"stage": "skipped", "error": "Passou da data sem aprovação — não foi publicada."})
+            stats["skipped"] += 1
+        elif it["stage"] == "art" and when - now < timedelta(hours=48) and not meta.get("reminded"):
+            meta["reminded"] = _now()
+            item_update(it["id"], {"meta": meta})
+            co = company_get(it["company_id"])
+            await _notify(co, agency_cfg(co), f"Agência Caripost: a arte '{it.get('title')}' sai em "
+                                              f"{when.astimezone(timezone(timedelta(hours=-3))).strftime('%d/%m %H:%M')} "
+                                              f"e ainda precisa da sua aprovação: {_app_link()}", "agency_reminder")
+            stats["reminded"] += 1
+    return stats
+
+
+# ═════════════════════════════ MULTI-CLIENTE ═════════════════════════════
+
+def suggest_config(company: Dict[str, Any]) -> Dict[str, Any]:
+    """Pilares/pesos, estilo, CTA e hashtags SOB MEDIDA para o cliente, a partir do cadastro (público, voz,
+    segmento, catálogo). Usado no 1º calendário de quem ainda não configurou e no botão 'Sugerir com IA'."""
+    from .ai import complete_ai, extract_json, get_ai_config
+    bk = company.get("brand_kit") or {}
+    socials = company.get("socials") or {}
+    user = (
+        f"EMPRESA: {company.get('name')} — segmento: {company.get('segment') or ''}. Site: {company.get('website') or ''}. "
+        f"Instagram: {socials.get('instagram') or ''}.\n"
+        f"PÚBLICO: {(bk.get('audience') or '').strip()}\nVOZ: {(bk.get('voice') or '').strip()}\n"
+        f"PERSONA: {(bk.get('persona') or '').strip()[:500]}\n"
+        f"CATÁLOGO:\n{_catalog_context(company)[:5000]}\n\n"
+        "Monte a linha editorial do Instagram desta empresa como uma agência faria. Responda SÓ JSON:\n"
+        '{"pillars":[{"name":"<pilar curto>","weight":<inteiro>,"desc":"<o que entra neste pilar, falando com o público certo>"}],'
+        '"style":"<guia de legenda: gancho, estrutura, tom, CTA, hashtags — 3 a 5 frases>",'
+        '"cta":"<CTA padrão curto>","hashtags_base":["#a","#b"]}\n'
+        "Regras: 4 pilares, pesos somando 100; um pilar de produto/serviço do catálogo, um de educação/valor para o "
+        "público, um de datas/eventos e um de relacionamento/autoridade/prova social (adapte nomes ao negócio). "
+        "Se o público for consumidor final, fale com ele; se for B2B, fale com o decisor. 5–8 hashtags.")
+    data = extract_json(complete_ai(get_ai_config(), "Você é estrategista de social media. Responda somente JSON válido.",
+                                    user, 2000)) or {}
+    out: Dict[str, Any] = {}
+    pills = [p for p in (data.get("pillars") or []) if isinstance(p, dict) and p.get("name")][:6]
+    if pills:
+        tot = sum(int(p.get("weight") or 0) for p in pills) or 100
+        out["pillars"] = [{"name": str(p["name"])[:60], "weight": round(int(p.get("weight") or 0) * 100 / tot),
+                           "desc": str(p.get("desc") or "")[:400]} for p in pills]
+    for k in ("style", "cta"):
+        if isinstance(data.get(k), str) and data[k].strip():
+            out[k] = data[k].strip()[:1200]
+    tags = [t if str(t).startswith("#") else "#" + str(t) for t in (data.get("hashtags_base") or []) if str(t).strip()]
+    if tags:
+        out["hashtags_base"] = tags[:10]
+    phone = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
+    if phone and len(phone) >= 10:
+        out.setdefault("whatsapp", company.get("phone"))
+    return out
+
+
+def ensure_tailored_config(company_id: str) -> Dict[str, Any]:
+    """Cliente sem linha editorial própria → gera e SALVA a sugestão antes do 1º calendário."""
+    from ..db_companies import brand_kit_upsert, company_get
+    co = company_get(company_id)
+    cc = dict(((co.get("brand_kit") or {}).get("creative_config")) or {})
+    ov = dict(cc.get("agency") or {})
+    if ov.get("pillars") and ov.get("style"):
+        return agency_cfg(co)
+    sug = suggest_config(co)
+    if not sug.get("pillars"):
+        raise ValueError("a IA não devolveu os pilares")
+    for k, v in sug.items():
+        ov.setdefault(k, v)
+    ov["auto_tailored_at"] = _now()
+    cc["agency"] = ov
+    brand_kit_upsert(company_id, {"creative_config": cc})
+    return agency_cfg(company_get(company_id))
+
+
+def overview(company_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Painel da agência: todos os clientes (do escopo) com o estado do mês."""
+    from ..db_companies import company_get, company_list
+    nm = _next_month_str()
+    out = []
+    for c in company_list() or []:
+        if company_ids is not None and str(c["id"]) not in company_ids:
+            continue
+        co = company_get(c["id"]) or c
+        cfg = agency_cfg(co)
+        plans = plan_list(c["id"])
+        cur = plans[0] if plans else None
+        counts: Dict[str, int] = {}
+        if cur:
+            for it in plan_get(cur["id"])["items"]:
+                counts[it["stage"]] = counts.get(it["stage"], 0) + 1
+        out.append({
+            "company_id": c["id"], "name": c.get("name"), "lifecycle_stage": c.get("lifecycle_stage"),
+            "enabled": bool(cfg.get("enabled")), "tailored": bool(((co.get("brand_kit") or {}).get("creative_config") or {}).get("agency", {}).get("pillars")),
+            "plan": ({"id": cur["id"], "month": cur["month"], "status": cur["status"], "n_items": cur.get("n_items")} if cur else None),
+            "has_next_month": any(p["month"] == nm for p in plans), "counts": counts,
+        })
+    out.sort(key=lambda x: (not x["enabled"], not x["plan"], (x["name"] or "").lower()))
+    return out

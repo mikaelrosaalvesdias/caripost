@@ -1419,6 +1419,22 @@
     async agencyUpdateItem(itemId, data) {
       return mpFetch('/api/agency/items/' + _enc(itemId), { method: 'PATCH', body: JSON.stringify(data || {}) });
     },
+    async agencyOverview() { return mpFetch('/api/agency/overview'); },
+    async agencySuggestConfig(companyId) {
+      return mpFetch('/api/agency/' + _enc(companyId) + '/suggest-config', { method: 'POST', body: '{}' });
+    },
+    async agencyProduce(planId, itemIds) {
+      return mpFetch('/api/agency/plans/' + _enc(planId) + '/produce', { method: 'POST', body: JSON.stringify({ item_ids: itemIds || null }) });
+    },
+    async agencyProduceItem(itemId, comment) {
+      return mpFetch('/api/agency/items/' + _enc(itemId) + '/produce', { method: 'POST', body: JSON.stringify({ comment: comment || '' }) });
+    },
+    async agencyApproveArt(itemId) {
+      return mpFetch('/api/agency/items/' + _enc(itemId) + '/approve-art', { method: 'POST', body: '{}' });
+    },
+    async agencyRejectArt(itemId, comment) {
+      return mpFetch('/api/agency/items/' + _enc(itemId) + '/reject-art', { method: 'POST', body: JSON.stringify({ comment: comment || '' }) });
+    },
     async agencyRegenerate(itemId, comment) {
       return mpFetch('/api/agency/items/' + _enc(itemId) + '/regenerate', { method: 'POST', body: JSON.stringify({ comment: comment || '' }) });
     },

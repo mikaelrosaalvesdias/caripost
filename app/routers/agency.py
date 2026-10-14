@@ -96,7 +96,7 @@ async def create_plan(company_id: str, request: Request):
         date(y, m, 1)
     except Exception:
         return JSONResponse({"detail": "month deve ser AAAA-MM"}, status_code=422)
-    cfg = ag.agency_cfg(co)
+    cfg = ag.agency_cfg(co)     # linha editorial sob medida (1ª vez) é feita DENTRO do job — evita o limite de 100s
     if isinstance(body.get("mix"), dict):
         cfg["mix"] = body["mix"]
     slots = ag.build_slots(y, m, cfg, ag.month_dates(y, m, co))
@@ -176,3 +176,98 @@ async def regenerate_item(item_id: str, request: Request):
     except Exception as exc:
         return JSONResponse({"detail": f"Não consegui refazer: {exc}"}, status_code=502)
     return {"item": out}
+
+
+# ── Marco B: artes ──────────────────────────────────────────────────────────────────────────────
+
+@router.post("/plans/{plan_id}/produce")
+async def produce_plan(plan_id: str, request: Request):
+    """Enfileira a produção das artes das ideias APROVADAS (ou das peças informadas em item_ids)."""
+    plan, err = _plan_or_404(request, plan_id)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    n = ag.queue_production(plan_id, body.get("item_ids") or None)
+    return {"queued": n, "plan": ag.plan_get(plan_id)}
+
+
+@router.post("/items/{item_id}/produce")
+async def produce_one(item_id: str, request: Request):
+    """Gera (ou refaz) a arte de uma peça; comentário opcional vira instrução."""
+    item, err = _item_or_404(request, item_id)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if item["stage"] not in ("idea_ok", "art", "art_rejected", "art_ok"):
+        return JSONResponse({"detail": "Aprove a ideia antes de gerar a arte."}, status_code=409)
+    if (body.get("comment") or "").strip():
+        ag.item_update(item_id, {"review_comment": body["comment"].strip()})
+    ag.item_update(item_id, {"stage": "art_queued", "error": None})
+    ag.ensure_worker()
+    return {"item": ag.item_get(item_id)}
+
+
+@router.post("/items/{item_id}/approve-art")
+async def approve_art(item_id: str, request: Request):
+    item, err = _item_or_404(request, item_id)
+    if err:
+        return err
+    try:
+        out = await ag.approve_art(item_id)
+    except Exception as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    return {"item": out}
+
+
+@router.post("/items/{item_id}/reject-art")
+async def reject_art(item_id: str, request: Request):
+    item, err = _item_or_404(request, item_id)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if item["stage"] != "art":
+        return JSONResponse({"detail": "A peça não está com arte para aprovar."}, status_code=409)
+    return {"item": ag.item_update(item_id, {"stage": "art_rejected", "review_comment": (body.get("comment") or "").strip() or None})}
+
+
+@router.post("/tick")
+async def run_tick(request: Request):
+    err = _auth(request, "")
+    if err:
+        return err
+    return {"stats": await ag.tick()}
+
+
+# ── Multi-cliente ───────────────────────────────────────────────────────────────────────────────
+
+@router.get("/overview")
+def agency_overview(request: Request):
+    from ..main_utils import require_api_key, scoped_company_ids
+    err = require_api_key(request)
+    if err:
+        return err
+    scoped = scoped_company_ids(request)
+    return {"clients": ag.overview(list(scoped) if scoped is not None else None), "next_month": _next_month()}
+
+
+@router.post("/{company_id}/suggest-config")
+async def suggest_config(company_id: str, request: Request):
+    err = _auth(request, company_id)
+    if err:
+        return err
+    co = company_get(company_id)
+    if not co:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        return {"suggestion": await asyncio.to_thread(ag.suggest_config, co)}
+    except Exception as exc:
+        return JSONResponse({"detail": f"Não consegui sugerir agora: {exc}"}, status_code=502)

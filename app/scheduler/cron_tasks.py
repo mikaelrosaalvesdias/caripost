@@ -185,6 +185,28 @@ async def task_check_platform_logins():
         logger.error("[CRON] Login check failed: %s", exc)
 
 
+async def task_agency_tick():
+    """Agência automática: fila de artes, agendamento, publicação, lembretes (a cada 3 min)."""
+    try:
+        from ..services.agency import tick
+        st = await tick()
+        if any(st.values()):
+            logger.info("[CRON] agency tick %s", st)
+    except Exception as exc:
+        logger.warning("[CRON] agency tick falhou: %s", exc)
+
+
+async def task_agency_monthly():
+    """Agência automática: no dia configurado gera o calendário do mês seguinte e avisa no WhatsApp."""
+    try:
+        from ..services.agency import monthly_job
+        done = await monthly_job()
+        if done:
+            logger.info("[CRON] agency monthly gerou: %s", done)
+    except Exception as exc:
+        logger.warning("[CRON] agency monthly falhou: %s", exc)
+
+
 async def task_monthly_reports():
     """Cron: generate and send monthly financial reports (1st of month, 10:00 UTC)."""
     logger.info("[CRON] Generating monthly financial reports...")
@@ -293,6 +315,21 @@ def setup_scheduler() -> None:
         trigger="cron",
         day=1, hour=10, minute=0,
         id="monthly_report",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        task_agency_tick,
+        trigger="interval",
+        minutes=3,
+        id="agency_tick",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        task_agency_monthly,
+        trigger="cron",
+        hour=12, minute=0,                  # 09:00 de Brasília; o dia (padrão 20) é checado por empresa
+        id="agency_monthly",
         replace_existing=True,
     )
 
