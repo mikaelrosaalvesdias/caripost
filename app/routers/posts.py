@@ -950,7 +950,7 @@ async def generate_post_image(request: Request):
         # O compositor com caixa/card fica opt-in, porque no post fixo ele mata a
         # direção de arte e deixa a peça com cara de template.
         rm = (body.get("render_mode") or "legacy_ai_full_art").strip().lower()
-        handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@")
+        handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@").rstrip("/").split("/")[-1].split("?")[0]
         if ai_bg:
             # Transbordo inteligente também no post único (mesmo cérebro do carrossel): se o provedor cair, usa equivalente.
             img, cost, model = await asyncio.to_thread(
@@ -1765,7 +1765,7 @@ async def _render_carousel_sync(request: Request):
                 _palette = ", ".join(f"{k} {v}" for k, v in ((bk_.get("colors") or {}).items()) if v)
                 _site_c = (company.get("website") or "").replace("https://", "").replace("http://", "").strip("/")
                 _fone_c = (company.get("phone") or "").strip()
-                _ig_c = ((company.get("socials") or {}).get("instagram") or "").strip()
+                _ig_c = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@").rstrip("/").split("/")[-1].split("?")[0]   # cadastro pode guardar a URL inteira
                 ref_ctx["contact"] = " · ".join(x for x in [
                     (f"WhatsApp {_fone_c}" if _fone_c else ""),
                     (_site_c or ""),
@@ -2161,7 +2161,7 @@ async def _render_carousel_sync(request: Request):
                     try:
                         _cand, _rc = await asyncio.to_thread(
                             generate_image_reference_full, _rprompt + _fb, _refs,
-                            ("1024x1536" if fmt != "story" else "1024x1536"),
+                            ("1024x1536" if fmt != "story" else "1024x1792"),
                             None, "medium", _ref_urls)
                         total_cost += (_rc or 0.0)
                     except Exception as _re:
@@ -3114,7 +3114,7 @@ async def generate_branded_video(request: Request):
             if _lps:
                 app_logos[(_p.get("name") or "").strip().lower()] = _lps
     site = (company.get("website") or "").strip()
-    handle = ((company.get("socials") or {}).get("instagram") or "").strip()
+    handle = ((company.get("socials") or {}).get("instagram") or "").strip().lstrip("@").rstrip("/").split("/")[-1].split("?")[0]
     phone_raw = "".join(ch for ch in (company.get("phone") or "") if ch.isdigit())
     phone = (f"({phone_raw[:2]}) {phone_raw[2:7]}-{phone_raw[7:]}" if len(phone_raw) == 11 else (company.get("phone") or "")).strip()
     # CTA determinístico: vídeo não deixa CTA/copy final na mão da IA. O código desenha o card,

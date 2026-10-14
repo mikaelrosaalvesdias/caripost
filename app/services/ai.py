@@ -1709,6 +1709,10 @@ def generate_image_with_person(person_bytes: bytes, prompt: str, model: str = "g
 # Todos aceitam REFERÊNCIAS (menos o omni text-to-image, marcado). O admin escolhe onde TEM saldo;
 # se o escolhido falhar (ex.: conta sem crédito), o motor CAI sozinho pro próximo provedor com chave.
 IMAGE_REF_MODELS: List[Dict[str, Any]] = [
+    {"id": "omni:codex/gpt-5.6-luna-image",           "name": "GPT-5.6 Luna (assinatura) — referências fiéis, ~30-60s", "provider": "omniroute", "note": "grátis (assinatura ChatGPT/Codex)"},
+    {"id": "omni:codex/gpt-5.6-sol-image",            "name": "GPT-5.6 Sol (assinatura) — referências fiéis, ~45s",    "provider": "omniroute", "note": "grátis (assinatura ChatGPT/Codex)"},
+    {"id": "omni:codex/gpt-5.6-terra-image",          "name": "GPT-5.6 Terra (assinatura) — mais lento, ~70s",          "provider": "omniroute", "note": "grátis (assinatura ChatGPT/Codex)"},
+    {"id": "kie:chatgpt/gpt-5.4-image-2",             "name": "gpt-5.4-image-2 (kie) — referências fiéis",            "provider": "kie",        "note": "créditos kie"},
     {"id": "openai/gpt-5.4-image-2",                  "name": "gpt-5.4-image-2 — referências fiéis",         "provider": "openrouter", "note": "pago (OpenRouter)"},
     {"id": "kie:google/nano-banana-edit",             "name": "nano-banana-edit — ótimo com texto/realismo", "provider": "kie",        "note": "créditos kie"},
     {"id": "kie:bytedance/seedream-v4-edit",          "name": "seedream-v4-edit — fotorrealista",            "provider": "kie",        "note": "créditos kie"},
@@ -1723,7 +1727,7 @@ def image_ref_models() -> List[Dict[str, Any]]:
 
 def get_image_ref_model() -> str:
     """Modelo do ESTÚDIO IA (reference_full) — CONFIGURÁVEL. Default = OpenRouter gpt-5.4-image-2."""
-    return (get_setting("image_ref.model") or "openai/gpt-5.4-image-2").strip()
+    return (get_setting("image_ref.model") or OMNI_IMAGE_REF_DEFAULTS[0]).strip()
 
 
 def _iref_provider(model: str) -> str:
@@ -1731,8 +1735,39 @@ def _iref_provider(model: str) -> str:
     if m.startswith("kie:chatgpt/"): return "kie_gpt"   # endpoint GPT da kie ≠ market (fallback entre eles é desejado)
     if m.startswith("kie:"):      return "kie"
     if m.startswith("cometapi:"): return "cometapi"
+    if m.startswith("omni:codex/"): return "omni_edit"   # GPT Image da assinatura: aceita REFERÊNCIAS via /images/edits
     if m.startswith("omni:"):     return "omniroute"
     return "openrouter"
+
+
+OMNI_IMAGE_REF_DEFAULTS = ["omni:codex/gpt-5.6-luna-image", "omni:codex/gpt-5.6-sol-image"]
+
+
+def _iref_omni_edit(model: str, prompt: str, ref_images, size: str) -> Tuple[bytes, Optional[float]]:
+    """Estúdio via OmniRoute (assinatura ChatGPT/Codex, custo ~0): /images/edits com as REFERÊNCIAS em image[]
+    (logo real, artes anteriores, foto). Validado 2026-10-13: logo reproduzida fiel; 1024x1536→4:5, 1024x1792→9:16.
+    Mandar referência em /images/generations é IGNORADO pelo gateway — por isso edits."""
+    import base64
+    refs = [b for b in (ref_images or []) if b][:6]
+    headers = {"Authorization": "Bearer " + (_omniroute_key() or "x")}
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as c:
+        if refs:
+            r = c.post(_omniroute_base() + "/images/edits", headers=headers,
+                       data={"model": model, "prompt": prompt[:4000], "size": size, "n": "1"},
+                       files=[("image[]", (f"ref{i + 1}.png", b, "image/png")) for i, b in enumerate(refs)])
+        else:
+            r = c.post(_omniroute_base() + "/images/generations", headers=headers,
+                       json={"model": model, "prompt": prompt[:4000], "size": size, "n": 1})
+    if r.status_code >= 400:
+        raise ValueError(f"OmniRoute {model} HTTP {r.status_code}: {r.text[:160]}")
+    item = (r.json().get("data") or [{}])[0]
+    if item.get("b64_json"):
+        return base64.b64decode(item["b64_json"]), 0.0
+    url = item.get("url") or item.get("image_url")
+    if url:
+        with httpx.Client(timeout=120) as c:
+            return c.get(url).content, 0.0
+    raise ValueError(f"OmniRoute {model}: resposta sem imagem")
 
 
 def _iref_openrouter(model: str, prompt: str, ref_images, size: str, quality: str) -> Tuple[bytes, Optional[float]]:
@@ -1828,8 +1863,8 @@ def generate_image_reference_full(prompt: str, ref_images: Optional[List[bytes]]
     próximo provedor com chave — nunca fica preso a um só modelo. Retorna (png, custo)."""
     chosen = (model or get_image_ref_model()).strip()
     # cadeia: ESCOLHIDO primeiro; depois os outros provedores com chave (rede de segurança anti-quebra)
-    chain = [chosen]
-    if _kie_key():        chain.append("kie:google/nano-banana-edit")
+    chain = [chosen] + OMNI_IMAGE_REF_DEFAULTS            # assinatura (grátis) antes de gastar crédito
+    if _kie_key():        chain += ["kie:chatgpt/gpt-5.4-image-2", "kie:google/nano-banana-edit"]
     if _openrouter_key(): chain.append("openai/gpt-5.4-image-2")
     if _cometapi_key():   chain.append("cometapi:gemini-3.1-flash-image-preview")
     if _omniroute_key():  chain.append("omni:antigravity/gemini-3.1-flash-image")
@@ -1851,6 +1886,8 @@ def generate_image_reference_full(prompt: str, ref_images: Optional[List[bytes]]
                 if not base:
                     raise ValueError("cometapi exige ao menos 1 referência em bytes.")
                 return generate_image_with_person(base, prompt, mid.split(":", 1)[1])
+            if prov == "omni_edit":
+                return _iref_omni_edit(mid.split(":", 1)[1], prompt, ref_images, size)
             if prov == "omniroute":
                 return generate_image_omniroute(mid.split(":", 1)[1], prompt, size)
             return _iref_openrouter(mid, prompt, ref_images, size, quality)   # openrouter (default)
