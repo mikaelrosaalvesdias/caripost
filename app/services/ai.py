@@ -1887,12 +1887,15 @@ def generate_image_reference_full(prompt: str, ref_images: Optional[List[bytes]]
                     raise ValueError("cometapi exige ao menos 1 referência em bytes.")
                 return generate_image_with_person(base, prompt, mid.split(":", 1)[1])
             if prov == "omni_edit":
-                return _iref_omni_edit(mid.split(":", 1)[1], prompt, ref_images, size)
+                _out = _iref_omni_edit(mid.split(":", 1)[1], prompt, ref_images, size)
+                print(f"[estudio] motor={mid} refs={len([b for b in (ref_images or []) if b])} ok", flush=True)
+                return _out
             if prov == "omniroute":
                 return generate_image_omniroute(mid.split(":", 1)[1], prompt, size)
             return _iref_openrouter(mid, prompt, ref_images, size, quality)   # openrouter (default)
         except Exception as e:
             errs.append(f"{prov}: {str(e)[:110]}")
+            print(f"[estudio] motor={mid} FALHOU: {str(e)[:160]}", flush=True)
             continue
     raise ValueError("Estúdio IA falhou em todos os provedores (" + " | ".join(errs) + ")")
 

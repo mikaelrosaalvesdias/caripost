@@ -1966,6 +1966,10 @@ async def _render_carousel_sync(request: Request):
                 # Cada provedor limita referências. Reservamos espaço para estilo, marca e oferta,
                 # em vez de deixar um grupo inteiro expulsar os demais do corte (5 URLs / 8 bytes).
                 _refs = list((ref_ctx.get("arts") or [])[:2]) + list((ref_ctx.get("logos") or [])[:2])
+                # Rótulo por referência: com várias imagens o modelo precisa saber QUAL é qual (senão ignora
+                # a logo do app e só escreve o nome). Reordenado por prioridade antes de chamar o motor.
+                _ref_lbl = (["arte de inspiração do cliente (só estilo/clima)"] * len((ref_ctx.get("arts") or [])[:2])
+                            + [f"LOGO OFICIAL da marca {company.get('name','')}"] * len((ref_ctx.get("logos") or [])[:2]))
                 _brand_ref_urls = list((ref_ctx.get("logo_urls") or [])[:2])
                 _style_ref_urls = list((ref_ctx.get("art_urls") or [])[:2])
                 _ref_urls = []
@@ -1977,7 +1981,7 @@ async def _render_carousel_sync(request: Request):
                 if influencer and inf_photos and stype in ("cover", "cta"):
                     _pi = await asyncio.to_thread(pick_influencer_photo, inf_photos, s.get("title", ""), stype, used_inf_idx)
                     used_inf_idx.add(_pi)
-                    _refs.append(inf_photos[_pi])
+                    _refs.append(inf_photos[_pi]); _ref_lbl.append("FOTO REAL do influencer")
                     _extra.append("Uma das referências é a FOTO REAL da pessoa (influencer): use ESTA pessoa EM DESTAQUE "
                                   "na composição (é a capa/CTA), rosto e expressão 100% FIÉIS — não redesenhe o rosto, "
                                   "não troque a pessoa, integre-a como protagonista da cena.")
@@ -1985,7 +1989,7 @@ async def _render_carousel_sync(request: Request):
                     _prev = (_load_upload_bytes(_anchor_url, {str(company_id)})
                              if isinstance(_anchor_url, str) else None)
                     if _prev:
-                        _refs.append(_prev)
+                        _refs.append(_prev); _ref_lbl.append("primeira tela desta mesma peça (família visual)")
                         _anchor_ref_url = ((_render_public_base() + _anchor_url)
                                            if _anchor_url.startswith("/") else _anchor_url)
                         _extra.append("Uma das referências é a PRIMEIRA tela desta MESMA peça: mantenha EXATAMENTE "
@@ -2014,7 +2018,9 @@ async def _render_carousel_sync(request: Request):
                                         in ("png", "jpg", "jpeg", "webp")), "")
                             _seen_p.add(_n3)
                             _prod_logos.append((_label3, _lg3[0], _u3 or ""))
-                else:
+                if not _prod_logos:
+                    # Sem oferta marcada (ou oferta sem logo): acha os apps CITADOS no texto da tela no catálogo
+                    # que este usuário enxerga (mesmo escopo de tenancy) — senão a arte só ESCREVE "ExitLag/Deezer".
                     try:
                         from ..db_companies import company_list as _clist3, product_list as _plist3
                         from ..main_utils import scoped_company_ids as _scoped_ids3
@@ -2042,7 +2048,7 @@ async def _render_carousel_sync(request: Request):
                         pass
                 for _pn, _lp2, _pu in _prod_logos[:3]:
                     try:
-                        _refs.append(open(_lp2, "rb").read())
+                        _refs.append(open(_lp2, "rb").read()); _ref_lbl.append(f"LOGO OFICIAL do app {_pn}")
                         if _pu:
                             _ref_urls.append((_render_public_base() + _pu) if _pu.startswith("/") else _pu)
                         _extra.append("Uma das referências é a LOGO OFICIAL ATUAL de " + _pn + " — aplique EXATAMENTE "
@@ -2059,7 +2065,7 @@ async def _render_carousel_sync(request: Request):
                             )
                             if not _photo_bytes:
                                 continue
-                            _refs.append(_photo_bytes)
+                            _refs.append(_photo_bytes); _ref_lbl.append("foto real da oferta " + ((_p3.get("name") or "produto").strip()))
                             _ref_urls.append((_render_public_base() + _photo_url)
                                              if _photo_url.startswith("/") else _photo_url)
                             _extra.append(
@@ -2067,6 +2073,25 @@ async def _render_carousel_sync(request: Request):
                                 + ((_p3.get("name") or "produto").strip())
                                 + " — preserve formato, cores e detalhes visuais; não substitua por produto genérico."
                             )
+                # Prioridade das imagens (provedores cortam em 6–8): marca → logos dos apps → continuidade →
+                # pessoa → foto da oferta → inspiração. Mapa numerado vai no prompt.
+                def _prio3(lbl):
+                    return (0 if lbl.startswith("LOGO OFICIAL da marca") else 1 if lbl.startswith("LOGO OFICIAL do app")
+                            else 2 if lbl.startswith("primeira tela") else 3 if lbl.startswith("FOTO REAL")
+                            else 4 if lbl.startswith("foto real") else 5)
+                _pairs3 = sorted(zip(_ref_lbl, _refs), key=lambda x: _prio3(x[0]))[:6]
+                _ref_lbl = [l for l, _ in _pairs3]; _refs = [b for _, b in _pairs3]
+                _app_names3 = [l.replace("LOGO OFICIAL do app ", "") for l in _ref_lbl if l.startswith("LOGO OFICIAL do app")]
+                print(f"[estudio] {company.get('name','')} tela {i}: refs={_ref_lbl} | apps no texto={_app_names3} "
+                      f"| offers_explicit={offers_explicit} slide_products={[p.get('name') for p in slide_products]}", flush=True)
+                if _refs:
+                    _extra.append("MAPA DAS IMAGENS DE REFERÊNCIA (na ordem enviada): "
+                                  + "; ".join(f"imagem {n}) {l}" for n, l in enumerate(_ref_lbl, 1)) + ".")
+                if _app_names3:
+                    _extra.append("OBRIGATÓRIO: aplique na arte a LOGO OFICIAL (imagem) de cada app citado — "
+                                  + ", ".join(_app_names3) + " — como selo/logotipo visível e legível, copiada da "
+                                  "referência correspondente. NÃO basta escrever o nome do app em texto: a logo tem que "
+                                  "aparecer. Logos são imagens e NÃO contam como 'texto extra' na regra de texto.")
                 # Ordem final: continuidade da peça, família visual aprovada, marca e oferta real.
                 # Deduplicação mantém ao menos uma inspiração dentro do limite do provedor.
                 _ordered_urls = ([_anchor_ref_url] if _anchor_ref_url else [])
