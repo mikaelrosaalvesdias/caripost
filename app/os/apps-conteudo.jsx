@@ -1307,6 +1307,7 @@ function CarrosselCreator({ company, format }) {
       const caption = `${si + 1} / ${sl.length} · versão ${viewer.vi + 1} (${rv.model}) · ${sl[si].image_ok ? 'foto IA' : 'editorial (sem foto)'}`;
       return <Lightbox src={sl[si].url} kind="image" name={caption} onClose={() => setViewer(null)}
         actions={<>
+          <a className="btn sm" href={sl[si].url} download={`arte-${viewer.vi + 1}-${si + 1}.png`}><Icon name="download" />Baixar</a>
           <button className="btn sm ghost" disabled={si === 0} onClick={() => go(-1)}>Anterior</button>
           <button className="btn sm ghost" disabled={si === sl.length - 1} onClick={() => go(1)}>Próxima<Icon name="arrowR" /></button>
           {sl[si].prompt && <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'rgba(255,255,255,.72)', maxHeight: '5.4em', overflowY: 'auto' }}>
