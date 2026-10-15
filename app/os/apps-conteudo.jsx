@@ -1042,8 +1042,10 @@ function CarrosselCreator({ company, format }) {
   const [influencers, setInfluencers] = React.useState([]);
   const [useInf, setUseInf] = React.useState(st.useInfluencer || false);   // opt-in: usar influencer na capa/CTA
   const [useStudio, setUseStudio] = React.useState(st.useStudio || false);   // ESTÚDIO IA: arte inteira por referências (logo+manual+refs+KB)
-  const [artMode, setArtMode] = React.useState(st.artMode || 'layered');       // CAMADAS (padrão): foto IA + tipografia Caripost, editável no Canva
-  const artRenderMode = artMode === 'layered' ? 'layered' : (useStudio ? 'reference_full' : undefined);
+  // Estilo da arte: 3 níveis da arte livre pela IA (impacto = como era antes; equilibrado = padrão; limpo) + Camadas (editável no Canva)
+  const [artMode, setArtMode] = React.useState(['impacto', 'equilibrado', 'limpo', 'layered'].includes(st.artMode3) ? st.artMode3 : 'equilibrado');
+  const artRenderMode = artMode === 'layered' ? 'layered' : 'reference_full';
+  const artStudioStyle = artMode === 'layered' ? undefined : artMode;
   const [canvaBusy, setCanvaBusy] = React.useState('');
   const [infId, setInfId] = React.useState(st.influencerId || '');
   const [viewer, setViewer] = React.useState(null);   // {vi, si}
@@ -1074,7 +1076,7 @@ function CarrosselCreator({ company, format }) {
   const [refCur, setRefCur] = React.useState('');               // modelo FIXADO do Estúdio (mostra no rótulo da opção padrão)
   React.useEffect(() => { window.mpApi.aiModels().then(r => { setImgModels(r.image || []); setModelChoice((r && r.choice_enabled) !== false); setRefCur((r && r.image_ref_current) || ''); }).catch(() => {}); }, []);
   React.useEffect(() => { window.mpApi.listInfluencers(company.id).then(l => setInfluencers((l || []).filter(i => (i.photos || []).length))).catch(() => {}); }, [company.id]);
-  React.useEffect(() => { ContState.set(company.id, { useInfluencer: useInf, influencerId: infId, useStudio, artMode }); }, [useInf, infId, useStudio, artMode]);
+  React.useEffect(() => { ContState.set(company.id, { useInfluencer: useInf, influencerId: infId, useStudio, artMode3: artMode }); }, [useInf, infId, useStudio, artMode]);
   React.useEffect(() => { ContState.set(company.id, { carouselVersionsV2: versions }); }, [versions]);  // salva a escolha do modelo (V2)
   React.useEffect(() => {   // SANEIA escolha morta: 'editorial' (removido) ou modelo de provedor escondido no
     if (!modelChoice) {                                   // admin desligou a escolha → TUDO usa o modelo FIXADO
@@ -1124,7 +1126,7 @@ function CarrosselCreator({ company, format }) {
             : `Gerando a arte na Kie e validando o texto…` }));
           setMsg(`Renderizando versão ${i + 1}/${versions.length}…`);
           try {
-            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: artRenderMode, ...offerPayload });
+            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: artRenderMode, studio_style: artStudioStyle, ...offerPayload });
             out[i] = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
             const ready = out.filter(Boolean);
             setResults(ready); ContState.set(company.id, { carouselResults: ready });
@@ -1186,7 +1188,7 @@ function CarrosselCreator({ company, format }) {
     setBusy(true); setMsg('');
     try {
       await _runWithProc(aiSlow ? 300000 : 60000, `Regerando a arte da versão ${vi + 1}${(rv.base_urls || []).some(Boolean) && !useStudio ? ' (reusando as fotos)' : ''}…`, async () => {
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: artRenderMode, ...offerPayload });
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: artRenderMode, studio_style: artStudioStyle, ...offerPayload });
         const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
         setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
         setMsg(`Arte da versão ${vi + 1} regerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
@@ -1203,7 +1205,7 @@ function CarrosselCreator({ company, format }) {
       await _runWithProc(aiSlow ? 300000 : 60000, `Regerando ${fmt === 'carrossel' ? 'a tela ' + (si + 1) : 'a arte'} (paga só ela)…`, async () => {
         const bases = (rv.base_urls && rv.base_urls.length ? rv.base_urls.slice() : telas.map(() => null));
         bases[si] = null;   // zera SÓ esta → regenera (paga 1 slide); as outras reusam a foto salva (grátis)
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: artRenderMode, ...offerPayload });
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: artRenderMode, studio_style: artStudioStyle, ...offerPayload });
         const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
         setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
         setMsg(`${fmt === 'carrossel' ? 'Tela ' + (si + 1) : 'Arte'} regenerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
@@ -1277,10 +1279,13 @@ function CarrosselCreator({ company, format }) {
       </div>
     </Field>
     <Field label="Estilo da arte">
-      <Segmented value={artMode} onChange={setArtMode} options={[['layered', 'Camadas — limpa, nítida, editável no Canva'], ['free', 'Arte livre pela IA']]} />
-      <div className="hint">{artMode === 'layered'
-        ? 'A IA faz só a foto (realista, sem texto). Título, texto, botão e logos são montados em alta resolução com a fonte da marca — sem cara de IA, e cada elemento pode ser movido no Canva.'
-        : 'A IA desenha a peça inteira (mais ousada e variada). O texto fica dentro da imagem: no Canva não dá para mover os elementos.'}</div>
+      <Segmented value={artMode} onChange={setArtMode} options={[['impacto', 'IA pura'], ['equilibrado', 'Equilibrado (padrão)'], ['limpo', 'Limpo'], ['layered', 'Camadas (Canva)']]} />
+      <div className="hint">{{
+        impacto: 'IA pura: a IA cria a peça inteira com total liberdade — mais ousada (é como era antes).',
+        equilibrado: 'Criativa e com personagem, mas sem os exageros de IA (neon, rastros de luz); logos dos apps sempre visíveis.',
+        limpo: 'Minimalista: foto realista, tipografia contida e poucos elementos.',
+        layered: 'A IA faz só a foto; título, texto, botão e logos são montados em alta resolução e cada elemento pode ser movido no Canva.',
+      }[artMode]}</div>
     </Field>
     {influencers.length > 0 && <Field label="Influencer (opcional — entra só na capa e no CTA)">
       <label className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>

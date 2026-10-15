@@ -1425,6 +1425,34 @@ def _load_upload_bytes(url: str, allowed_company_ids=None, max_bytes: int = 32 *
     return None
 
 
+def _studio_style_block(design_ov) -> str:
+    """Direção visual do Estúdio IA (arte livre): 'impacto' (antigo, livre), 'equilibrado' (padrão: criativo, sem os
+    exageros de IA, logos obrigatórias) e 'limpo' (minimalista). Moldável por cliente: creative_config.design.studio_style
+    (ou um texto próprio em creative_config.design.studio_style_text)."""
+    d = design_ov or {}
+    custom = (d.get("studio_style_text") or "").strip()
+    if custom:
+        return " " + custom + " "
+    style = (d.get("studio_style") or "equilibrado")
+    if style == "impacto":
+        return " "
+    if style == "equilibrado":
+        return (" DIREÇÃO VISUAL: composição CRIATIVA, com personalidade e cena que conta a história do tema (pessoas "
+                "reais com emoção, contexto e profundidade quando fizer sentido). Evite só os EXAGEROS típicos de IA: "
+                "neon/glow estourado, partículas, raios/rastros de luz e ícones flutuando sem função — luz e brilho só "
+                "quando fazem parte natural da cena. Tipografia com hierarquia clara (no máximo 3 tamanhos), título forte "
+                "porém sem 3D, contorno ou sombra pesada; texto curto e respirado. As LOGOS (da marca e dos apps citados) "
+                "são OBRIGATÓRIAS, nítidas e visíveis — não são enfeite. Se foi pedido rodapé de contato, ele é obrigatório. ")
+    return (" DIREÇÃO VISUAL (anti-'cara de IA', obrigatória): estética de agência humana e marca séria. Fotografia "
+            "realista e natural (pessoas e ambientes reais, luz natural, cores naturais) — nada de cena 3D/CGI, nada "
+            "perfeito demais. PROIBIDO: neon, glow, brilho estourado, reflexos exagerados, partículas, rastros/linhas de "
+            "luz, ondas de Wi-Fi ou ícones flutuando, gradientes chamativos, contornos luminosos, selos e enfeites "
+            "espalhados. TIPOGRAFIA: uma família, no máximo 2 tamanhos, título de tamanho médio (não gigante), peso "
+            "semibold, sem efeitos (sem sombra, brilho, 3D ou contorno), muito respiro, grid limpo, poucos elementos. "
+            "Botão simples, chapado. Use as cores da marca em áreas chapadas. Logos da marca e dos apps citados e o "
+            "rodapé de contato (se pedido) continuam OBRIGATÓRIOS — não são enfeites. ")
+
+
 def _render_public_base() -> str:
     """Base PÚBLICA p/ montar URL de foto que o kie consegue baixar (image-edit). Override via setting."""
     return (get_setting("render.public_base") or "https://caripost.cariap.com.br").rstrip("/")
@@ -1704,6 +1732,8 @@ async def _render_carousel_sync(request: Request):
         structure = (tmpl or {}).get("structure")
         phone = (company.get("phone") or "").strip()
         design_ov = ((company.get("brand_kit") or {}).get("creative_config") or {}).get("design")
+        if (body.get("studio_style") or "") in ("impacto", "equilibrado", "limpo"):   # escolha por geração (tela)
+            design_ov = dict(design_ov or {}, studio_style=body["studio_style"])
         base = str(request.base_url).rstrip("/")
 
         def _logo_url(assets):
@@ -2224,6 +2254,7 @@ async def _render_carousel_sync(request: Request):
                     + _exact                                    # regra forte de texto verbatim (logo no início do conteúdo)
                     + _visual
                     + _logo_rule
+                    + _studio_style_block(design_ov)
                     + ref_ctx["brand"]
                     + (f"CONTEXTO da oferta (use SÓ para entender o tema e compor a CENA/clima — NÃO renderize este "
                        f"texto na arte, NÃO escreva estes detalhes como legenda; o texto visível é apenas o listado "

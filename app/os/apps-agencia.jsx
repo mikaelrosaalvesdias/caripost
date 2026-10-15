@@ -87,7 +87,7 @@ function AgConfigModal({ cid, name, onClose }) {
   async function salvar() {
     setBusy('save');
     try {
-      const keys = ['enabled', 'generate_day', 'notify_whatsapp', 'mix', 'time', 'weekdays', 'pillars', 'cta', 'whatsapp', 'hashtags_base', 'style'];
+      const keys = ['enabled', 'generate_day', 'notify_whatsapp', 'mix', 'time', 'weekdays', 'pillars', 'cta', 'whatsapp', 'hashtags_base', 'style', 'art_mode'];
       const next = { ...ov };
       keys.forEach(k => { next[k] = cfg[k]; });
       next.enabled = !!cfg.enabled; next.generate_day = Number(cfg.generate_day) || 20;
@@ -109,6 +109,8 @@ function AgConfigModal({ cid, name, onClose }) {
         <Field label="Gera o mês seguinte no dia"><input className="inp" type="number" min="1" max="28" style={{ width: 90 }} value={cfg.generate_day || 20} onChange={e => set('generate_day', e.target.value)} /></Field>
         <Field label="WhatsApp para avisos"><input className="inp" placeholder="5511999998888" value={cfg.notify_whatsapp || ''} onChange={e => set('notify_whatsapp', e.target.value)} /></Field>
       </div>
+      <div className="sec">Estilo das artes</div>
+      <Segmented value={cfg.art_mode || 'equilibrado'} onChange={v => set('art_mode', v)} options={[['impacto', 'IA pura'], ['equilibrado', 'Equilibrado'], ['limpo', 'Limpo'], ['layered', 'Camadas (Canva)']]} />
       <div className="sec">Volume e horário</div>
       <div className="rowx" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         {[['post', 'Posts'], ['carrossel', 'Carrosséis'], ['reels', 'Reels']].map(([k, l]) =>
