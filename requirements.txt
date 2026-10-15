@@ -38,3 +38,4 @@ pypdf
 
 # JUIZ DE TEXTO local (Estúdio IA): OCR determinístico — requer tesseract-ocr + tesseract-ocr-por (Dockerfile)
 pytesseract>=0.3.10,<0.4
+python-pptx>=1.0,<2

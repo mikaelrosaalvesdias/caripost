@@ -1042,6 +1042,9 @@ function CarrosselCreator({ company, format }) {
   const [influencers, setInfluencers] = React.useState([]);
   const [useInf, setUseInf] = React.useState(st.useInfluencer || false);   // opt-in: usar influencer na capa/CTA
   const [useStudio, setUseStudio] = React.useState(st.useStudio || false);   // ESTÚDIO IA: arte inteira por referências (logo+manual+refs+KB)
+  const [artMode, setArtMode] = React.useState(st.artMode || 'layered');       // CAMADAS (padrão): foto IA + tipografia Caripost, editável no Canva
+  const artRenderMode = artMode === 'layered' ? 'layered' : (useStudio ? 'reference_full' : undefined);
+  const [canvaBusy, setCanvaBusy] = React.useState('');
   const [infId, setInfId] = React.useState(st.influencerId || '');
   const [viewer, setViewer] = React.useState(null);   // {vi, si}
   const [editAsk, setEditAsk] = React.useState(null); // {rv, vi, si} — edição com IA (substitui window.prompt)
@@ -1071,7 +1074,7 @@ function CarrosselCreator({ company, format }) {
   const [refCur, setRefCur] = React.useState('');               // modelo FIXADO do Estúdio (mostra no rótulo da opção padrão)
   React.useEffect(() => { window.mpApi.aiModels().then(r => { setImgModels(r.image || []); setModelChoice((r && r.choice_enabled) !== false); setRefCur((r && r.image_ref_current) || ''); }).catch(() => {}); }, []);
   React.useEffect(() => { window.mpApi.listInfluencers(company.id).then(l => setInfluencers((l || []).filter(i => (i.photos || []).length))).catch(() => {}); }, [company.id]);
-  React.useEffect(() => { ContState.set(company.id, { useInfluencer: useInf, influencerId: infId, useStudio }); }, [useInf, infId, useStudio]);
+  React.useEffect(() => { ContState.set(company.id, { useInfluencer: useInf, influencerId: infId, useStudio, artMode }); }, [useInf, infId, useStudio, artMode]);
   React.useEffect(() => { ContState.set(company.id, { carouselVersionsV2: versions }); }, [versions]);  // salva a escolha do modelo (V2)
   React.useEffect(() => {   // SANEIA escolha morta: 'editorial' (removido) ou modelo de provedor escondido no
     if (!modelChoice) {                                   // admin desligou a escolha → TUDO usa o modelo FIXADO
@@ -1121,7 +1124,7 @@ function CarrosselCreator({ company, format }) {
             : `Gerando a arte na Kie e validando o texto…` }));
           setMsg(`Renderizando versão ${i + 1}/${versions.length}…`);
           try {
-            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined, ...offerPayload });
+            const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: versions[i].model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: artRenderMode, ...offerPayload });
             out[i] = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
             const ready = out.filter(Boolean);
             setResults(ready); ContState.set(company.id, { carouselResults: ready });
@@ -1157,13 +1160,33 @@ function CarrosselCreator({ company, format }) {
       .catch((e) => { clearInterval(tick); setProc({ open: true, phase: 'error', detail: String((e && e.message) || e) }); throw e; });
   }
 
+  async function abrirCanva(rv) {
+    setCanvaBusy(rv.post_id + ':open');
+    try {
+      const r = await window.mpApi.canvaOpenOrConnect(rv.post_id);
+      setResults(rs => rs.map(x => x.post_id === rv.post_id ? { ...x, canva: r.canva } : x));
+      if (r.canva && r.canva.edit_url) window.open(r.canva.edit_url, '_blank');
+      mpToast('Abrimos no Canva. Edite lá e depois clique em "Trazer do Canva".');
+    } catch (e) { mpToast('Erro: ' + e.message, 'err'); }
+    finally { setCanvaBusy(''); }
+  }
+  async function trazerCanva(rv, vi) {
+    setCanvaBusy(rv.post_id + ':pull');
+    try {
+      const r = await window.mpApi.canvaPull(rv.post_id);
+      setResults(rs => { const c = rs.slice(); c[vi] = { ...c[vi], slides: (r.urls || []).map((u, k) => ({ ...(c[vi].slides[k] || {}), url: u })) }; ContState.set(company.id, { carouselResults: c }); return c; });
+      mpToast('Versão do Canva trazida.');
+    } catch (e) { mpToast('Erro: ' + e.message, 'err'); }
+    finally { setCanvaBusy(''); }
+  }
+
   async function regerarArte(rv, vi) {
     if (!(rv.base_urls || []).some(Boolean)) { setMsg('Esta versão não tem fotos salvas pra reusar (gere com um modelo de IA primeiro).'); return; }
     const aiSlow = /gpt-5\.4|chatgpt/i.test(rv.model || '');
     setBusy(true); setMsg('');
     try {
       await _runWithProc(aiSlow ? 300000 : 60000, `Regerando a arte da versão ${vi + 1}${(rv.base_urls || []).some(Boolean) && !useStudio ? ' (reusando as fotos)' : ''}…`, async () => {
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: useStudio ? 'reference_full' : undefined, ...offerPayload });
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, base_urls: rv.base_urls, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, render_mode: artRenderMode, ...offerPayload });
         const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
         setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
         setMsg(`Arte da versão ${vi + 1} regerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
@@ -1180,7 +1203,7 @@ function CarrosselCreator({ company, format }) {
       await _runWithProc(aiSlow ? 300000 : 60000, `Regerando ${fmt === 'carrossel' ? 'a tela ' + (si + 1) : 'a arte'} (paga só ela)…`, async () => {
         const bases = (rv.base_urls && rv.base_urls.length ? rv.base_urls.slice() : telas.map(() => null));
         bases[si] = null;   // zera SÓ esta → regenera (paga 1 slide); as outras reusam a foto salva (grátis)
-        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: useStudio ? 'reference_full' : undefined, ...offerPayload });
+        const r = await window.mpApi.renderCarousel({ company_id: company.id, telas, model: rv.model, template_id: templateId, use_influencer: useInf, influencer_id: infId, format: fmt, event_id: st.eventId, base_urls: bases, render_mode: artRenderMode, ...offerPayload });
         const nv = { model: r.model, slides: r.slides || [], cost: r.cost || 0, warning: r.warning || '', post_id: r.post_id, base_urls: r.base_urls || [], offer_refs: r.offer_refs || offerRefs };
         setResults(rs => { const c = rs.slice(); c[vi] = nv; ContState.set(company.id, { carouselResults: c }); return c; });
         setMsg(`${fmt === 'carrossel' ? 'Tela ' + (si + 1) : 'Arte'} regenerada. Custo: R$ ${(r.cost || 0).toFixed(2)}.`);
@@ -1253,6 +1276,12 @@ function CarrosselCreator({ company, format }) {
         {versions.length < (isClientUser() ? clientMaxVer() : 4) && <button className="btn sm ghost" onClick={addVer}>{(isClientUser() || !modelChoice) ? '+ versão' : '+ versão (outro modelo)'}</button>}
       </div>
     </Field>
+    <Field label="Estilo da arte">
+      <Segmented value={artMode} onChange={setArtMode} options={[['layered', 'Camadas — limpa, nítida, editável no Canva'], ['free', 'Arte livre pela IA']]} />
+      <div className="hint">{artMode === 'layered'
+        ? 'A IA faz só a foto (realista, sem texto). Título, texto, botão e logos são montados em alta resolução com a fonte da marca — sem cara de IA, e cada elemento pode ser movido no Canva.'
+        : 'A IA desenha a peça inteira (mais ousada e variada). O texto fica dentro da imagem: no Canva não dá para mover os elementos.'}</div>
+    </Field>
     {influencers.length > 0 && <Field label="Influencer (opcional — entra só na capa e no CTA)">
       <label className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
         <input type="checkbox" checked={useInf} onChange={e => setUseInf(e.target.checked)} />
@@ -1274,6 +1303,12 @@ function CarrosselCreator({ company, format }) {
         sub={`${rv.slides.length} ${rv.slides.length === 1 ? 'tela' : 'telas'}${isClientUser() ? '' : ' · ' + rv.model}${rv.cost ? ' · R$ ' + rv.cost.toFixed(2) : (isClientUser() ? '' : ' · grátis')}`}
         right={<div className="row" style={{ gap: 6 }}>
           {(rv.base_urls || []).some(Boolean) && <button className="btn sm ghost" disabled={busy} title="Reusa as fotos já geradas e só redesenha a arte — não paga IA" onClick={() => regerarArte(rv, vi)}><Icon name="refresh" />Regerar arte (grátis)</button>}
+          {rv.post_id && (rv.slides || []).some(x => x.layers_url) && <>
+            <button className="btn sm ghost" disabled={busy || !!canvaBusy} title="Abre a arte como design editável no Canva (cada elemento móvel)" onClick={() => abrirCanva(rv)}>
+              <Icon name="pen" />{canvaBusy === rv.post_id + ':open' ? 'Abrindo…' : 'Editar no Canva'}</button>
+            {rv.canva && <button className="btn sm ghost" disabled={busy || !!canvaBusy} title="Traz a versão editada no Canva de volta para este post" onClick={() => trazerCanva(rv, vi)}>
+              <Icon name="download" />{canvaBusy === rv.post_id + ':pull' ? 'Trazendo…' : 'Trazer do Canva'}</button>}
+          </>}
           <button className="btn sm pri" disabled={busy} onClick={() => enviarAprovacao(rv, vi)}>Enviar para Aprovação<Icon name="arrowR" /></button>
         </div>} />
       {rv.warning && <Callout kind="warn">{rv.warning}</Callout>}

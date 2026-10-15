@@ -540,6 +540,11 @@ async def _api(method: str, path: str, body: Optional[Dict[str, Any]] = None, ti
     return data
 
 
+def company_get_safe(company_id: str) -> Dict[str, Any]:
+    from ..db_companies import company_get
+    return company_get(company_id) or {}
+
+
 def slot_iso(item: Dict[str, Any]) -> str:
     return (item.get("slot_at") or "")[:19] + _TZ
 
@@ -600,7 +605,8 @@ async def produce_item(item_id: str) -> None:
             telas[0] = dict(telas[0], title=theme)    # capa = título APROVADO no calendário
         rr = await _api("POST", "/api/posts/render-carousel", {
             "company_id": item["company_id"], "telas": telas, "model": "", "format": fmt,
-            "render_mode": "reference_full", "offer_refs": offers}, timeout=1800)
+            "render_mode": (agency_cfg(company_get_safe(item["company_id"])).get("art_mode") or "layered"),
+            "offer_refs": offers}, timeout=1800)
         slides = [s.get("url") for s in (rr.get("slides") or []) if s.get("url")]
         if not slides:
             raise ValueError(rr.get("warning") or "nenhuma imagem gerada")

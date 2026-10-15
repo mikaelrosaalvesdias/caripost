@@ -271,3 +271,18 @@ async def suggest_config(company_id: str, request: Request):
         return {"suggestion": await asyncio.to_thread(ag.suggest_config, co)}
     except Exception as exc:
         return JSONResponse({"detail": f"Não consegui sugerir agora: {exc}"}, status_code=502)
+
+
+@router.post("/items/{item_id}/refresh-art")
+def refresh_art(item_id: str, request: Request):
+    """Depois de 'Trazer do Canva': sincroniza as telas da peça com o post (versão editada)."""
+    item, err = _item_or_404(request, item_id)
+    if err:
+        return err
+    from ..db_companies import post_get
+    post = post_get(item.get("post_id") or "") or {}
+    urls = (post.get("meta") or {}).get("carousel_urls") or []
+    if urls:
+        meta = dict(item.get("meta") or {}); meta["slides"] = urls
+        item = ag.item_update(item_id, {"meta": meta})
+    return {"item": item}

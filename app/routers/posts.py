@@ -1388,7 +1388,7 @@ def _resolve_render_mode(body: dict) -> str:
       • legacy_ai_full_art: a IA desenha a arte inteira; o código só carimba logo (modo antigo, isolado).
     Compat: se render_mode não vier, deriva de model + composer (comportamento atual)."""
     rm = (body.get("render_mode") or "").strip().lower()
-    if rm in ("photo_ai_composer", "composer_only", "legacy_ai_full_art", "reference_full"):
+    if rm in ("photo_ai_composer", "composer_only", "legacy_ai_full_art", "reference_full", "layered"):
         return rm
     model = (body.get("model") or "").strip()
     # ══ ESTÚDIO IA É O PADRÃO DO MOTOR ══ (identidade REAL do cadastro: logos/manual/referências/KB —
@@ -1650,7 +1650,7 @@ async def _render_carousel_sync(request: Request):
     if not feature_enabled(company, "generate"):
         return JSONResponse({"detail": "Geração de conteúdo bloqueada para esta empresa.", "error": "feature_blocked"}, status_code=403)
     render_mode = _resolve_render_mode(body)            # photo_ai_composer | composer_only | legacy_ai_full_art
-    ai_bg = render_mode in ("photo_ai_composer", "legacy_ai_full_art", "reference_full")
+    ai_bg = render_mode in ("photo_ai_composer", "legacy_ai_full_art", "reference_full", "layered")
     use_composer = render_mode == "photo_ai_composer"
     ref_full = render_mode == "reference_full"   # ESTÚDIO IA: arte inteira guiada por referências do CADASTRO
     # CACHE: base_urls (1 por tela, alinhado por índice) → reusa a foto salva e NÃO chama a IA (custo 0).
@@ -1891,6 +1891,75 @@ async def _render_carousel_sync(request: Request):
                     found.append(candidate); seen_ids.add(product_id)
             return found
 
+        async def _render_layered(i, s, app_variant_groups, phone_fmt):
+            """ARTE EM CAMADAS: IA gera SÓ a foto (anti-'cara de IA', sem texto); título/texto/botão/contato/logos
+            são camadas do Caripost em 2160px (nítido) + layers.json para abrir editável no Canva."""
+            from ..services import layered_composer as _lc
+            from ..services.ai import generate_image_reference_full as _gen_ref
+            _role = ("cover" if (total == 1 or i == 1) else
+                     ("cta" if (i == total or (s.get("type") or "").lower() == "cta") else "content"))
+            _contact = " · ".join(x for x in [(f"WhatsApp {phone_fmt}" if phone_fmt else ""),
+                                              (site or "").replace("https://", "").replace("http://", "").strip("/"),
+                                              (("@" + handle) if handle else "")] if x)
+            _cost, _photo, _base_out, _err = 0.0, None, None, ""
+            if _role != "cta":
+                _reuse = reuse_bases[i - 1] if len(reuse_bases) >= i and reuse_bases[i - 1] else None
+                _raw = _load_upload_bytes(_reuse, {str(company_id)}) if isinstance(_reuse, str) else None
+                if _raw:
+                    _base_out = _reuse
+                else:
+                    _bk = company.get("brand_kit") or {}
+                    _scene = (s.get("visual") or "").strip() or ((s.get("title") or "") + ". " + (s.get("body") or s.get("subtitle") or ""))
+                    _pp = ("FOTOGRAFIA documental realista para anúncio de " + (company.get("name") or "") + " ("
+                           + (company.get("segment") or "") + "). Cena: " + _scene[:600] + ". "
+                           + ("Público: " + (_bk.get("audience") or "")[:300] + ". " if _bk.get("audience") else "")
+                           + "Pessoas reais e diversas, ambiente brasileiro comum, luz natural, cores naturais, leve "
+                           "imperfeição de foto de verdade, profundidade de campo suave. PROIBIDO na imagem: QUALQUER texto, "
+                           "letra, número, logo, marca, ícone, interface legível, selo ou elemento gráfico; neon, glow, brilho, "
+                           "reflexos, partículas, rastros/linhas de luz, ondas de Wi-Fi desenhadas, filtros saturados, aspecto 3D/CGI.")
+                    _size = "1536x1024" if (fmt != "story" or _role == "content") else "1024x1024"
+                    try:
+                        _raw, _c = await asyncio.to_thread(_gen_ref, _pp, [], _size, None, "medium", [])
+                        _cost += (_c or 0.0)
+                        _bfn = f"{i:02d}_base.png"
+                        with open(os.path.join(subdir, _bfn), "wb") as _bf:
+                            _bf.write(_raw)
+                        _base_out = f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{_bfn}"
+                    except Exception as _pe:
+                        _err = ("foto: " + str(_pe))[:180]
+                        _raw = None
+                if _raw:
+                    from PIL import Image as _PI
+                    import io as _io
+                    _photo = _PI.open(_io.BytesIO(_raw))
+            _app_paths = [list(_g or []) for _g in (app_variant_groups or [])[:3] if _g]
+            _png, _layers = await asyncio.to_thread(
+                _lc.compose, s, _photo, colors, list(co_logos or []), ("story" if fmt == "story" else "post"), _role,
+                (_contact if (_role == "cta" or total == 1) else ""), ((design_ov or {}).get("layered") or {}), _app_paths)
+            _fn = f"{i:02d}.png"
+            with open(os.path.join(subdir, _fn), "wb") as _f:
+                _f.write(_png)
+            _saved = []
+            for _k, _ly in enumerate(_layers):     # layers.json (sem bytes) + arquivos das imagens → exportação Canva
+                _ly2 = {kk: vv for kk, vv in _ly.items() if kk != "data"}
+                if _ly.get("data") is not None:
+                    _ext = "jpg" if _ly.get("mime") == "image/jpeg" else "png"
+                    _lfn = f"{i:02d}_L{_k}.{_ext}"
+                    with open(os.path.join(subdir, _lfn), "wb") as _lf:
+                        _lf.write(_ly["data"])
+                    _ly2["file"] = _lfn
+                _saved.append(_ly2)
+            import json as _json
+            _W, _H = _lc.SIZES.get("story" if fmt == "story" else "post")
+            with open(os.path.join(subdir, f"{i:02d}_layers.json"), "w") as _jf:
+                _json.dump({"w": _W, "h": _H, "layers": _saved}, _jf, ensure_ascii=False)
+            return {"i": i, "base": _base_out, "cost": _cost, "fails": ([_err] if _err else []), "spills": [],
+                    "slide": {"url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{_fn}",
+                              "type": s.get("type"), "title": s.get("title", ""), "app": s.get("app") or "",
+                              "layers_url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{i:02d}_layers.json",
+                              "image_ok": True, "image_error": _err, "base_url": _base_out, "model_used": "camadas",
+                              "prompt": "camadas (foto IA + tipografia Caripost)"}}
+
         async def _render_tela(i, s, _anchor_url=None):
             # PARALELO (fim dos 24min/8 artes): corpo de UMA tela. A tela 1 roda PRIMEIRO (é a âncora da
             # família visual); as demais rodam SIMULTÂNEAS (teto = setting render.parallel, default 4;
@@ -1924,6 +1993,8 @@ async def _render_carousel_sync(request: Request):
             phone_fmt = (f"({_dg[:2]}) {_dg[2:7]}-{_dg[7:]}" if len(_dg) == 11
                          else f"({_dg[:2]}) {_dg[2:6]}-{_dg[6:]}" if len(_dg) == 10 else phone)
             slide_for_render = {**s, "phone": phone_fmt, "text_style": carousel_style}   # composer desenha contato + estilo
+            if render_mode == "layered":
+                return await _render_layered(i, s, slide_app_logos, phone_fmt)
             # (datas/local/stand reais já foram saneados em TODAS as telas por sanitize_event_plan acima — render+legenda)
             # photo_ai_composer: a IA gera SÓ a foto (_photo_only_prompt); o código desenha o resto.
             # legacy: a IA desenha a arte inteira (_full_slide_prompt) e o código só carimba logo/rodapé.
@@ -3535,3 +3606,130 @@ def get_post(post_id: str, request: Request):
     if denied:
         return denied
     return {"post": post}
+
+
+# ── CANVA: abrir arte EM CAMADAS como design editável e trazer de volta (out/2026) ─────────────────────
+def _upload_file_path(url: str) -> str:
+    rel = (url or "").split("?")[0]
+    if rel.startswith(UPLOAD_URL_PREFIX + "/"):
+        rel = rel[len(UPLOAD_URL_PREFIX) + 1:]
+    return os.path.join(UPLOAD_DIR, rel.lstrip("/"))
+
+
+def _post_meta_merge(post_id: str, patch: Dict[str, Any]) -> None:
+    import json as _json
+    from ..db import get_conn
+    p = post_get(post_id) or {}
+    meta = dict(p.get("meta") or {}); meta.update(patch)
+    with get_conn() as conn:
+        conn.execute("UPDATE posts SET meta = ?, updated_at = ? WHERE id = ?",
+                     (_json.dumps(meta), datetime.now(timezone.utc).isoformat(), post_id))
+
+
+@router.post("/{post_id}/canva/open")
+async def canva_open(post_id: str, request: Request):
+    """Arte em camadas → PPTX → importa no Canva (conta conectada na Composio) → link de edição."""
+    import json as _json
+    err = _api_key_required(request)
+    if err:
+        return err
+    post = post_get(post_id)
+    if not post:
+        return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
+    meta = post.get("meta") or {}
+    urls = meta.get("carousel_urls") or ([post.get("media_url")] if post.get("media_url") else [])
+    slides = []
+    for u in urls:
+        lp = _upload_file_path(u).rsplit(".", 1)[0] + "_layers.json"
+        if not os.path.exists(lp):
+            return JSONResponse({"detail": "Esta arte não foi gerada em camadas — gere de novo no modo 'Camadas' para editar no Canva."},
+                                status_code=409)
+        d = _json.load(open(lp))
+        base = os.path.dirname(lp)
+        layers = []
+        for ly in d["layers"]:
+            if ly.get("file"):
+                ly = dict(ly, data=open(os.path.join(base, ly["file"]), "rb").read())
+            layers.append(ly)
+        slides.append((d["w"], d["h"], layers))
+    from ..services.canva_export import import_to_canva, layers_to_pptx
+    try:
+        pptx = await asyncio.to_thread(layers_to_pptx, slides)
+    except Exception as exc:
+        return JSONResponse({"detail": f"Não consegui montar o arquivo para o Canva: {exc}"}, status_code=500)
+    folder = os.path.dirname(_upload_file_path(urls[0]))
+    fname = f"canva_{_uuid.uuid4().hex[:8]}.pptx"
+    with open(os.path.join(folder, fname), "wb") as f:
+        f.write(pptx)
+    pub = _render_public_base() + urls[0].rsplit("/", 1)[0] + "/" + fname
+    co = company_get(post.get("company_id")) or {}
+    try:
+        res = await import_to_canva(pub, f"{co.get('name') or 'Caripost'} — {post.get('title') or 'arte'}")
+    except Exception as exc:
+        return JSONResponse({"detail": f"Canva: {exc}. CANVA_DESCONECTADO"},
+                            status_code=424)
+    _post_meta_merge(post_id, {"canva": {**res, "opened_at": datetime.now(timezone.utc).isoformat()}})
+    return {"canva": res}
+
+
+@router.post("/{post_id}/canva/pull")
+async def canva_pull(post_id: str, request: Request):
+    """Exporta o design editado no Canva (PNG, todas as telas) e substitui a arte do post (guarda a anterior)."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    post = post_get(post_id)
+    if not post:
+        return JSONResponse({"detail": "Post não encontrado"}, status_code=404)
+    denied = __cad__(request, post.get("company_id"))
+    if denied:
+        return denied
+    meta = post.get("meta") or {}
+    did = (meta.get("canva") or {}).get("design_id")
+    if not did:
+        return JSONResponse({"detail": "Esta arte ainda não foi aberta no Canva."}, status_code=409)
+    from ..services.canva_export import export_from_canva
+    try:
+        pngs = await export_from_canva(did)
+    except Exception as exc:
+        return JSONResponse({"detail": f"Canva: {exc}"}, status_code=424)
+    old = meta.get("carousel_urls") or ([post.get("media_url")] if post.get("media_url") else [])
+    folder_url = old[0].rsplit("/", 1)[0]
+    tag = _uuid.uuid4().hex[:6]
+    new_urls = []
+    for k, data in enumerate(pngs, 1):
+        fn = f"{k:02d}_canva_{tag}.png"
+        with open(os.path.join(os.path.dirname(_upload_file_path(old[0])), fn), "wb") as f:
+            f.write(data)
+        new_urls.append(f"{folder_url}/{fn}")
+    _post_meta_merge(post_id, {"carousel_urls": new_urls, "pre_canva_urls": old,
+                               "canva": {**(meta.get("canva") or {}), "pulled_at": datetime.now(timezone.utc).isoformat()}})
+    post_update(post_id, {"media_url": new_urls[0]})
+    return {"urls": new_urls}
+
+
+@router.get("/canva/status")
+async def canva_status_route(request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    from ..services.canva_export import canva_status
+    try:
+        return await canva_status()
+    except Exception as exc:
+        return JSONResponse({"detail": f"Canva: {exc}"}, status_code=424)
+
+
+@router.post("/canva/connect")
+async def canva_connect_route(request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    from ..services.canva_export import canva_connect_link
+    try:
+        return {"redirect_url": await canva_connect_link(_render_public_base() + "/os/index.html")}
+    except Exception as exc:
+        return JSONResponse({"detail": f"Canva: {exc}"}, status_code=424)

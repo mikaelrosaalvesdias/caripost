@@ -1385,6 +1385,20 @@
       return r.catalogs || [];
     },
     // Job + polling: o Cloudflare corta requisições > 100s (524) e o Estúdio IA leva minutos.
+    async canvaStatus() { return mpFetch('/api/posts/canva/status'); },
+    async canvaConnect() { return mpFetch('/api/posts/canva/connect', { method: 'POST', body: '{}' }); },
+    // Abre no Canva; se não houver conta conectada, oferece conectar e abre o login do Canva.
+    async canvaOpenOrConnect(postId) {
+      try { return await this.canvaOpen(postId); }
+      catch (e) {
+        if (!/CANVA_DESCONECTADO|Canva não conectado|invalid_access_token|Access token/i.test(e.message || '')) throw e;
+        const ok = await mpConfirm('O Canva não está conectado (ou a conexão expirou). Conectar agora? Abre o login do Canva numa nova aba; depois de autorizar, clique de novo em "Editar no Canva".', { confirmLabel: 'Conectar Canva' });
+        if (ok) { const r = await this.canvaConnect(); if (r.redirect_url) window.open(r.redirect_url, '_blank'); }
+        return {};
+      }
+    },
+    async canvaOpen(postId) { return mpFetch('/api/posts/' + _enc(postId) + '/canva/open', { method: 'POST', body: '{}' }); },
+    async canvaPull(postId) { return mpFetch('/api/posts/' + _enc(postId) + '/canva/pull', { method: 'POST', body: '{}' }); },
     async renderCarousel(payload) {
       const start = await mpFetch('/api/posts/render-carousel', { method: 'POST', body: JSON.stringify({ ...payload, async_job: true }) });
       if (!start || !start.job_id) return start;   // backend antigo: resposta direta
@@ -1431,6 +1445,9 @@
     },
     async agencyApproveArt(itemId) {
       return mpFetch('/api/agency/items/' + _enc(itemId) + '/approve-art', { method: 'POST', body: '{}' });
+    },
+    async agencyRefreshArt(itemId) {
+      return mpFetch('/api/agency/items/' + _enc(itemId) + '/refresh-art', { method: 'POST', body: '{}' });
     },
     async agencyRejectArt(itemId, comment) {
       return mpFetch('/api/agency/items/' + _enc(itemId) + '/reject-art', { method: 'POST', body: JSON.stringify({ comment: comment || '' }) });

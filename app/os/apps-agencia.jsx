@@ -407,6 +407,14 @@ function AgenciaApp() {
               {it.stage === 'idea_ok' && <button className="btn sm ghost" disabled={busy === it.id} onClick={() => setStage(it, 'idea')}>Desfazer aprovação</button>}
               {it.stage === 'idea_ok' && <button className="btn sm" disabled={busy === it.id} onClick={() => act(it, () => window.mpApi.agencyProduceItem(it.id, ''), 'Arte na fila.').then(() => loadPlan(plan.id))}><Icon name="image" />Gerar arte</button>}
             </>}
+            {it.post_id && slides.length > 0 && ['art', 'art_ok'].includes(it.stage) && <>
+              <button className="btn sm ghost" disabled={busy === it.id} title="Abre como design editável no Canva" onClick={() => act(it, async () => {
+                const r = await window.mpApi.canvaOpenOrConnect(it.post_id); if (r.canva && r.canva.edit_url) window.open(r.canva.edit_url, '_blank'); return null;
+              }, 'Aberto no Canva — edite e depois clique em "Trazer do Canva".')}><Icon name="pen" />Editar no Canva</button>
+              <button className="btn sm ghost" disabled={busy === it.id} title="Traz a versão editada no Canva" onClick={() => act(it, async () => {
+                await window.mpApi.canvaPull(it.post_id); return window.mpApi.agencyRefreshArt(it.id);
+              }, 'Versão do Canva trazida.')}><Icon name="download" />Trazer do Canva</button>
+            </>}
             {['art', 'art_rejected'].includes(it.stage) && <>
               <button className="btn sm ghost" disabled={busy === it.id} onClick={() => setAsk({ it, kind: 'regenArt', text: '' })}><Icon name="refresh" />Refazer arte</button>
               {it.stage === 'art' && <button className="btn sm ghost" disabled={busy === it.id} onClick={() => setAsk({ it, kind: 'rejectArt', text: '' })}><Icon name="x" />Reprovar arte</button>}
