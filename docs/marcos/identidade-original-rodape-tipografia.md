@@ -51,3 +51,34 @@ Tudo a partir só do @ do Instagram, sem login de ninguém.
   - letreiro com OCR de 0,94 para 1,00.
 - Tanto: import só pelo @ pelo endpoint trouxe 8 imagens, 5 novas.
 - `regressao_check.py` OK em todos os deploys.
+
+## v1.27.164–165: o que o usuário reprovou e como foi resolvido
+Na arte "Conexão atrai" o usuário apontou três problemas:
+- o rodapé estava sem resolução, com cara de recorte;
+- havia neon e excesso de luz, sem textura;
+- a tipografia não era a da CARIAP.
+
+Causas encontradas nos logs:
+- a 2ª passada de letreiro foi RECUSADA pelo OCR (texto piorou de 0,83 para 0,72) e a fonte de IA ficou;
+- as "artes de inspiração" eram aleatórias (quadrinhos/escuras);
+- o rodapé era um recorte de 1080 px ampliado.
+
+Correções:
+1. **Rodapé reconstruído** (`brand_footer.extract_spec` + `render_spec`):
+   - a geometria separa as caixas e a visão só classifica e transcreve cada uma (texto, ícone ou logo);
+   - o rodapé é redesenhado na resolução da arte: logo OFICIAL (arquivo de 5660 px, versão escolhida pelas cores do original e com texto neutro invertido no fundo escuro), textos em Exo 2 com a mesma largura e o mesmo peso, fio vetorial na cor saturada da marca e ícone com borda nítida.
+2. **Texto com a fonte real** (`app/services/retypeset.py`):
+   - o OCR acha as linhas de título, texto e botão que a IA escreveu, casando com os textos esperados (inclusive texto branco em botão);
+   - a IA apaga SÓ esses textos; se mexer no resto (diferença acima de 22) ou deixar palavras, o passo é abandonado;
+   - a arte sobe para 2160 px e o Caripost escreve com o ARQUIVO da fonte, no mesmo lugar, na mesma cor e no mesmo alinhamento, com o texto do botão centralizado no botão;
+   - se algo falhar, entra o plano B (passada de letreiro) e, em último caso, fica a arte da IA.
+3. **Referências de acabamento:**
+   - as artes do PADRÃO da marca (as que têm o rodapé oficial) entram como "ARTE ORIGINAL DA MARCA" com prioridade alta;
+   - com rodapé original, só 1 logo da marca vai nas referências;
+   - o prompt pede a textura sutil das originais e proíbe neon, glow e luzes, a não ser que as originais usem.
+
+Teste: "Conexão atrai" regerada, com 4 referências (logo, amostra e 2 artes originais):
+- limpeza com diferença de 2,5 fora do texto;
+- título, texto e botão refeitos em Exo 2;
+- fundo claro com textura geométrica e mapa do Brasil, sem neon;
+- saída em 2160×2699.

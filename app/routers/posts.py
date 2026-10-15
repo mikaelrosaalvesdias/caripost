@@ -1813,10 +1813,12 @@ async def _render_carousel_sync(request: Request):
                 except Exception:
                     pass
                 from ..db_companies import asset_list as _alist
-                _approved_arts = [
+                _std_urls = set((_footer_kit or {}).get("sources") or [])
+                _approved_arts = sorted([      # artes do PADRÃO da marca (com o rodapé oficial) primeiro
                     _ra for _ra in (_alist(company_id, role="brand_reference") or [])
                     if _reference_is_approved(_ra)
-                ][:3]
+                ], key=lambda _ra: (_ra.get("url") or "") not in _std_urls)[:3]
+                ref_ctx["std_arts"] = sum(1 for _ra in _approved_arts if (_ra.get("url") or "") in _std_urls)
                 for _ra in _approved_arts:                    # apenas referências aprovadas pelo usuário
                     _ru = _ra.get("url") or ""
                     _b = _load_upload_bytes(_ru, {str(company_id)})
@@ -2102,7 +2104,9 @@ async def _render_carousel_sync(request: Request):
                 _refs = list((ref_ctx.get("arts") or [])[:2]) + list((ref_ctx.get("logos") or [])[:2])
                 # Rótulo por referência: com várias imagens o modelo precisa saber QUAL é qual (senão ignora
                 # a logo do app e só escreve o nome). Reordenado por prioridade antes de chamar o motor.
-                _ref_lbl = (["arte de inspiração do cliente (só estilo/clima)"] * len((ref_ctx.get("arts") or [])[:2])
+                _nstd = min(2, int(ref_ctx.get("std_arts") or 0))
+                _ref_lbl = (["ARTE ORIGINAL DA MARCA (padrão visual: fundo, textura, luz, acabamento — siga)"] * _nstd
+                            + ["arte de inspiração do cliente (só estilo/clima)"] * (len((ref_ctx.get("arts") or [])[:2]) - _nstd)
                             + [f"LOGO OFICIAL da marca {company.get('name','')}"] * len((ref_ctx.get("logos") or [])[:2]))
                 _brand_ref_urls = list((ref_ctx.get("logo_urls") or [])[:2])
                 _style_ref_urls = list((ref_ctx.get("art_urls") or [])[:2])
@@ -2112,6 +2116,11 @@ async def _render_carousel_sync(request: Request):
                 if ref_ctx["arts"]:
                     _extra.append("As artes de REFERÊNCIA do cliente definem a FAMÍLIA VISUAL — siga esse estilo "
                                   "mantendo a identidade da marca.")
+                if ref_ctx.get("std_arts"):
+                    _extra.append("ACABAMENTO: siga as ARTES ORIGINAIS DA MARCA — mesmo tipo de fundo (com a TEXTURA "
+                                  "sutil que elas usam, ex.: padrão geométrico leve), mesma luz natural e suave, mesma "
+                                  "sobriedade. PROIBIDO: neon, glow, contornos luminosos, linhas/rastros de luz, brilho "
+                                  "estourado e fundo preto com luz laranja — a não ser que as artes originais usem.")
                 if influencer and inf_photos and stype in ("cover", "cta"):
                     _pi = await asyncio.to_thread(pick_influencer_photo, inf_photos, s.get("title", ""), stype, used_inf_idx)
                     used_inf_idx.add(_pi)
@@ -2221,10 +2230,22 @@ async def _render_carousel_sync(request: Request):
                 # continuidade → pessoa → foto da oferta → inspiração. Mapa numerado vai no prompt.
                 def _prio3(lbl):
                     return (0 if lbl.startswith("LOGO OFICIAL da marca") else 0.5 if lbl.startswith("AMOSTRA DA TIPOGRAFIA")
+                            else 0.7 if lbl.startswith("ARTE ORIGINAL DA MARCA")
                             else 1 if lbl.startswith("LOGO OFICIAL do app")
                             else 2 if lbl.startswith("primeira tela") else 3 if lbl.startswith("FOTO REAL")
                             else 4 if lbl.startswith("foto real") else 5)
-                _pairs3 = sorted(zip(_ref_lbl, _refs), key=lambda x: _prio3(x[0]))[:6]
+                _pairs3 = sorted(zip(_ref_lbl, _refs), key=lambda x: _prio3(x[0]))
+                if _footer_kit:
+                    _seen_logo = False
+                    _tmp3 = []
+                    for _l3, _b3 in _pairs3:
+                        if _l3.startswith("LOGO OFICIAL da marca"):
+                            if _seen_logo:
+                                continue
+                            _seen_logo = True
+                        _tmp3.append((_l3, _b3))
+                    _pairs3 = _tmp3
+                _pairs3 = _pairs3[:6]
                 _ref_lbl = [l for l, _ in _pairs3]; _refs = [b for _, b in _pairs3]
                 _app_names3 = [l.replace("LOGO OFICIAL do app ", "") for l in _ref_lbl if l.startswith("LOGO OFICIAL do app")]
                 print(f"[estudio] {company.get('name','')} tela {i}: refs={_ref_lbl} | apps no texto={_app_names3} "
@@ -2455,17 +2476,25 @@ async def _render_carousel_sync(request: Request):
                 try:
                     if ref_full:       # ESTÚDIO IA: arte COMPLETA da IA; só o rodapé de contato é carimbado (sempre certo)
                         png = img
-                        if _typo and (_typo.get("reletter", True)) and (s.get("title") or "").strip():
-                            # 2ª passada só de LETREIRO: troca a "fonte de IA" pela fonte oficial (amostra)
-                            from ..services.brand_fonts import reletter as _relet
-                            _rl = await asyncio.to_thread(
-                                _relet, img, _typo, [(s.get("title") or ""), (s.get("body") or s.get("subtitle") or ""),
-                                                     (s.get("cta") or "")])
-                            if _rl:
-                                png = img = _rl
+                        if _typo and (s.get("title") or "").strip():
+                            # TEXTO COM A FONTE REAL: acha as linhas que a IA escreveu, a IA apaga só elas e o
+                            # Caripost reescreve com o arquivo da fonte da marca (mesmo lugar/cor), em 2160 px.
+                            from ..services.retypeset import retypeset as _retype
+                            _rt = await asyncio.to_thread(
+                                _retype, img, _typo, {"title": s.get("title") or "",
+                                                      "body": s.get("body") or s.get("subtitle") or "",
+                                                      "cta": s.get("cta") or ""})
+                            if not _rt and _typo.get("reletter", True):
+                                # plano B: 2ª passada só de LETREIRO pela IA (amostra da fonte), protegida por OCR
+                                from ..services.brand_fonts import reletter as _relet
+                                _rt = await asyncio.to_thread(
+                                    _relet, img, _typo, [(s.get("title") or ""), (s.get("body") or s.get("subtitle") or ""),
+                                                         (s.get("cta") or "")])
+                            if _rt:
+                                png = img = _rt
                         if _footer_kit:      # rodapé ORIGINAL do cliente em TODAS as telas (como nas artes dele)
                             from ..services.brand_footer import stamp as _fstamp
-                            png = await asyncio.to_thread(_fstamp, img, _footer_kit)
+                            png = await asyncio.to_thread(_fstamp, img, _footer_kit, _typo)
                         elif ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
                             from ..services.layered_composer import stamp_contact as _stamp
                             png = await asyncio.to_thread(_stamp, img, ref_ctx["contact"])
