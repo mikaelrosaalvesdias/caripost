@@ -1434,6 +1434,9 @@
       return mpFetch('/api/agency/items/' + _enc(itemId), { method: 'PATCH', body: JSON.stringify(data || {}) });
     },
     async agencyOverview() { return mpFetch('/api/agency/overview'); },
+    async visualDna(companyId) { return mpFetch('/api/agency/' + _enc(companyId) + '/visual-dna'); },
+    async visualDnaAnalyze(companyId) { return mpFetch('/api/agency/' + _enc(companyId) + '/visual-dna', { method: 'POST', body: '{}' }); },
+    async visualDnaSave(companyId, text) { return mpFetch('/api/agency/' + _enc(companyId) + '/visual-dna', { method: 'PUT', body: JSON.stringify({ text }) }); },
     async agencySuggestConfig(companyId) {
       return mpFetch('/api/agency/' + _enc(companyId) + '/suggest-config', { method: 'POST', body: '{}' });
     },

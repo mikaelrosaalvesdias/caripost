@@ -1734,6 +1734,13 @@ async def _render_carousel_sync(request: Request):
         design_ov = ((company.get("brand_kit") or {}).get("creative_config") or {}).get("design")
         if (body.get("studio_style") or "") in ("impacto", "equilibrado", "limpo"):   # escolha por geração (tela)
             design_ov = dict(design_ov or {}, studio_style=body["studio_style"])
+        _dna_txt = ""
+        if ref_full:   # DNA VISUAL do cliente (artes que ele já publica) → artes com a cara DELE, não de IA
+            try:
+                from ..services import visual_dna as _vdna
+                _dna_txt = _vdna.prompt_block(await asyncio.to_thread(_vdna.ensure, company))
+            except Exception as _de:
+                print(f"[estudio] DNA visual indisponível: {str(_de)[:120]}", flush=True)
         base = str(request.base_url).rstrip("/")
 
         def _logo_url(assets):
@@ -2215,6 +2222,7 @@ async def _render_carousel_sync(request: Request):
                               ("TEXTO", (s.get('body') or s.get('subtitle') or '').strip()),
                               ("BOTÃO/CTA", (s.get('cta') or '').strip())]
                 _txt_items = [(rot, v) for rot, v in _txt_items if v]
+
                 _exact = ((
                     "TEXTO DA ARTE — REGRA ABSOLUTA E INEGOCIÁVEL:\n"
                     "1) Os ÚNICOS textos que podem aparecer na arte são as strings entre «» abaixo. NÃO escreva "
@@ -2255,6 +2263,7 @@ async def _render_carousel_sync(request: Request):
                     + _visual
                     + _logo_rule
                     + _studio_style_block(design_ov)
+                    + _dna_txt
                     + ref_ctx["brand"]
                     + (f"CONTEXTO da oferta (use SÓ para entender o tema e compor a CENA/clima — NÃO renderize este "
                        f"texto na arte, NÃO escreva estes detalhes como legenda; o texto visível é apenas o listado "
@@ -2265,8 +2274,8 @@ async def _render_carousel_sync(request: Request):
                     + ("Use as ARTES DE INSPIRAÇÃO apenas para abstrair ritmo, hierarquia, densidade e atmosfera. "
                        "Não copie literalmente texto, logo, personagem, oferta ou layout de terceiros. "
                        if ref_ctx.get("arts") else "")
-                    + ((f"CONTATO REAL da empresa — inclua INTEGRADO com elegância no rodapé/CTA da arte (tipografia "
-                        f"da marca, legível), copiando EXATAMENTE: {ref_ctx['contact']}. NUNCA invente números, site ou @. "
+                    + (("RODAPÉ: NÃO escreva contato (telefone, WhatsApp, site, @) — deixe uma faixa LIVRE e limpa de "
+                        "~7% da altura no pé da arte, sem texto nem elementos importantes; o contato é aplicado depois. "
                         ) if (ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta")) else
                        (f"Assinatura discreta opcional no rodapé, copiada exatamente: {ref_ctx['contact'].split(' · ')[-1]}. NUNCA invente contato. "
                         if ref_ctx.get("contact") else ""))
@@ -2279,8 +2288,7 @@ async def _render_carousel_sync(request: Request):
                 _expect = [x for x in [(s.get('title') or '').strip(),
                                        (s.get('body') or s.get('subtitle') or '').strip(),
                                        (s.get('cta') or '').strip()] if x]
-                if ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
-                    _expect.append(ref_ctx["contact"])   # rodapé exigido no prompt também é julgado (fone/site errado = quebra)
+                # contato NÃO é julgado: é carimbado pelo Caripost depois (determinístico)
                 _best_img, _best_miss = None, None
                 try:                                            # uma tentativa paga por padrão; o usuário pode regerar
                     _max_rf = max(1, int(get_setting("judge.max_attempts") or 1))
@@ -2406,8 +2414,11 @@ async def _render_carousel_sync(request: Request):
             # 2) COMPOSIÇÃO (separada da geração; erro aqui degrada pro editorial, nunca derruba o lote).
             if img is not None:
                 try:
-                    if ref_full:       # ESTÚDIO IA: a arte já vem COMPLETA da IA (logo escolhida, texto, CTA) — sem carimbo
+                    if ref_full:       # ESTÚDIO IA: arte COMPLETA da IA; só o rodapé de contato é carimbado (sempre certo)
                         png = img
+                        if ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
+                            from ..services.layered_composer import stamp_contact as _stamp
+                            png = await asyncio.to_thread(_stamp, img, ref_ctx["contact"])
                     elif use_composer:   # Marco 3: foto da IA + CARD de vidro (nível agência, texto legível, logo intacta)
                         png = await asyncio.to_thread(compose_card_slide, slide_for_render, i, total, colors, co_logos, site, handle, img, None, design_ov, slide_app_logos, canvas_size)
                     else:              # legacy ISOLADO: IA já desenhou a arte → carimba logo (+ rodapé de contato no CTA e na ARTE CRIATIVA)

@@ -286,3 +286,49 @@ def refresh_art(item_id: str, request: Request):
         meta = dict(item.get("meta") or {}); meta["slides"] = urls
         item = ag.item_update(item_id, {"meta": meta})
     return {"item": item}
+
+
+# ── DNA visual do cliente ────────────────────────────────────────────────────────────────────────
+
+@router.get("/{company_id}/visual-dna")
+def get_visual_dna(company_id: str, request: Request):
+    err = _auth(request, company_id)
+    if err:
+        return err
+    co = company_get(company_id)
+    if not co:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    from ..services import visual_dna as vd
+    dna = (((co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}).get("visual_dna") or {}
+    return {"dna": dna, "n_refs": vd.collect_sources(company_id)["n_refs"]}
+
+
+@router.post("/{company_id}/visual-dna")
+async def analyze_visual_dna(company_id: str, request: Request):
+    err = _auth(request, company_id)
+    if err:
+        return err
+    co = company_get(company_id)
+    if not co:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    from ..services import visual_dna as vd
+    try:
+        dna = await asyncio.to_thread(vd.analyze, co)
+    except Exception as exc:
+        return JSONResponse({"detail": f"Não consegui analisar agora: {exc}"}, status_code=424)
+    vd.save(company_id, dna)
+    return {"dna": dna}
+
+
+@router.put("/{company_id}/visual-dna")
+async def edit_visual_dna(company_id: str, request: Request):
+    err = _auth(request, company_id)
+    if err:
+        return err
+    body = await request.json()
+    from ..services import visual_dna as vd
+    co = company_get(company_id) or {}
+    old = (((co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}).get("visual_dna") or {}
+    dna = dict(old, text=(body.get("text") or "").strip()[:3000], edited=True)
+    vd.save(company_id, dna)
+    return {"dna": dna}

@@ -69,7 +69,16 @@ function AgConfigModal({ cid, name, onClose }) {
   const [cfg, setCfg] = React.useState(null);
   const [ov, setOv] = React.useState({});
   const [busy, setBusy] = React.useState('');
+  const [dna, setDna] = React.useState(null);
+  const [dnaText, setDnaText] = React.useState('');
   React.useEffect(() => { window.mpApi.agencyConfig(cid).then(r => { setCfg(r.config); setOv(r.override || {}); }).catch(e => mpToast('Erro: ' + e.message, 'err')); }, [cid]);
+  React.useEffect(() => { window.mpApi.visualDna(cid).then(r => { setDna(r); setDnaText((r.dna || {}).text || ''); }).catch(() => {}); }, [cid]);
+  async function analisarDna() {
+    setBusy('dna');
+    try { const r = await window.mpApi.visualDnaAnalyze(cid); setDna(d => ({ ...(d || {}), dna: r.dna })); setDnaText(r.dna.text || ''); mpToast('DNA visual atualizado.'); }
+    catch (e) { mpToast('Erro: ' + e.message, 'err'); }
+    finally { setBusy(''); }
+  }
   const set = (k, v) => setCfg(c => ({ ...c, [k]: v }));
   const mix = (cfg && cfg.mix) || {};
   const pills = (cfg && cfg.pillars) || [];
@@ -92,6 +101,7 @@ function AgConfigModal({ cid, name, onClose }) {
       keys.forEach(k => { next[k] = cfg[k]; });
       next.enabled = !!cfg.enabled; next.generate_day = Number(cfg.generate_day) || 20;
       await window.mpApi.agencySaveConfig(cid, next);
+      if (dna && dnaText !== ((dna.dna || {}).text || '')) await window.mpApi.visualDnaSave(cid, dnaText);
       mpToast('Configuração salva.'); onClose(true);
     } catch (e) { mpToast('Erro: ' + e.message, 'err'); }
     finally { setBusy(''); }
@@ -109,6 +119,11 @@ function AgConfigModal({ cid, name, onClose }) {
         <Field label="Gera o mês seguinte no dia"><input className="inp" type="number" min="1" max="28" style={{ width: 90 }} value={cfg.generate_day || 20} onChange={e => set('generate_day', e.target.value)} /></Field>
         <Field label="WhatsApp para avisos"><input className="inp" placeholder="5511999998888" value={cfg.notify_whatsapp || ''} onChange={e => set('notify_whatsapp', e.target.value)} /></Field>
       </div>
+      <div className="sec">DNA visual do cliente</div>
+      <div className="hint">A personalidade das artes que o cliente já publica (tipografia, posicionamento, elementos, fotografia). O Estúdio IA segue isto para a peça parecer feita pelo designer dele, não por IA.
+        {dna ? ' ' + (dna.n_refs || 0) + ' arte(s) de referência no cadastro.' : ''} {dna && !dna.n_refs ? 'Suba artes do Instagram dele em Clientes → Referências para um DNA fiel.' : ''}</div>
+      <textarea className="inp" rows={5} value={dnaText} onChange={e => setDnaText(e.target.value)} placeholder="Ainda sem DNA — clique em Analisar artes de referência." />
+      <button className="btn sm ghost" style={{ alignSelf: 'flex-start' }} disabled={busy === 'dna'} onClick={analisarDna}><Icon name="sparkles" />{busy === 'dna' ? 'Analisando… (~1 min)' : 'Analisar artes de referência'}</button>
       <div className="sec">Estilo das artes</div>
       <Segmented value={cfg.art_mode || 'equilibrado'} onChange={v => set('art_mode', v)} options={[['impacto', 'IA pura'], ['equilibrado', 'Equilibrado'], ['limpo', 'Limpo'], ['layered', 'Camadas (Canva)']]} />
       <div className="sec">Volume e horário</div>

@@ -319,3 +319,27 @@ def compose(slide: Dict[str, Any], photo: Optional[Image.Image], colors: Dict[st
         cl = _wrap(cv.d, contact, cf, W - 2 * M)[:1]
         cv.text(cl, cf, cs, M, H - M - cs, ink, name="contato", weight="medium")
     return cv.png(), cv.layers
+
+
+def stamp_contact(img_bytes: bytes, text: str) -> bytes:
+    """Carimba o rodapé de contato (WhatsApp · site · @) no pé da arte do Estúdio IA — determinístico (a IA
+    omitia/errava o contato). Cor do texto pela luminância do pé da arte; sombra suave para legibilidade."""
+    from PIL import ImageFilter as _IF
+    im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    W, H = im.size
+    size = max(14, int(W * 0.024)); f = _font("medium", size)
+    d = ImageDraw.Draw(im)
+    while d.textlength(text, font=f) > W * 0.9 and size > 12:
+        size -= 1; f = _font("medium", size)
+    tw = d.textlength(text, font=f)
+    y = int(H - size * 2.3); x = int((W - tw) / 2)
+    band = im.crop((0, max(0, y - size), W, H)).resize((40, 8))
+    px = list(band.getdata()); lum = sum(_lum(p) for p in px) / len(px)
+    ink, shadow = ((255, 255, 255), (0, 0, 0)) if lum < 0.45 else ((20, 20, 24), (255, 255, 255))
+    sh = Image.new("L", im.size, 0); ds = ImageDraw.Draw(sh)
+    ds.text((x, y), text, font=f, fill=150)
+    sh = sh.filter(_IF.GaussianBlur(max(2, size // 5)))
+    im.paste(Image.new("RGB", im.size, shadow), (0, 0), sh)
+    d = ImageDraw.Draw(im); d.text((x, y), text, font=f, fill=ink)
+    buf = io.BytesIO(); im.save(buf, "PNG")
+    return buf.getvalue()
