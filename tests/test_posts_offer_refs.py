@@ -147,11 +147,29 @@ class OfferRefsTests(unittest.TestCase):
                 catalog.assert_not_called()
                 out = next((Path(root) / "target-1" / "carousel").glob("*/01.png"))
                 image = Image.open(out).convert("RGB")
-                self.assertEqual(image.getpixel((75, 50)), (0, 0, 0) if selected else (255, 255, 255))
+                self.assertEqual(image.size, (2160, 2700))
+                self.assertEqual(image.getpixel((140, 85)), (0, 0, 0) if selected else (8, 15, 25))
                 prompt = posts.generate_image_reference_full.call_args.args[0]
-                self.assertIn("16% inferiores", prompt)
-                if selected:
-                    self.assertIn("11% superiores", prompt)
+                self.assertIn("NÃO escreva texto", prompt)
+                posts.judge_art_text.assert_not_called()
+                self.assertTrue(result["slides"][0]["preview_url"].endswith("_preview.webp"))
+
+    def test_missing_selected_app_logo_uses_exact_authorized_match_only(self):
+        product = {"id": "selected", "name": "Zapping", "_offer_logo_groups": [], "knowledge": "local"}
+        fake_db.company_list.return_value = [{"id": "hidden"}, {"id": "allowed"}]
+        fake_main_utils.scoped_company_ids.return_value = {"allowed"}
+        asset = {"url": "/uploads/allowed/products/official.png"}
+        with patch.dict(sys.modules, {"app.db_companies": fake_db, "app.main_utils": fake_main_utils}), \
+                patch.object(posts, "product_list", return_value=[{"id": "similar", "name": "Zapping Premium"},
+                                                                 {"id": "exact", "name": "Zapping"}]) as catalog, \
+                patch.object(posts, "asset_list_logos", return_value=[asset]) as logos, \
+                patch.object(posts, "_all_raster_logos", return_value=["official.png"]):
+            actual = posts._complete_app_logos(object(), [product])
+        catalog.assert_called_once_with("allowed")
+        logos.assert_called_once_with("allowed", "exact")
+        self.assertEqual(actual[0]["_offer_logo_groups"], [{"name": "Zapping", "assets": [asset]}])
+        self.assertEqual(actual[0]["knowledge"], "local")
+        self.assertEqual(product["_offer_logo_groups"], [])
 
     def test_absent_key_preserves_legacy_without_catalog_reads(self):
         explicit, offers, error = posts._resolve_offer_refs(object(), {}, "target-1")

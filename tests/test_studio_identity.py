@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image, ImageChops, ImageFont
+from PIL import Image, ImageChops, ImageFont, ImageDraw
 
 from app.services import brand_fonts
 from app.services.brand_footer import get_kit
-from app.services.studio_identity import stamp_apps, stamp_footer
+from app.services.studio_identity import compose_text, stamp_apps, stamp_footer, write_preview
 
 
 def png(im):
@@ -18,6 +18,31 @@ def png(im):
 
 
 class StudioIdentityTests(unittest.TestCase):
+    def test_native_text_keeps_exact_words_and_disjoint_lines_inside_the_content_area(self):
+        slide = {"title": "A ANTENA VIROU APLICATIVO.",
+                 "body": "TV ao vivo em HD, replay de até 7 dias e até 5 telas simultâneas.",
+                 "cta": "Tenha Zapping com a JR NET"}
+        original = ImageDraw.ImageDraw.text
+        for size in ((2160, 2700), (2160, 3840)):
+            boxes, texts = [], []
+            def draw(d, xy, text, **kwargs):
+                boxes.append(d.textbbox(xy, text, font=kwargs["font"], anchor=kwargs["anchor"]))
+                texts.append(text)
+                return original(d, xy, text, **kwargs)
+            with patch.object(ImageDraw.ImageDraw, "text", draw):
+                out = compose_text(png(Image.new("RGB", (1080, 1350), "navy")), slide,
+                                   brand_fonts.fallback_typography(), size)
+            self.assertEqual(" ".join(texts), " ".join(slide.values()))
+            self.assertEqual(Image.open(io.BytesIO(out)).size, size)
+            self.assertTrue(all(a[3] < b[1] for a, b in zip(boxes, boxes[1:])), boxes)
+            self.assertLess(max(b[3] for b in boxes), size[1] * 0.82)
+            with tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "preview.webp"
+                write_preview(out, str(path))
+                with Image.open(path) as preview:
+                    self.assertLessEqual(preview.width, 720)
+                self.assertLess(path.stat().st_size, len(out))
+
     def test_automatic_footer_rejects_photo_fragments_but_preserves_structured_and_manual_kits(self):
         def company(kit):
             return {"brand_kit": {"creative_config": {"design": {"footer_kit": kit}}}}

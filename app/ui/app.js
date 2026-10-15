@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.170', date: '2026-10-15',
+    items: [
+      { type: 'fix', text: 'Estúdio com texto e CTA em fontes reais, linhas sem sobreposição e menos chamadas de IA.' },
+      { type: 'fix', text: 'Apps sem logo local usam o arquivo oficial do mesmo app no catálogo autorizado; rodapé sem recortes de fotos.' },
+      { type: 'fix', text: 'Prévias leves para carregar as artes, mantendo o PNG em alta para baixar e publicar.' },
+    ],
+  },
+  {
     version: 'v1.27.169', date: '2026-10-15',
     items: [
       { type: 'fix', text: 'Estúdio: rodapé com logo e contatos legíveis em todas as telas para clientes e prospects sem rodapé original.' },

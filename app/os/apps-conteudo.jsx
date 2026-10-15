@@ -653,9 +653,12 @@ function StepCliente({ companyId, company, onPick, onContinue }) {
     const m = p.meta || {}; const urls = (m.carousel_urls && m.carousel_urls.length) ? m.carousel_urls : (p.media_url ? [p.media_url] : []);
     return urls.length ? { __db: true, _post: p, _urls: urls, id: 'db_' + p.id, label: p.title || 'Post',
       fmt: m.content_type === 'carousel' ? 'carrossel' : (m.content_type || 'post'), nArtes: urls.length,
-      ts: p.created_at ? (Date.parse(p.created_at) || 0) : 0, thumb: urls[0] } : null;
+      ts: p.created_at ? (Date.parse(p.created_at) || 0) : 0, thumb: (m.carousel_preview_urls || [])[0] || urls[0] } : null;
   }).filter(x => x && !_lsIds.has(x._post.id));
-  const caixas = [...projetos.map(p => ({ ...p, thumb: ((((p.carouselResults || [])[0] || {}).slides || [])[0] || {}).url })), ..._db].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const caixas = [...projetos.map(p => {
+    const slide = ((((p.carouselResults || [])[0] || {}).slides || [])[0] || {});
+    return { ...p, thumb: slide.preview_url || slide.url };
+  }), ..._db].sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const prospectMode = company && ['prospect', 'lost'].includes(company.lifecycle_stage || 'managed');
 
   React.useEffect(() => {
@@ -1176,7 +1179,7 @@ function CarrosselCreator({ company, format }) {
     setCanvaBusy(rv.post_id + ':pull');
     try {
       const r = await window.mpApi.canvaPull(rv.post_id);
-      setResults(rs => { const c = rs.slice(); c[vi] = { ...c[vi], slides: (r.urls || []).map((u, k) => ({ ...(c[vi].slides[k] || {}), url: u })) }; ContState.set(company.id, { carouselResults: c }); return c; });
+      setResults(rs => { const c = rs.slice(); c[vi] = { ...c[vi], slides: (r.urls || []).map((u, k) => ({ ...(c[vi].slides[k] || {}), url: u, preview_url: null })) }; ContState.set(company.id, { carouselResults: c }); return c; });
       mpToast('Versão do Canva trazida.');
     } catch (e) { mpToast('Erro: ' + e.message, 'err'); }
     finally { setCanvaBusy(''); }
@@ -1318,7 +1321,7 @@ function CarrosselCreator({ company, format }) {
         </div>} />
       {rv.warning && <Callout kind="warn">{rv.warning}</Callout>}
       <div className="art-grid">
-        {rv.slides.map((s, si) => <ArtCard key={si} src={s.url}
+        {rv.slides.map((s, si) => <ArtCard key={si} src={s.preview_url || s.url}
           label={si === 0 ? 'Capa' : `Tela ${si + 1}`}
           sub={s.image_ok ? 'foto IA' : 'editorial (sem foto)'}
           badges={[s.image_error
@@ -1363,7 +1366,7 @@ function CarrosselCreator({ company, format }) {
           const { url, vi, si } = editAsk; const inst = editInst.trim();
           setEditAsk(null); setBusy(true); setMsg('Editando com IA…');
           try { const r = await window.mpApi.editArt(company.id, url, inst);
-            if (r && r.url) { setResults(rs => rs.map((v, k) => k === vi ? { ...v, slides: v.slides.map((x, j) => j === si ? { ...x, url: r.url } : x) } : v)); setMsg('✓ Arte editada.'); }
+            if (r && r.url) { setResults(rs => rs.map((v, k) => k === vi ? { ...v, slides: v.slides.map((x, j) => j === si ? { ...x, url: r.url, preview_url: null } : x) } : v)); setMsg('✓ Arte editada.'); }
             else setMsg('Erro: ' + ((r && r.detail) || 'falhou'));
           } catch (e) { setMsg('Erro: ' + e.message); } finally { setBusy(false); }
         }}><Icon name="sparkles" />Editar arte</button>
@@ -2027,7 +2030,7 @@ function StepAgenda({ company }) {
         ? <div>
             <Pill kind="cy">Carrossel · {p.meta.carousel_urls.length} telas</Pill>
             <div style={{ display: 'flex', gap: 6, overflowX: 'auto', marginTop: 6 }}>
-              {p.meta.carousel_urls.map((u, k) => <img loading="lazy" decoding="async" key={k} src={u} style={{ height: 110, borderRadius: 6, flex: '0 0 auto' }} />)}
+              {p.meta.carousel_urls.map((u, k) => <img loading="lazy" decoding="async" key={k} src={(p.meta.carousel_preview_urls || [])[k] || u} style={{ height: 110, borderRadius: 6, flex: '0 0 auto' }} />)}
             </div>
           </div>
         : (p.media_url && (contentType(p) === 'video'

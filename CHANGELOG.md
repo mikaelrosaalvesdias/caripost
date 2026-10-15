@@ -2,6 +2,13 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.170 - 2026-10-15
+
+- Estúdio: texto, CTA e logos compostos com fontes e arquivos reais sobre foto sem letras. Removidas as passadas de OCR, limpeza e reletter por IA que aumentavam a espera e podiam sobrepor linhas.
+- Apps selecionados sem logo local recebem os assets do mesmo app por nome exato em catálogos que o usuário pode acessar, sem importar ofertas ou dados comerciais de outro cliente.
+- Rodapé sem recortes de pessoas; seleção de logos favorece versões legíveis em alta resolução e evita favicon quando há logo completo.
+- Prévia WebP leve nas artes e nos projetos; PNG original preservado para download/publicação. Feed 2160×2700 e story 2160×3840.
+
 ## v1.27.169 - 2026-10-15
 
 - Estúdio: clientes e prospects sem rodapé original recebem assinatura com logo oficial e contatos em linhas separadas, em todas as telas; preservado o rodapé personalizado existente.

@@ -622,7 +622,9 @@ async def produce_item(item_id: str) -> None:
             post_update(post_id, {"copy": item.get("copy") or "", "hashtags": item.get("hashtags") or "",
                                   "title": theme or None})
         meta = dict(item.get("meta") or {})
-        meta.update({"slides": slides, "telas": telas, "art_warning": rr.get("warning") or "", "art_cost": rr.get("cost") or 0})
+        previews = [s.get("preview_url") or s["url"] for s in rr.get("slides") or [] if s.get("url")]
+        meta.update({"slides": slides, "slide_previews": previews, "telas": telas,
+                     "art_warning": rr.get("warning") or "", "art_cost": rr.get("cost") or 0})
         item_update(item_id, {"stage": "art", "post_id": post_id, "meta": meta, "error": None})
     except Exception as exc:
         log.exception("agency produce %s", item_id)

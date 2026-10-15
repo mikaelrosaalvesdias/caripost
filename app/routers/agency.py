@@ -284,6 +284,7 @@ def refresh_art(item_id: str, request: Request):
     urls = (post.get("meta") or {}).get("carousel_urls") or []
     if urls:
         meta = dict(item.get("meta") or {}); meta["slides"] = urls
+        meta["slide_previews"] = (post.get("meta") or {}).get("carousel_preview_urls") or urls
         item = ag.item_update(item_id, {"meta": meta})
     return {"item": item}
 

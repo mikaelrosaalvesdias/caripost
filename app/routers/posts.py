@@ -542,6 +542,49 @@ def _company_with_offer_products(company: Dict[str, Any], explicit: bool,
     return scoped
 
 
+def _complete_app_logos(request, products):
+    """Completa só a identidade de apps selecionados por nome exato, dentro do catálogo autorizado.
+
+    Não importa oferta, preço ou benefícios de outra empresa e não altera o cadastro.
+    """
+    missing = set()
+    out = []
+    for product in products:
+        p = dict(product)
+        groups = list(p.get("_offer_logo_groups") or [])
+        known = {str(g.get("name") or "").strip().casefold() for g in groups if g.get("assets")}
+        names = [p.get("name")] + [s.get("name") for s in p.get("solutions") or []]
+        p["_missing_app_names"] = [str(n).strip() for n in names if n and str(n).strip().casefold() not in known]
+        missing.update(n.casefold() for n in p["_missing_app_names"])
+        p["_offer_logo_groups"] = groups
+        out.append(p)
+    if not missing:
+        for p in out:
+            p.pop("_missing_app_names", None)
+        return out
+    from ..db_companies import company_list
+    from ..main_utils import scoped_company_ids
+    allowed = scoped_company_ids(request)
+    found = {}
+    for company in company_list(active_only=True) or []:
+        source_id = str(company.get("id") or "")
+        if not source_id or (allowed is not None and source_id not in allowed):
+            continue
+        for candidate in product_list(source_id) or []:
+            name = str(candidate.get("name") or "").strip().casefold()
+            if name not in missing or name in found:
+                continue
+            assets = [a for a in asset_list_logos(source_id, candidate["id"]) or []
+                      if _logo_is_approved(a) and _resolve_upload_path(a.get("url") or "", {source_id})]
+            if _all_raster_logos(assets):
+                found[name] = assets
+    for p in out:
+        for name in p.pop("_missing_app_names", []):
+            if name.casefold() in found:
+                p["_offer_logo_groups"].append({"name": name, "assets": found[name.casefold()]})
+    return out
+
+
 def _offer_context(products: List[Dict[str, Any]]) -> str:
     """Contexto factual e limitado das ofertas explicitamente selecionadas."""
     blocks = []
@@ -1714,6 +1757,8 @@ async def _render_carousel_sync(request: Request):
         return offer_err
     selected_products = _offer_products(resolved_offers)
     render_products = selected_products if offers_explicit else (product_list(company_id) or [])
+    if offers_explicit:
+        render_products = _complete_app_logos(request, render_products)
 
     requested_influencer = None
     requested_influencer_id = str(body.get("influencer_id") or "").strip()
@@ -1756,6 +1801,9 @@ async def _render_carousel_sync(request: Request):
         company_logo_assets = [
             logo for logo in (asset_list_logos(company_id) or []) if _logo_is_approved(logo)
         ]
+        full_logos = [logo for logo in company_logo_assets
+                      if (logo.get("meta") or {}).get("variant") not in ("site_icon", "favicon", "avatar")]
+        company_logo_assets = full_logos or company_logo_assets
         co_logos = _all_raster_logos(company_logo_assets)             # variantes aprovadas da marca
         co_logo = co_logos[0] if co_logos else None                  # primária (p/ legacy/cta_footer)
         site = company.get("website") or ""
@@ -1817,6 +1865,8 @@ async def _render_carousel_sync(request: Request):
             try:
                 from ..services import brand_fonts as _bfont
                 _typo = await asyncio.to_thread(_bfont.ensure, company)
+                if _typo.get("auto") and str(_typo.get("confidence") or "").lower() == "baixa":
+                    _typo = _bfont.fallback_typography()
             except Exception as _te:
                 print(f"[estudio] tipografia original indisponível: {str(_te)[:120]}", flush=True)
             print(f"[estudio] {company.get('name','')}: rodapé original={'sim' if _footer_kit else 'não'} "
@@ -2095,7 +2145,7 @@ async def _render_carousel_sync(request: Request):
                 product_id = str(selected_product.get("id") or "")
                 for logo_group in app_logo_groups_by_id.get(product_id, []):
                     group_key = product_id + ":" + str(logo_group.get("name") or "").lower()
-                    if group_key not in _seen:
+                    if group_key not in _seen and str(logo_group.get("name") or "").lower() not in _seen:
                         _seen.add(group_key)
                         _seen.add(str(logo_group.get("name") or "").lower())
                         slide_app_logos.append(logo_group["variants"])
@@ -2283,16 +2333,6 @@ async def _render_carousel_sync(request: Request):
                                 + ((_p3.get("name") or "produto").strip())
                                 + " — preserve formato, cores e detalhes visuais; não substitua por produto genérico."
                             )
-                if _typo and (s.get("title") or "").strip():
-                    try:
-                        from ..services import brand_fonts as _bfont2
-                        _spec = await asyncio.to_thread(_bfont2.specimen, _typo, s.get("title") or "",
-                                                        s.get("body") or s.get("subtitle") or "")
-                        if _spec:
-                            _refs.append(_spec); _ref_lbl.append("AMOSTRA DA TIPOGRAFIA OFICIAL (o título desta tela "
-                                                                 "na fonte da marca — copie o desenho das letras)")
-                    except Exception as _se:
-                        print(f"[estudio] amostra de tipografia falhou: {str(_se)[:100]}", flush=True)
                 # Prioridade das imagens (provedores cortam em 6–8): marca → tipografia → logos dos apps →
                 # continuidade → pessoa → foto da oferta → inspiração. Mapa numerado vai no prompt.
                 def _prio3(lbl):
@@ -2335,116 +2375,30 @@ async def _render_carousel_sync(request: Request):
                         _seen_ref_urls.add(_ref_url)
                         _ref_urls.append(_ref_url)
                 _ref_urls = _ref_urls[:5]
-                # ── TEXTO EXATO (fix estrutural anti-erro de PT/acento): o modelo NÃO escreve o que "acha",
-                # ele COPIA estas strings verbatim. Separa o que é TEXTO-A-RENDERIZAR do que é direção visual.
-                _txt_items = [("TÍTULO", (s.get('title') or '').strip()),
-                              ("TEXTO", (s.get('body') or s.get('subtitle') or '').strip()),
-                              ("BOTÃO/CTA", (s.get('cta') or '').strip())]
-                _txt_items = [(rot, v) for rot, v in _txt_items if v]
-
-                _exact = ((
-                    "TEXTO DA ARTE — REGRA ABSOLUTA E INEGOCIÁVEL:\n"
-                    "1) Os ÚNICOS textos que podem aparecer na arte são as strings entre «» abaixo. NÃO escreva "
-                    "NENHUM outro texto, palavra, número, item, legenda, rótulo, detalhe de oferta ou frase que não "
-                    "esteja listado aqui.\n"
-                    "2) Copie cada string CARACTERE POR CARACTERE, com acentos e pontuação IDÊNTICOS "
-                    "(á é í ó ú â ê ô ã õ ç à ü, e as vírgulas, pontos, travessões e dois-pontos). É PROIBIDO "
-                    "traduzir, parafrasear, corrigir, abreviar, completar ou inventar.\n"
-                    "3) NUNCA quebre nem corte uma palavra no meio: se não couber, reduza a fonte ou quebre a linha "
-                    "ENTRE palavras — jamais dentro de uma palavra, e jamais trunque com reticências.\n"
-                    "4) As aspas «» são APENAS marcadores que delimitam início e fim de cada texto — NÃO as desenhe "
-                    "na arte; renderize somente o conteúdo entre elas.\n"
-                    "Renderize EXATAMENTE estes textos e mais nenhum:\n"
-                    + "\n".join(f"  {rot}: «{v}»" for rot, v in _txt_items) + "\n"
-                ) if _txt_items else "")
-                _visual = (f"Direção de CENA (isto NÃO é texto — não escreva na arte, use só como referência visual): "
-                           f"{(s.get('visual') or '').strip()}. " if s.get('visual') else "")
-                _logo_rule = ("A logo da marca nas referências serve para reconhecer sua identidade. "
-                              "Ela será aplicada no rodapé depois; NÃO redesenhe nem repita a logo na arte. ")
-                if total > 1:
-                    _papel = ("CAPA do carrossel: gancho forte e visual de abertura, título dominante — convida a arrastar"
-                              if i == 1 else
-                              ("TELA FINAL (CTA): fechamento com chamada para ação clara e destacada"
-                               if (i == total or stype == "cta") else
-                               f"tela de CONTEÚDO {i}/{total}: desenvolve o assunto com hierarquia clara, sem vender"))
-                    _estrutura = (f"É um CARROSSEL — respeite a ESTRUTURA de carrossel: esta tela é a {_papel}. "
-                                  "Mantenha EXATAMENTE a mesma família visual entre as telas (a tela 1 é a âncora). ")
-                else:
-                    _estrutura = ("É um POST ÚNICO — composição LIVRE e criativa: você decide o layout com ousadia "
-                                  "(sem estrutura de carrossel, sem padrão repetido), mantendo a identidade da marca. ")
+                # Uma única geração para a foto; letras/logos/contatos são arquivos e fontes reais.
+                # Evita o OCR + limpeza + reletter que redesenhava linhas sobrepostas e levava minutos.
                 _rprompt = (
-                    f"Crie a ARTE COMPLETA e FINAL da tela {i}/{total} de um {('carrossel' if total > 1 else 'post')} "
-                    f"de Instagram vertical 4:5 para a marca {company.get('name','')}. Você é o diretor de arte: "
-                    "arquitete o LAYOUT (posição/hierarquia/estilo de logo, título, textos, elementos, CTA) com "
-                    "sofisticação de agência — mas o CONTEÚDO DE TEXTO é fixo e você só o posiciona/estiliza, não o reescreve. "
-                    + _estrutura
-                    + _exact                                    # regra forte de texto verbatim (logo no início do conteúdo)
-                    + _visual
-                    + _logo_rule
-                    + _studio_style_block(design_ov)
-                    + _dna_txt
-                    + ref_ctx["brand"]
-                    + (f"CONTEXTO da oferta (use SÓ para entender o tema e compor a CENA/clima — NÃO renderize este "
-                       f"texto na arte, NÃO escreva estes detalhes como legenda; o texto visível é apenas o listado "
-                       f"acima): {_kb}. " if _kb else "")
-                    + (_bfont_line(_typo) if _typo else
-                       "TIPOGRAFIA: use a identidade tipográfica da MARCA (das referências/manual) — NUNCA fonte genérica de IA. ")
-                    + "As imagens de referência incluem as versões oficiais da logo para orientar as cores da marca. "
-                    + ("Use as ARTES DE INSPIRAÇÃO apenas para abstrair ritmo, hierarquia, densidade e atmosfera. "
-                       "Não copie literalmente texto, logo, personagem, oferta ou layout de terceiros. "
-                       if ref_ctx.get("arts") else "")
-                    + ((f"RODAPÉ: o RODAPÉ OFICIAL da marca (logo + contato) é aplicado depois, idêntico ao das artes "
-                        f"dela. Deixe os ~{int(round(float(_footer_kit.get('frac') or 0.12) * 100)) + 2}% de baixo da arte "
-                        "como uma faixa LIVRE e LISA (continuação do fundo, cor sólida ou degradê suave), sem texto, "
-                        "logo, contato, foto de pessoa nem elementos importantes. NÃO coloque a logo da marca nem "
-                        "telefone/site no pé. "
-                        ) if _footer_kit else
-                       ("RODAPÉ: a logo da marca e os contatos serão aplicados pelo Caripost depois, em todas "
-                        "as telas. Reserve os 16% inferiores como continuação limpa e lisa do fundo, sem texto, "
-                        "logo, assinatura, rosto ou elementos importantes. NÃO escreva telefone, site ou @. "))
-                    + " ".join(_extra) + " Sem marca d'água.")
-                # JUIZ DE TEXTO (2 instâncias): a IA cria LIVRE; o OCR LOCAL (grátis, determinístico, nunca
-                # recusa) lê a arte; reprovou → a VISÃO confirma (paga só na suspeita). TOLERÂNCIA ZERO:
-                # 1 palavra quebrada já reprova ('bawo' em vez de 'baixo' NUNCA passa). A regeração leva
-                # FEEDBACK com a palavra errada SOLETRADA → converge, não repete o erro. Guarda a melhor e,
-                # se todas quebrarem, entrega a menos ruim com aviso (nunca trava o lote). Sem template.
-                _expect = [x for x in [(s.get('title') or '').strip(),
-                                       (s.get('body') or s.get('subtitle') or '').strip(),
-                                       (s.get('cta') or '').strip()] if x]
-                # contato NÃO é julgado: é carimbado pelo Caripost depois (determinístico)
-                _best_img, _best_miss = None, None
-                try:                                            # uma tentativa paga por padrão; o usuário pode regerar
-                    _max_rf = max(1, int(get_setting("judge.max_attempts") or 1))
-                except Exception:
-                    _max_rf = 1
-                if not _expect:
-                    _max_rf = 1                                 # sem texto → não precisa reprovar por texto
-                _fb = ""
-                for _att_rf in range(_max_rf):
-                    try:
-                        _cand, _rc = await asyncio.to_thread(
-                            generate_image_reference_full, _rprompt + _fb, _refs,
-                            ("1024x1536" if fmt != "story" else "1024x1792"),
-                            None, "medium", _ref_urls)
-                        total_cost += (_rc or 0.0)
-                    except Exception as _re:
-                        img_err = ("estúdio: " + str(_re))[:180]
-                        if _att_rf == _max_rf - 1 and _best_img is None:
-                            fails.append(img_err)
-                        continue
-                    _miss, _jc = await asyncio.to_thread(judge_art_text, _cand, _expect)
-                    total_cost += (_jc or 0.0)
-                    if not _miss:                              # tolerância ZERO — texto 100% certo ou regenera
-                        img, img_ok, used_model = _cand, True, get_image_ref_model()
-                        break
-                    if _best_img is None or len(_miss) < len(_best_miss):
-                        _best_img, _best_miss = _cand, _miss    # guarda a menos quebrada
-                    if _att_rf < _max_rf - 1:
-                        _fb = text_fix_feedback(_miss, _expect)
-                        spillovers.append((i, "texto saiu quebrado (" + ", ".join(_miss[:3]) + ") → regenerando com correção soletrada"))
-                if not img_ok and _best_img is not None:        # todas quebraram → menos ruim + aviso honesto
-                    img, img_ok, used_model = _best_img, True, get_image_ref_model()
-                    fails.append(f"TEXTO::tela {i}: faltou ou saiu diferente na arte: " + ", ".join(_best_miss[:3]))
+                    _photo_only_prompt(s, company.get("name", ""), None, brand_color, design_ov,
+                                       palette=_palette_str(colors))
+                    + ref_ctx["brand"] + _dna_txt
+                    + (" Contexto factual da oferta (somente para a cena): " + str(_kb)[:5000] if _kb else "")
+                    + " Referências: " + "; ".join(f"{n}: {label}" for n, label in enumerate(_ref_lbl, 1))
+                    + f" Formato vertical {('9:16' if fmt == 'story' else '4:5')}. "
+                    + "A foto ocupa a tela inteira; protagonista/objetos no lado DIREITO. Deixe o lado esquerdo "
+                      "com fundo simples e escuro para a composição de texto feita depois. Referências orientam "
+                      "cores, fotografia e elementos reais dos apps; NÃO copie letras, anúncios, rodapés ou logos. "
+                      "NÃO escreva texto, título, botão, telefone, site ou marca. O Caripost aplicará tudo depois. "
+                      "Sem neon, faixas, cartazes ou marca d'água."
+                )
+                try:
+                    img, _rc = await asyncio.to_thread(
+                        generate_image_reference_full, _rprompt, _refs,
+                        ("1024x1792" if fmt == "story" else "1024x1536"), None, "medium", _ref_urls)
+                    total_cost += (_rc or 0.0)
+                    img_ok, used_model = True, get_image_ref_model()
+                except Exception as _re:
+                    img_err = ("estúdio: " + str(_re))[:180]
+                    fails.append(img_err)
             if ai_bg and not ref_full and img is None and influencer and inf_photos and stype in ("cover", "cta"):
                 # EMOÇÃO + VARIAÇÃO: a IA (visão) escolhe do PORTFÓLIO a foto cuja expressão combina com o texto da tela;
                 # exclui as já usadas (capa e CTA pegam fotos diferentes → não fica repetitivo).
@@ -2537,27 +2491,13 @@ async def _render_carousel_sync(request: Request):
             # 2) COMPOSIÇÃO (separada da geração; erro aqui degrada pro editorial, nunca derruba o lote).
             if img is not None:
                 try:
-                    if ref_full:       # ESTÚDIO IA: arte COMPLETA da IA; só o rodapé de contato é carimbado (sempre certo)
-                        png = img
-                        if _typo and (s.get("title") or "").strip():
-                            # TEXTO COM A FONTE REAL: acha as linhas que a IA escreveu, a IA apaga só elas e o
-                            # Caripost reescreve com o arquivo da fonte da marca (mesmo lugar/cor), em 2160 px.
-                            from ..services.retypeset import retypeset as _retype
-                            _rt = await asyncio.to_thread(
-                                _retype, img, _typo, {"title": s.get("title") or "",
-                                                      "body": s.get("body") or s.get("subtitle") or "",
-                                                      "cta": s.get("cta") or ""})
-                            if not _rt and _typo.get("reletter", True):
-                                # plano B: 2ª passada só de LETREIRO pela IA (amostra da fonte), protegida por OCR
-                                from ..services.brand_fonts import reletter as _relet
-                                _rt = await asyncio.to_thread(
-                                    _relet, img, _typo, [(s.get("title") or ""), (s.get("body") or s.get("subtitle") or ""),
-                                                         (s.get("cta") or "")])
-                            if _rt:
-                                png = img = _rt
+                    if ref_full:       # Foto por IA; texto, apps e assinatura compostos com fontes/arquivos reais.
+                        from ..services.studio_identity import compose_text as _compose_text
+                        png = await asyncio.to_thread(
+                            _compose_text, img, s, _typo, (2160, 3840) if fmt == "story" else (2160, 2700))
                         if _footer_kit:      # rodapé ORIGINAL do cliente em TODAS as telas (como nas artes dele)
                             from ..services.brand_footer import stamp as _fstamp
-                            png = await asyncio.to_thread(_fstamp, img, _footer_kit, _typo)
+                            png = await asyncio.to_thread(_fstamp, png, _footer_kit, _typo)
                         else:
                             from ..services.studio_identity import stamp_footer as _stamp_footer
                             png = await asyncio.to_thread(
@@ -2599,8 +2539,15 @@ async def _render_carousel_sync(request: Request):
             fn = f"{i:02d}.png"
             with open(os.path.join(subdir, fn), "wb") as f:
                 f.write(png)
+            preview_url = None
+            try:
+                from ..services.studio_identity import write_preview
+                await asyncio.to_thread(write_preview, png, os.path.join(subdir, f"{i:02d}_preview.webp"))
+                preview_url = f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{i:02d}_preview.webp"
+            except Exception:
+                pass
             return {"i": i, "base": base_out, "cost": total_cost, "fails": fails, "spills": spillovers,
-                    "slide": {"url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{fn}",
+                    "slide": {"url": f"{UPLOAD_URL_PREFIX}/{company_id}/carousel/{hexid}/{fn}", "preview_url": preview_url,
                               "type": s.get("type"), "title": s.get("title", ""), "app": s.get("app") or "",
                               **({"offer_ref": s.get("offer_ref")}
                                  if isinstance(s.get("offer_ref"), dict) else {}),
@@ -2652,6 +2599,7 @@ async def _render_carousel_sync(request: Request):
                     "networks": ["instagram"], "media_url": out[0]["url"],
                     "meta": {"content_type": ("carousel" if fmt == "carrossel" else ("story" if fmt == "story" else "image")),
                              "fmt": fmt, "carousel_urls": [o["url"] for o in out],
+                             "carousel_preview_urls": [o.get("preview_url") or o["url"] for o in out],
                              "base_urls": bases, "render_mode": render_mode,
                              "model": model or "editorial", "template_id": (tmpl or {}).get("id"),
                              "collab_handle": (inf_handle or "").lstrip("@"),
@@ -3893,7 +3841,7 @@ async def canva_pull(post_id: str, request: Request):
         with open(os.path.join(os.path.dirname(_upload_file_path(old[0])), fn), "wb") as f:
             f.write(data)
         new_urls.append(f"{folder_url}/{fn}")
-    _post_meta_merge(post_id, {"carousel_urls": new_urls, "pre_canva_urls": old,
+    _post_meta_merge(post_id, {"carousel_urls": new_urls, "carousel_preview_urls": new_urls, "pre_canva_urls": old,
                                "canva": {**(meta.get("canva") or {}), "pulled_at": datetime.now(timezone.utc).isoformat()}})
     post_update(post_id, {"media_url": new_urls[0]})
     return {"urls": new_urls}

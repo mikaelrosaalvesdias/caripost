@@ -48,7 +48,7 @@ function AgMonthGrid({ month, items, dates, onPick }) {
           {its.map(it => {
             const [fl, fk] = AG_FMT[it.format] || [it.format, ''];
             const [sl] = AG_STAGE[it.stage] || [it.stage];
-            const thumb = ((it.meta || {}).slides || [])[0];
+            const thumb = ((it.meta || {}).slide_previews || (it.meta || {}).slides || [])[0];
             return <button key={it.id} onClick={() => onPick(it)} title={sl + ' — ' + (it.title || '')}
               style={{ display: 'flex', gap: 5, alignItems: 'center', width: '100%', textAlign: 'left', border: 0, background: 'rgba(0,0,0,.035)', borderRadius: 7, padding: '3px 5px', marginTop: 3, cursor: 'pointer', opacity: ['idea_rejected', 'skipped'].includes(it.stage) ? .45 : 1 }}>
               {thumb ? <img src={thumb} alt="" style={{ width: 22, height: 28, objectFit: 'cover', borderRadius: 3, flex: 'none' }} />
@@ -398,7 +398,7 @@ function AgenciaApp() {
           {it.error && <div className={['art_ok'].includes(it.stage) ? 'hint' : 'err'}>{it.error}</div>}
           {meta.art_warning && it.stage === 'art' && <div className="hint">Conferência de texto: {meta.art_warning}</div>}
           {slides.length > 0 && <div className="rowx" style={{ gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-            {slides.map((u, k) => <img key={u} src={u} alt={'tela ' + (k + 1)} onClick={() => setViewer({ slides, k })}
+            {slides.map((u, k) => <img key={u} loading="lazy" decoding="async" src={(meta.slide_previews || [])[k] || u} alt={'tela ' + (k + 1)} onClick={() => setViewer({ slides, k })}
               style={{ height: 210, borderRadius: 10, cursor: 'zoom-in', flex: 'none', boxShadow: '0 2px 10px rgba(0,0,0,.12)' }} />)}
           </div>}
           {isOpen && <div className="stack">
