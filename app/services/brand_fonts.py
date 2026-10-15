@@ -474,19 +474,36 @@ def _own_arts(company_id: str, limit: int = 4) -> List[bytes]:
     return out
 
 
+def fallback_typography() -> Dict[str, Any]:
+    """Base neutra local para cadastros sem referências; nunca herda a fonte de outro cliente."""
+    from .layered_composer import FONT_DIRS
+    for family, regular, bold in (("Poppins", "Poppins-Regular", "Poppins-SemiBold"),
+                                   ("DejaVu Sans", "DejaVuSans", "DejaVuSans-Bold"),
+                                   ("Liberation Sans", "LiberationSans-Regular", "LiberationSans-Bold")):
+        for folder in FONT_DIRS:
+            paths = [os.path.join(folder, name + ".ttf") for name in (regular, bold)]
+            if all(os.path.isfile(p) for p in paths):
+                return {"title": {"family": family, "weight": 600 if family == "Poppins" else 700, "file": paths[1]},
+                        "body": {"family": family, "weight": 400, "file": paths[0]},
+                        "method": "fallback", "auto": True}
+    return {}
+
+
 def ensure(company: Dict[str, Any]) -> Dict[str, Any]:
     design = ((company.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}
     typo = design.get("typography") or {}
-    if typo.get("at"):
-        return typo if typo.get("title") and typo.get("enabled", True) else {}
+    if not typo.get("enabled", True):
+        return {}
+    if typo.get("title"):
+        return typo
     arts = _own_arts(company["id"])
     if not arts:
-        return {}
+        return fallback_typography()
     try:
         typo = identify(company, arts)
     except Exception as exc:
         print(f"[fonts] {company.get('name')}: identificação falhou: {str(exc)[:160]}", flush=True)
-        return {}
+        return fallback_typography()
     save(company["id"], typo)
     return typo
 
@@ -536,7 +553,8 @@ def prompt_line(typo: Dict[str, Any]) -> str:
     t, b = (typo or {}).get("title") or {}, (typo or {}).get("body") or {}
     if not t.get("family"):
         return ""
-    return (f" TIPOGRAFIA OFICIAL DA MARCA (extraída das artes dela — OBRIGATÓRIA): títulos em {t['family']} peso "
+    origin = "BASE TIPOGRÁFICA" if typo.get("method") == "fallback" else "TIPOGRAFIA OFICIAL DA MARCA"
+    return (f" {origin} (OBRIGATÓRIA): títulos em {t['family']} peso "
             f"{t.get('weight')}{' em CAIXA ALTA' if t.get('caps') else ''}; textos de apoio em {b.get('family') or t['family']} "
             f"peso {b.get('weight') or 500}. A imagem 'AMOSTRA DA TIPOGRAFIA OFICIAL' mostra o título desta tela já "
             "desenhado nessa fonte: COPIE exatamente esse desenho de letra (proporção, largura, terminais, peso). "

@@ -287,7 +287,27 @@ def build_kit(company_id: str) -> Dict[str, Any]:
 def get_kit(company: Dict[str, Any]) -> Dict[str, Any]:
     design = ((company.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}
     kit = design.get("footer_kit") or {}
+    if kit.get("auto") and not kit.get("edited") and not _safe_auto_kit(kit):
+        return {}
     return kit if kit.get("enabled", True) and (kit.get("light") or kit.get("dark")) else {}
+
+
+def _safe_auto_kit(kit: Dict[str, Any]) -> bool:
+    """Recortes de fotos podem se repetir; só reaproveita assinaturas com estrutura reconhecida.
+
+    Ícones são pequenos (WhatsApp etc.), nunca recortes grandes de pessoas/objetos. Kits manuais
+    ficam sob controle do usuário. Também valida kits antigos já salvos, sem alterar o cadastro.
+    """
+    elements = (kit.get("spec") or {}).get("elements") or []
+    if not any(e.get("type") in ("logo", "text") for e in elements):
+        return False
+    for e in elements:
+        width, height = float(e.get("w") or 0), float(e.get("h") or 0)
+        if e.get("type") == "icon" and (width > 0.09 or height > 0.05):
+            return False
+        if e.get("type") == "logo" and (width > 0.5 or height > 0.13):
+            return False
+    return True
 
 
 def save_kit(company_id: str, kit: Dict[str, Any]) -> None:

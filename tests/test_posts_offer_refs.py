@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -29,7 +30,8 @@ fake_db = types.ModuleType("app.db_companies")
 for symbol in (
     "post_list post_get post_create post_transition post_update post_delete post_stats "
     "POST_STATUSES POST_TRANSITIONS POST_LABELS company_get company_list report_get_latest report_create "
-    "asset_list_logos asset_list asset_list_photos product_list product_get solution_list "
+    "asset_list_logos asset_list asset_list_photos asset_list_solution_assets product_list product_get "
+    "product_plan_get product_plan_list solution_list "
     "influencer_get influencer_list event_get organizer_get"
 ).split():
     setattr(fake_db, symbol, [] if symbol == "POST_STATUSES" else Mock(name=symbol))
@@ -45,8 +47,8 @@ for symbol in (
     "get_image_config generate_image_reference_full image_ref_models get_image_ref_model "
     "openrouter_image_models openrouter_video_models cometapi_video_models omniroute_video_models "
     "kie_video_models kie_image_models omniroute_image_models openai_image_models piapi_image_models "
-    "cometapi_image_models usd_to_brl get_setting create_video_job get_video_job download_video "
-    "build_video_prompt build_video_storyboard get_video_config accept_kie_callback kie_callback_token"
+    "cometapi_image_models usd_to_brl get_setting create_video_job get_video_job download_video selected_offer_context "
+    "build_video_prompt build_video_storyboard get_video_config accept_kie_callback kie_callback_token image_template_get"
 ).split():
     setattr(fake_ai, symbol, Mock(name=symbol))
 
@@ -85,7 +87,71 @@ class OfferRefsTests(unittest.TestCase):
         posts.asset_list_logos = Mock(return_value=[{"url": "/uploads/logo.png"}])
         posts.asset_list_photos = Mock(return_value=[{"url": "/uploads/photo.png"}])
         posts.solution_list = Mock(return_value=[{"name": "Benefício"}])
+        posts.product_plan_list = Mock(return_value=[])
+        posts.asset_list_solution_assets = Mock(return_value=[])
         posts.__cad__ = Mock(return_value=None)
+
+    def test_studio_applies_selected_app_file_and_keeps_empty_selection_out_of_other_catalogs(self):
+        import io
+        from PIL import Image
+        from app.services import brand_footer, brand_fonts, visual_dna
+
+        billing = types.ModuleType("app.services.billing")
+        billing.check_credits = Mock(return_value=None)
+        billing.feature_enabled = Mock(return_value=True)
+        billing.log_usage = Mock(return_value=0)
+        async def simulated_io(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+        for selected in (False, True):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as root, ExitStack() as stack:
+                logo = Path(root) / "app.png"
+                Image.new("RGBA", (180, 60), "black").save(logo)
+                buf = io.BytesIO()
+                Image.new("RGB", (1080, 1350), "white").save(buf, "PNG")
+                product = {"id": "app-1", "name": "App Teste", "_source_company_id": "seller-1",
+                           "_offer_ref": {"company_id": "seller-1", "product_id": "app-1"},
+                           "_offer_logo_groups": [{"name": "App Teste", "assets": [{"url": str(logo)}]}]}
+                company = {"id": "target-1", "name": "Prospect", "phone": "11999999999", "brand_kit": {}}
+                request = types.SimpleNamespace(base_url="https://caripost.cariap.com.br/")
+                async def body():
+                    return {"company_id": "target-1", "render_mode": "reference_full", "offer_refs": [],
+                            "telas": [{"type": "cover", "title": "App Teste", "app": "App Teste"}]}
+                request.json = body
+                stack.enter_context(patch.object(asyncio, "to_thread", simulated_io))
+                stack.enter_context(patch.object(fake_ai, "selected_offer_context", return_value=""))
+                stack.enter_context(patch.dict(sys.modules, {"app.services.ai": fake_ai,
+                    "app.services.billing": billing, "app.db_companies": fake_db}))
+                for name, value in {
+                    "UPLOAD_DIR": root, "_api_key_required": Mock(return_value=None),
+                    "company_get": Mock(return_value=company), "__cad__": Mock(return_value=None),
+                    "_resolve_offer_refs": Mock(return_value=(True, [], None)),
+                    "_offer_products": Mock(return_value=[product] if selected else []),
+                    "asset_list_logos": Mock(return_value=[]),
+                    "_all_raster_logos": Mock(side_effect=lambda assets: [str(logo)] if assets else []),
+                    "get_image_config": Mock(return_value={"enabled": True}),
+                    "get_setting": Mock(return_value=""), "image_models_registry": Mock(return_value=[]),
+                    "generate_image_reference_full": Mock(return_value=(buf.getvalue(), 0)),
+                    "judge_art_text": Mock(return_value=([], 0)), "usd_to_brl": Mock(return_value=0),
+                    "selected_offer_context": Mock(return_value=""),
+                    "product_list": Mock(return_value=[]), "post_create": Mock(return_value={"id": "post-1"}),
+                }.items():
+                    stack.enter_context(patch.object(posts, name, value))
+                stack.enter_context(patch.object(fake_db, "asset_list", return_value=[]))
+                catalog = stack.enter_context(patch.object(fake_db, "product_list", return_value=[]))
+                stack.enter_context(patch.object(brand_footer, "ensure", return_value={}))
+                stack.enter_context(patch.object(brand_fonts, "ensure", return_value={}))
+                stack.enter_context(patch.object(visual_dna, "ensure", return_value={}))
+                result = asyncio.run(posts._render_carousel_sync(request))
+                self.assertIn("slides", result, result)
+                self.assertEqual(len(result["slides"]), 1, result)
+                catalog.assert_not_called()
+                out = next((Path(root) / "target-1" / "carousel").glob("*/01.png"))
+                image = Image.open(out).convert("RGB")
+                self.assertEqual(image.getpixel((75, 50)), (0, 0, 0) if selected else (255, 255, 255))
+                prompt = posts.generate_image_reference_full.call_args.args[0]
+                self.assertIn("16% inferiores", prompt)
+                if selected:
+                    self.assertIn("11% superiores", prompt)
 
     def test_absent_key_preserves_legacy_without_catalog_reads(self):
         explicit, offers, error = posts._resolve_offer_refs(object(), {}, "target-1")

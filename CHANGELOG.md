@@ -2,6 +2,14 @@
 
 Todas as mudancas relevantes deste projeto devem ser registradas aqui e tambem no `CHANGELOG` interno em `app/ui/app.js` quando forem visiveis no app.
 
+## v1.27.169 - 2026-10-15
+
+- Estúdio: clientes e prospects sem rodapé original recebem assinatura com logo oficial e contatos em linhas separadas, em todas as telas; preservado o rodapé personalizado existente.
+- Rodapé automático: recortes sem estrutura reconhecida ou com fragmentos grandes de fotos deixam de ser reutilizados como assinatura; kits editados pelo usuário são preservados.
+- Tipografia: base local para cadastros sem artes de referência ou com identificação indisponível, sem herdar fontes da Cariap; configuração manual respeitada mesmo sem timestamp.
+- Logos dos apps: composição dos arquivos oficiais na faixa superior reservada, incluindo apps encontrados no catálogo autorizado; seleção explícita de ofertas não busca logos fora da seleção.
+- Versão sincronizada na API, UI e OS.
+
 ## v1.27.133 - 2026-10-10
 
 - Fix: gerar carrossel/post (Estúdio IA) voltava a funcionar. A geração leva minutos e o Cloudflare corta requisições com mais de 100s — o servidor terminava as imagens mas a tela nunca recebia. Agora `render-carousel` roda como job (`async_job` → `GET /api/posts/render-job/{id}`) e o app acompanha até ficar pronto.

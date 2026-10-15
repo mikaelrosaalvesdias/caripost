@@ -2088,7 +2088,7 @@ async def _render_carousel_sync(request: Request):
             app_name = (s.get("app") or "").strip().lower()
             # MALEÁVEL: coleta TODOS os apps relevantes da tela (taguead​o + citados no título/corpo),
             # não só um. O nº de logos por tela é limitado pelo token app_logo.max_per_slide no composer.
-            tl = ((s.get("app") or "") + " " + (s.get("title") or "") + " " + (s.get("body") or "")).lower()
+            tl = " ".join(str(s.get(key) or "") for key in ("app", "title", "body", "subtitle", "cta")).lower()
             slide_app_logos, _seen = [], set()
             slide_products = _products_for_slide(s)
             for selected_product in slide_products:
@@ -2106,6 +2106,7 @@ async def _render_carousel_sync(request: Request):
                 slide_app_logos = [primary_app_variants]
             if event_logo_variants and (s.get("type") or "").lower() in ("cover", "cta"):
                 slide_app_logos = [event_logo_variants] + slide_app_logos   # LOGO DO EVENTO na capa e no CTA
+            studio_app_logos = list(slide_app_logos)
             app_variants = slide_app_logos[0] if slide_app_logos else []   # 1º app (p/ legacy/compat)
             is_cta = (s.get("type") == "cta")
             _dg = "".join(ch for ch in phone if ch.isdigit())
@@ -2220,7 +2221,7 @@ async def _render_carousel_sync(request: Request):
                                         in ("png", "jpg", "jpeg", "webp")), "")
                             _seen_p.add(_n3)
                             _prod_logos.append((_label3, _lg3[0], _u3 or ""))
-                if not _prod_logos:
+                if not _prod_logos and not offers_explicit:
                     # Sem oferta marcada (ou oferta sem logo): acha os apps CITADOS no texto da tela no catálogo
                     # que este usuário enxerga (mesmo escopo de tenancy) — senão a arte só ESCREVE "ExitLag/Deezer".
                     try:
@@ -2248,14 +2249,21 @@ async def _render_carousel_sync(request: Request):
                                 _prod_logos.append(((_p3.get("name") or "").strip(), _lg3[0], _u3 or ""))
                     except Exception:
                         pass
+                # Inclui também os apps descobertos no catálogo autorizado, sem duplicar a seleção.
+                _studio_paths = {p for group in studio_app_logos for p in group}
                 for _pn, _lp2, _pu in _prod_logos[:3]:
+                    if _lp2 not in _studio_paths:
+                        studio_app_logos.append([_lp2])
+                        _studio_paths.add(_lp2)
                     try:
-                        _refs.append(open(_lp2, "rb").read()); _ref_lbl.append(f"LOGO OFICIAL do app {_pn}")
+                        with open(_lp2, "rb") as _logo_file:
+                            _refs.append(_logo_file.read())
+                        _ref_lbl.append(f"LOGO OFICIAL do app {_pn}")
                         if _pu:
                             _ref_urls.append((_render_public_base() + _pu) if _pu.startswith("/") else _pu)
-                        _extra.append("Uma das referências é a LOGO OFICIAL ATUAL de " + _pn + " — aplique EXATAMENTE "
-                                      "esta versão (formas, cores e letras); é PROIBIDO desenhar a logo de " + _pn +
-                                      " de memória ou usar identidade/versão antiga dela.")
+                        _extra.append("Uma das referências é a LOGO OFICIAL ATUAL de " + _pn +
+                                      " — use para reconhecer a identidade do app. O arquivo será aplicado depois; "
+                                      "NÃO desenhe outra logo de memória.")
                     except Exception:
                         pass
                 if offers_explicit:
@@ -2312,11 +2320,10 @@ async def _render_carousel_sync(request: Request):
                 if _refs:
                     _extra.append("MAPA DAS IMAGENS DE REFERÊNCIA (na ordem enviada): "
                                   + "; ".join(f"imagem {n}) {l}" for n, l in enumerate(_ref_lbl, 1)) + ".")
-                if _app_names3:
-                    _extra.append("OBRIGATÓRIO: aplique na arte a LOGO OFICIAL (imagem) de cada app citado — "
-                                  + ", ".join(_app_names3) + " — como selo/logotipo visível e legível, copiada da "
-                                  "referência correspondente. NÃO basta escrever o nome do app em texto: a logo tem que "
-                                  "aparecer. Logos são imagens e NÃO contam como 'texto extra' na regra de texto.")
+                if studio_app_logos:
+                    _extra.append("LOGOS DOS APPS: os arquivos oficiais serão aplicados pelo Caripost depois. "
+                                  "Reserve os 11% superiores como fundo limpo, sem título, rosto ou elementos "
+                                  "importantes. NÃO desenhe logos de apps nem os substitua por nomes nessa faixa.")
                 # Ordem final: continuidade da peça, família visual aprovada, marca e oferta real.
                 # Deduplicação mantém ao menos uma inspiração dentro do limite do provedor.
                 _ordered_urls = ([_anchor_ref_url] if _anchor_ref_url else [])
@@ -2352,8 +2359,8 @@ async def _render_carousel_sync(request: Request):
                 ) if _txt_items else "")
                 _visual = (f"Direção de CENA (isto NÃO é texto — não escreva na arte, use só como referência visual): "
                            f"{(s.get('visual') or '').strip()}. " if s.get('visual') else "")
-                _logo_rule = ("A LOGO entra como IMAGEM de referência — aplique-a EXATAMENTE como está (mesmas letras, "
-                              "mesmas cores); é PROIBIDO redesenhar, reescrever, traduzir ou alterar o texto da logo. ")
+                _logo_rule = ("A logo da marca nas referências serve para reconhecer sua identidade. "
+                              "Ela será aplicada no rodapé depois; NÃO redesenhe nem repita a logo na arte. ")
                 if total > 1:
                     _papel = ("CAPA do carrossel: gancho forte e visual de abertura, título dominante — convida a arrastar"
                               if i == 1 else
@@ -2382,8 +2389,7 @@ async def _render_carousel_sync(request: Request):
                        f"acima): {_kb}. " if _kb else "")
                     + (_bfont_line(_typo) if _typo else
                        "TIPOGRAFIA: use a identidade tipográfica da MARCA (das referências/manual) — NUNCA fonte genérica de IA. ")
-                    + "As imagens de referência incluem as VERSÕES OFICIAIS da logo — ESCOLHA a versão que melhor se "
-                      "integra ao fundo da sua composição e aplique-a LIMPA, sem faixa/painel/retângulo atrás. "
+                    + "As imagens de referência incluem as versões oficiais da logo para orientar as cores da marca. "
                     + ("Use as ARTES DE INSPIRAÇÃO apenas para abstrair ritmo, hierarquia, densidade e atmosfera. "
                        "Não copie literalmente texto, logo, personagem, oferta ou layout de terceiros. "
                        if ref_ctx.get("arts") else "")
@@ -2393,11 +2399,9 @@ async def _render_carousel_sync(request: Request):
                         "logo, contato, foto de pessoa nem elementos importantes. NÃO coloque a logo da marca nem "
                         "telefone/site no pé. "
                         ) if _footer_kit else
-                       ("RODAPÉ: NÃO escreva contato (telefone, WhatsApp, site, @) — deixe uma faixa LIVRE e limpa de "
-                        "~7% da altura no pé da arte, sem texto nem elementos importantes; o contato é aplicado depois. "
-                        ) if (ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta")) else
-                       (f"Assinatura discreta opcional no rodapé, copiada exatamente: {ref_ctx['contact'].split(' · ')[-1]}. NUNCA invente contato. "
-                        if ref_ctx.get("contact") else ""))
+                       ("RODAPÉ: a logo da marca e os contatos serão aplicados pelo Caripost depois, em todas "
+                        "as telas. Reserve os 16% inferiores como continuação limpa e lisa do fundo, sem texto, "
+                        "logo, assinatura, rosto ou elementos importantes. NÃO escreva telefone, site ou @. "))
                     + " ".join(_extra) + " Sem marca d'água.")
                 # JUIZ DE TEXTO (2 instâncias): a IA cria LIVRE; o OCR LOCAL (grátis, determinístico, nunca
                 # recusa) lê a arte; reprovou → a VISÃO confirma (paga só na suspeita). TOLERÂNCIA ZERO:
@@ -2554,9 +2558,13 @@ async def _render_carousel_sync(request: Request):
                         if _footer_kit:      # rodapé ORIGINAL do cliente em TODAS as telas (como nas artes dele)
                             from ..services.brand_footer import stamp as _fstamp
                             png = await asyncio.to_thread(_fstamp, img, _footer_kit, _typo)
-                        elif ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
-                            from ..services.layered_composer import stamp_contact as _stamp
-                            png = await asyncio.to_thread(_stamp, img, ref_ctx["contact"])
+                        else:
+                            from ..services.studio_identity import stamp_footer as _stamp_footer
+                            png = await asyncio.to_thread(
+                                _stamp_footer, png, co_logos, ref_ctx.get("contact") or "", colors, _typo)
+                        if studio_app_logos:
+                            from ..services.studio_identity import stamp_apps as _stamp_apps
+                            png = await asyncio.to_thread(_stamp_apps, png, studio_app_logos)
                     elif use_composer:   # Marco 3: foto da IA + CARD de vidro (nível agência, texto legível, logo intacta)
                         png = await asyncio.to_thread(compose_card_slide, slide_for_render, i, total, colors, co_logos, site, handle, img, None, design_ov, slide_app_logos, canvas_size)
                     else:              # legacy ISOLADO: IA já desenhou a arte → carimba logo (+ rodapé de contato no CTA e na ARTE CRIATIVA)

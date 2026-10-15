@@ -534,6 +534,14 @@ const TEASER_MAX_TOTAL_DURATION_SEC = 1800;
 
 const CHANGELOG = [
   {
+    version: 'v1.27.169', date: '2026-10-15',
+    items: [
+      { type: 'fix', text: 'Estúdio: rodapé com logo e contatos legíveis em todas as telas para clientes e prospects sem rodapé original.' },
+      { type: 'fix', text: 'Tipografia de apoio para cadastros sem referências; fontes configuradas e identidade original preservadas.' },
+      { type: 'fix', text: 'Logos oficiais dos apps aplicados por código, com área reservada, respeitando as ofertas selecionadas.' },
+    ],
+  },
+  {
     version: 'v1.27.132', date: '2026-09-02',
     items: [
       { type: 'feat', text: 'Cadastro do cliente: Dados Gerais e Voz & Persona com campos obrigatorios em destaque, opcionais recolhidos e barra de salvar no rodape; Identidade Visual e Produtos organizados em faixas e arvore de catalogo.' },
