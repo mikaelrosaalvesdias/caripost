@@ -2280,6 +2280,7 @@ function CompanyVisual({ company, onSaved }) {
   const [msg, setMsg] = React.useState('');
   const [igHandle, setIgHandle] = React.useState('');
   const [igBusy, setIgBusy] = React.useState(false);
+  const [igLinks, setIgLinks] = React.useState('');
   const [refBusy, setRefBusy] = React.useState('');
   const identityRunning = ['queued', 'running'].includes(bk.extras?.enrichment?.state);
   React.useEffect(() => {
@@ -2291,8 +2292,9 @@ function CompanyVisual({ company, onSaved }) {
   async function importIg() {
     setIgBusy(true); setMsg('');
     try {
-      const r = await window.mpApi.importInstagram(company.id, { handle: igHandle, kind: 'reference', count: 24 });
-      setMsg(`✓ ${r.refs} referência(s) encontrada(s) em @${r.handle}. Aprove abaixo as que devem orientar a IA.`); onSaved();
+      const r = await window.mpApi.importInstagramPosts(company.id, { handle: igHandle, urls: igLinks, count: 24 },
+        j => setMsg(j.total ? `Baixando posts… ${j.done || 0}/${j.total} (${j.images || 0} imagem(ns))` : 'Procurando posts do perfil…'));
+      setMsg(`✓ ${r.refs} arte(s) nova(s) importada(s)${r.images > r.refs ? ` (${r.images - r.refs} já existiam)` : ''}. O DNA visual será refeito com elas.`); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setIgBusy(false); }
   }
@@ -2491,9 +2493,11 @@ function CompanyVisual({ company, onSaved }) {
     </div>}
     <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
       <input className="inp" style={{ maxWidth: 240 }} placeholder="@perfil de referência" value={igHandle} onChange={e => setIgHandle(e.target.value)} />
-      <span className="hint">Pesquisa oficial da Meta quando disponível, sem login do prospecto. O site e o upload continuam como fallback.</span>
-      <button className="btn sm pri" disabled={igBusy || !igHandle.trim()} onClick={importIg}>{igBusy ? 'Importando…' : 'Importar referências'}</button>
+      <button className="btn sm pri" disabled={igBusy || (!igHandle.trim() && !igLinks.trim())} onClick={importIg}>{igBusy ? 'Importando…' : 'Importar artes'}</button>
     </div>
+    <textarea className="inp" rows={3} placeholder={'Links dos posts (um por linha) — no Instagram: ⋯ → Copiar link\nhttps://www.instagram.com/p/…'}
+      value={igLinks} onChange={e => setIgLinks(e.target.value)} />
+    <span className="hint">Baixa as artes em qualidade original, sem login de ninguém (carrossel traz todas as telas; vídeo é ignorado). Com links colados você escolhe as artes; só com o @ o Caripost tenta achar os posts sozinho.</span>
     <input type="file" accept="image/*" onChange={e => e.target.files[0] && doUploadRef(e.target.files[0])} />
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12 }}>
       {refs.map(r => {

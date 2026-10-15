@@ -2245,16 +2245,101 @@ async def import_instagram(company_id: str, request: Request):
             "fallbacks": ["site_official", "upload_manual"],
         }, status_code=422)
     if res.get("refs"):
-        _spawn_reference_analysis(company_id)
-        try:   # artes novas → DNA visual refeito no próximo render (a menos que tenha sido editado à mão)
-            from ..services import visual_dna as _vd
-            _co = company_get(company_id) or {}
-            _old = (((_co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}).get("visual_dna") or {}
-            if not _old.get("edited"):
-                _vd.save(company_id, {})
-        except Exception:
-            pass
+        _refs_changed(company_id)
     return res
+
+
+def _refs_changed(company_id: str) -> None:
+    _spawn_reference_analysis(company_id)
+    try:   # artes novas → DNA visual refeito no próximo render (a menos que tenha sido editado à mão)
+        from ..services import visual_dna as _vd
+        _co = company_get(company_id) or {}
+        _old = (((_co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}).get("visual_dna") or {}
+        if not _old.get("edited"):
+            _vd.save(company_id, {})
+    except Exception:
+        pass
+
+
+_SNAP_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _snap_import_run(job_id: str, company_id: str, urls: List[str], handle: str, count: int) -> None:
+    import asyncio
+    from ..services import insta_snap
+    job = _SNAP_JOBS[job_id]
+    try:
+        if not urls:
+            job["stage"] = "buscando posts"
+            urls = insta_snap.discover_posts(handle, (company_get(company_id) or {}).get("name") or "", limit=count)
+            job["found"] = len(urls)
+            if not urls:
+                job.update(status="error", error="Não achei posts desse perfil pela busca. Cole os links dos posts "
+                                                  "(no Instagram: ⋯ → Copiar link), um por linha.")
+                return
+        job.update(stage="baixando", total=len(urls))
+        items = asyncio.run(insta_snap.fetch_posts(urls, max_images=count, progress=lambda p: job.update(p)))
+        added = 0
+        for it in items:
+            code = insta_snap.post_code(it["post_url"])
+            if _save_reference_image(
+                company_id, it["content"], source="INSTAGRAM", source_url=it["post_url"],
+                source_key=f"instagram:post:{code}:{it['index']}",
+                metadata={"from": f"instagram:@{handle}" if handle else "instagram:link", "kind": "reference",
+                          "external_id": code, "permalink": it["post_url"], "confidence": 1.0,
+                          "rights_basis": "public_post_link", "review_status": "approved",
+                          "owner_scope": "prospect_or_client", "allowed_use": "analysis_only"},
+            ):
+                added += 1
+        if added:
+            _refs_changed(company_id)
+        job.update(status="done", refs=added, images=len(items), stage="pronto")
+    except Exception as exc:
+        job.update(status="error", error=str(exc)[:300])
+
+
+@router.post("/{company_id}/import-instagram-posts")
+async def import_instagram_posts(company_id: str, request: Request):
+    """Artes de posts públicos do Instagram sem login de ninguém: {urls (links colados), handle, count}.
+    Sem links → tenta achar posts do @ pela busca. Roda em 2º plano (job + GET .../import-instagram-posts/{job})."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    if not company_get(company_id):
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    from ..services import insta_snap
+    raw_handle = str(body.get("handle") or "").strip()
+    urls = insta_snap.normalize_post_urls([str(body.get("urls") or ""), raw_handle])
+    handle = "" if insta_snap.normalize_post_urls(raw_handle) else _instagram_handle(raw_handle)
+    count = max(1, min(30, int(body.get("count") or 24)))
+    if not urls and not handle:
+        return JSONResponse({"detail": "Informe o @ do perfil ou cole links de posts."}, status_code=422)
+    job_id = uuid.uuid4().hex[:12]
+    _SNAP_JOBS[job_id] = {"status": "running", "stage": "iniciando", "company_id": company_id,
+                          "done": 0, "total": len(urls), "images": 0, "refs": 0, "handle": handle}
+    threading.Thread(target=_snap_import_run, args=(job_id, company_id, urls[:30], handle, count), daemon=True).start()
+    return {"job_id": job_id, **_SNAP_JOBS[job_id]}
+
+
+@router.get("/{company_id}/import-instagram-posts/{job_id}")
+async def import_instagram_posts_status(company_id: str, job_id: str, request: Request):
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    job = _SNAP_JOBS.get(job_id)
+    if not job or job.get("company_id") != company_id:
+        return JSONResponse({"detail": "Importação não encontrada"}, status_code=404)
+    return {"job_id": job_id, **job}
 
 
 def _run_company_enrichment(
