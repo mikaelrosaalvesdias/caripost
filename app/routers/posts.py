@@ -1425,6 +1425,11 @@ def _load_upload_bytes(url: str, allowed_company_ids=None, max_bytes: int = 32 *
     return None
 
 
+def _bfont_line(typo) -> str:
+    from ..services.brand_fonts import prompt_line
+    return prompt_line(typo)
+
+
 def _studio_style_block(design_ov) -> str:
     """Direção visual do Estúdio IA (arte livre): 'impacto' (antigo, livre), 'equilibrado' (padrão: criativo, sem os
     exageros de IA, logos obrigatórias) e 'limpo' (minimalista). Moldável por cliente: creative_config.design.studio_style
@@ -1741,6 +1746,22 @@ async def _render_carousel_sync(request: Request):
                 _dna_txt = _vdna.prompt_block(await asyncio.to_thread(_vdna.ensure, company))
             except Exception as _de:
                 print(f"[estudio] DNA visual indisponível: {str(_de)[:120]}", flush=True)
+        # IDENTIDADE ORIGINAL do cliente, extraída das artes dele: RODAPÉ fixo (colado idêntico) e TIPOGRAFIA
+        # (fonte real desenhada com o título da tela → a IA copia o desenho das letras). Sem padrão → fluxo antigo.
+        _footer_kit, _typo = {}, {}
+        if ref_full:
+            try:
+                from ..services import brand_footer as _bfoot
+                _footer_kit = await asyncio.to_thread(_bfoot.ensure, company)
+            except Exception as _fe:
+                print(f"[estudio] rodapé original indisponível: {str(_fe)[:120]}", flush=True)
+            try:
+                from ..services import brand_fonts as _bfont
+                _typo = await asyncio.to_thread(_bfont.ensure, company)
+            except Exception as _te:
+                print(f"[estudio] tipografia original indisponível: {str(_te)[:120]}", flush=True)
+            print(f"[estudio] {company.get('name','')}: rodapé original={'sim' if _footer_kit else 'não'} "
+                  f"tipografia={((_typo or {}).get('title') or {}).get('family') or 'não'}", flush=True)
         base = str(request.base_url).rstrip("/")
 
         def _logo_url(assets):
@@ -2186,10 +2207,21 @@ async def _render_carousel_sync(request: Request):
                                 + ((_p3.get("name") or "produto").strip())
                                 + " — preserve formato, cores e detalhes visuais; não substitua por produto genérico."
                             )
-                # Prioridade das imagens (provedores cortam em 6–8): marca → logos dos apps → continuidade →
-                # pessoa → foto da oferta → inspiração. Mapa numerado vai no prompt.
+                if _typo and (s.get("title") or "").strip():
+                    try:
+                        from ..services import brand_fonts as _bfont2
+                        _spec = await asyncio.to_thread(_bfont2.specimen, _typo, s.get("title") or "",
+                                                        s.get("body") or s.get("subtitle") or "")
+                        if _spec:
+                            _refs.append(_spec); _ref_lbl.append("AMOSTRA DA TIPOGRAFIA OFICIAL (o título desta tela "
+                                                                 "na fonte da marca — copie o desenho das letras)")
+                    except Exception as _se:
+                        print(f"[estudio] amostra de tipografia falhou: {str(_se)[:100]}", flush=True)
+                # Prioridade das imagens (provedores cortam em 6–8): marca → tipografia → logos dos apps →
+                # continuidade → pessoa → foto da oferta → inspiração. Mapa numerado vai no prompt.
                 def _prio3(lbl):
-                    return (0 if lbl.startswith("LOGO OFICIAL da marca") else 1 if lbl.startswith("LOGO OFICIAL do app")
+                    return (0 if lbl.startswith("LOGO OFICIAL da marca") else 0.5 if lbl.startswith("AMOSTRA DA TIPOGRAFIA")
+                            else 1 if lbl.startswith("LOGO OFICIAL do app")
                             else 2 if lbl.startswith("primeira tela") else 3 if lbl.startswith("FOTO REAL")
                             else 4 if lbl.startswith("foto real") else 5)
                 _pairs3 = sorted(zip(_ref_lbl, _refs), key=lambda x: _prio3(x[0]))[:6]
@@ -2268,13 +2300,20 @@ async def _render_carousel_sync(request: Request):
                     + (f"CONTEXTO da oferta (use SÓ para entender o tema e compor a CENA/clima — NÃO renderize este "
                        f"texto na arte, NÃO escreva estes detalhes como legenda; o texto visível é apenas o listado "
                        f"acima): {_kb}. " if _kb else "")
-                    + "TIPOGRAFIA: use a identidade tipográfica da MARCA (das referências/manual) — NUNCA fonte genérica de IA. "
+                    + (_bfont_line(_typo) if _typo else
+                       "TIPOGRAFIA: use a identidade tipográfica da MARCA (das referências/manual) — NUNCA fonte genérica de IA. ")
                     + "As imagens de referência incluem as VERSÕES OFICIAIS da logo — ESCOLHA a versão que melhor se "
                       "integra ao fundo da sua composição e aplique-a LIMPA, sem faixa/painel/retângulo atrás. "
                     + ("Use as ARTES DE INSPIRAÇÃO apenas para abstrair ritmo, hierarquia, densidade e atmosfera. "
                        "Não copie literalmente texto, logo, personagem, oferta ou layout de terceiros. "
                        if ref_ctx.get("arts") else "")
-                    + (("RODAPÉ: NÃO escreva contato (telefone, WhatsApp, site, @) — deixe uma faixa LIVRE e limpa de "
+                    + ((f"RODAPÉ: o RODAPÉ OFICIAL da marca (logo + contato) é aplicado depois, idêntico ao das artes "
+                        f"dela. Deixe os ~{int(round(float(_footer_kit.get('frac') or 0.12) * 100)) + 2}% de baixo da arte "
+                        "como uma faixa LIVRE e LISA (continuação do fundo, cor sólida ou degradê suave), sem texto, "
+                        "logo, contato, foto de pessoa nem elementos importantes. NÃO coloque a logo da marca nem "
+                        "telefone/site no pé. "
+                        ) if _footer_kit else
+                       ("RODAPÉ: NÃO escreva contato (telefone, WhatsApp, site, @) — deixe uma faixa LIVRE e limpa de "
                         "~7% da altura no pé da arte, sem texto nem elementos importantes; o contato é aplicado depois. "
                         ) if (ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta")) else
                        (f"Assinatura discreta opcional no rodapé, copiada exatamente: {ref_ctx['contact'].split(' · ')[-1]}. NUNCA invente contato. "
@@ -2416,7 +2455,18 @@ async def _render_carousel_sync(request: Request):
                 try:
                     if ref_full:       # ESTÚDIO IA: arte COMPLETA da IA; só o rodapé de contato é carimbado (sempre certo)
                         png = img
-                        if ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
+                        if _typo and (_typo.get("reletter", True)) and (s.get("title") or "").strip():
+                            # 2ª passada só de LETREIRO: troca a "fonte de IA" pela fonte oficial (amostra)
+                            from ..services.brand_fonts import reletter as _relet
+                            _rl = await asyncio.to_thread(
+                                _relet, img, _typo, [(s.get("title") or ""), (s.get("body") or s.get("subtitle") or ""),
+                                                     (s.get("cta") or "")])
+                            if _rl:
+                                png = img = _rl
+                        if _footer_kit:      # rodapé ORIGINAL do cliente em TODAS as telas (como nas artes dele)
+                            from ..services.brand_footer import stamp as _fstamp
+                            png = await asyncio.to_thread(_fstamp, img, _footer_kit)
+                        elif ref_ctx.get("contact") and (total == 1 or i == total or stype == "cta"):
                             from ..services.layered_composer import stamp_contact as _stamp
                             png = await asyncio.to_thread(_stamp, img, ref_ctx["contact"])
                     elif use_composer:   # Marco 3: foto da IA + CARD de vidro (nível agência, texto legível, logo intacta)

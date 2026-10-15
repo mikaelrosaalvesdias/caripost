@@ -84,6 +84,80 @@ async def _links_for(pg, url: str, timeout_s: float = 45.0) -> List[Dict[str, st
         "els=>els.map(e=>({label:(e.innerText||'').trim(), href:e.href}))")
 
 
+VIEWER = "https://insta-stories-viewer.com/{h}/"
+VIEWER_IMG = "https://cdn.iqsaved.com/img2.php?url="
+
+
+async def profile_latest(handle: str, max_images: int = 10) -> Dict[str, Any]:
+    """SÓ COM O @: abre o perfil público num visualizador anônimo (insta-stories-viewer) e baixa as imagens dos
+    posts mais recentes (até 12, 1ª tela de cada carrossel, vídeo ignorado) em qualidade original (~1440 px).
+    → {user:{...}, items:[{post_id, content}]} ."""
+    import json as _json
+    from urllib.parse import quote as _q
+    from playwright.async_api import async_playwright
+    handle = (handle or "").strip().lstrip("@").strip("/")
+    frames: List[str] = []
+    edges: List[Dict[str, Any]] = []
+    user: Dict[str, Any] = {}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            pg = await browser.new_page(user_agent=UA)
+            pg.on("websocket", lambda ws: ws.on(
+                "framereceived", lambda d: frames.append(d if isinstance(d, str) else d.decode("utf8", "ignore"))))
+            await pg.route("**/*", lambda r: r.abort() if (
+                r.request.resource_type in ("image", "media", "font")
+                or any(k in r.request.url for k in _BLOCK + ("yandex",))) else r.continue_())
+            await pg.goto(VIEWER.format(h=handle), wait_until="domcontentloaded", timeout=45000)
+            clicked = False
+            for _ in range(70):                       # até ~35 s
+                await pg.wait_for_timeout(500)
+                for f in frames:
+                    m = re.match(r"42(\[.*\])$", f, re.S)
+                    if not m:
+                        continue
+                    try:
+                        ev = _json.loads(m.group(1))
+                        u = ((ev[1] or {}).get("data") or {}).get("user") or {}
+                    except Exception:
+                        continue
+                    if u:
+                        user = u
+                    for e in (u.get("edges") or []):
+                        if e.get("id") and all(x.get("id") != e.get("id") for x in edges):
+                            edges.append(e)
+                if edges:
+                    break
+                if user.get("is_private"):
+                    break
+                if user and not clicked:              # o feed de posts só vem ao abrir a aba "Publications"
+                    try:
+                        await pg.get_by_text("Publications", exact=True).first.click(timeout=3000)
+                        clicked = True
+                    except Exception:
+                        pass
+        finally:
+            await browser.close()
+    items: List[Dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True,
+                                 headers={"User-Agent": UA, "Referer": "https://insta-stories-viewer.com/"}) as http:
+        for e in edges:
+            if len(items) >= max_images:
+                break
+            if str(e.get("is_video")).lower() == "true" or not e.get("display_url"):
+                continue
+            try:
+                r = await http.get(VIEWER_IMG + _q(e["display_url"], safe=""))
+                if r.status_code == 200 and len(r.content) > 5000:
+                    items.append({"post_id": str(e.get("id")), "content": r.content,
+                                  "file": e.get("display_url_filename") or ""})
+            except Exception as exc:
+                print(f"[snap] perfil {handle}: imagem falhou {str(exc)[:100]}", flush=True)
+    print(f"[snap] perfil @{handle}: {len(edges)} posts vistos, {len(items)} imagens", flush=True)
+    return {"user": {k: user.get(k) for k in ("username", "full_name", "is_private", "edges_count", "biography")},
+            "items": items}
+
+
 def _origin_url(href: str) -> str:
     """O link do snapinsta (rapidcdn) carrega no JWT a URL original do CDN do Instagram. O rapidcdn às vezes devolve
     o MESMO arquivo para telas diferentes do carrossel, então baixa-se direto da origem."""

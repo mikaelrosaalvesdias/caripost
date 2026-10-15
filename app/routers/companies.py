@@ -2214,8 +2214,44 @@ def _auto_fetch_logo(company_id: str, website: str) -> Optional[str]:
 
 
 def _ig_import(company_id: str, handle: str, kind: str = "reference", count: int = 4) -> Dict[str, Any]:
-    """Compatibility wrapper for the official, house-authorized research path."""
-    return _instagram_research_import(company_id, _instagram_handle(handle), kind, count)
+    """Oficial (Meta) quando houver conexão de pesquisa; senão — ou se não trouxer nada — o perfil PÚBLICO via
+    visualizador anônimo (só o @, sem login de ninguém): até `count` artes recentes em qualidade original."""
+    handle = _instagram_handle(handle)
+    res = _instagram_research_import(company_id, handle, kind, count)
+    if int(res.get("refs") or 0) > 0 or not handle:
+        return res
+    pub = _ig_public_import(company_id, handle, kind, count)
+    if pub.get("refs") or pub.get("status") != "not_available":
+        return {**pub, "logo": int(res.get("logo") or 0)}
+    return res
+
+
+def _ig_public_import(company_id: str, handle: str, kind: str = "reference", count: int = 10) -> Dict[str, Any]:
+    import asyncio
+    from ..services import insta_snap
+    try:
+        got = asyncio.run(insta_snap.profile_latest(handle, max_images=max(1, min(12, count))))
+    except Exception as exc:
+        return {"status": "not_available", "reason": "public_profile_failed", "detail": str(exc)[:200],
+                "handle": handle, "logo": 0, "refs": 0}
+    user = got.get("user") or {}
+    if user.get("is_private"):
+        return {"status": "not_available", "reason": "private_profile", "detail": "Perfil privado.",
+                "handle": handle, "logo": 0, "refs": 0}
+    added = 0
+    for it in got.get("items") or []:
+        if _save_reference_image(
+            company_id, it["content"], source="INSTAGRAM", source_url=f"https://www.instagram.com/{handle}/",
+            source_key=f"instagram:public:{handle}:{it['file'] or it['post_id']}",
+            metadata={"from": f"instagram:@{handle}", "kind": kind, "external_id": it["post_id"], "confidence": 1.0,
+                      "rights_basis": "public_profile", "review_status": "approved",
+                      "owner_scope": "own" if kind == "own" else "prospect_or_client", "allowed_use": "analysis_only"},
+        ):
+            added += 1
+    if not got.get("items"):
+        return {"status": "not_available", "reason": "no_public_posts", "handle": handle, "logo": 0, "refs": 0}
+    return {"status": "added" if added else "already_current", "reason": "", "handle": handle,
+            "refs": added, "logo": 0, "mode": "public_profile"}
 
 
 @router.post("/{company_id}/import-instagram")
@@ -2257,6 +2293,12 @@ def _refs_changed(company_id: str) -> None:
         _old = (((_co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}).get("visual_dna") or {}
         if not _old.get("edited"):
             _vd.save(company_id, {})
+        from ..services import brand_footer as _bf, brand_fonts as _bfo
+        _design = (((company_get(company_id) or {}).get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}
+        if not (_design.get("footer_kit") or {}).get("edited"):
+            _bf.save_kit(company_id, {})            # rodapé original redetectado com as artes novas
+        if not (_design.get("typography") or {}).get("edited"):
+            _bfo.save(company_id, {})               # tipografia original reidentificada
     except Exception:
         pass
 
@@ -2270,6 +2312,17 @@ def _snap_import_run(job_id: str, company_id: str, urls: List[str], handle: str,
     job = _SNAP_JOBS[job_id]
     try:
         if not urls:
+            job["stage"] = "abrindo o perfil"
+            pub = _ig_public_import(company_id, handle, "own", count)
+            if pub.get("refs") or pub.get("status") == "already_current":
+                if pub.get("refs"):
+                    _refs_changed(company_id)
+                job.update(status="done", refs=int(pub.get("refs") or 0), images=int(pub.get("refs") or 0),
+                           stage="pronto", mode="public_profile")
+                return
+            if pub.get("reason") == "private_profile":
+                job.update(status="error", error="Perfil privado — não dá para ver as artes sem seguir.")
+                return
             job["stage"] = "buscando posts"
             urls = insta_snap.discover_posts(handle, (company_get(company_id) or {}).get("name") or "", limit=count)
             job["found"] = len(urls)
@@ -2315,7 +2368,8 @@ async def import_instagram_posts(company_id: str, request: Request):
     except Exception:
         body = {}
     from ..services import insta_snap
-    raw_handle = str(body.get("handle") or "").strip()
+    raw_handle = str(body.get("handle") or "").strip() or str(
+        ((company_get(company_id) or {}).get("socials") or {}).get("instagram") or "").strip()   # o @ do cadastro
     urls = insta_snap.normalize_post_urls([str(body.get("urls") or ""), raw_handle])
     handle = "" if insta_snap.normalize_post_urls(raw_handle) else _instagram_handle(raw_handle)
     count = max(1, min(30, int(body.get("count") or 24)))
@@ -2326,6 +2380,98 @@ async def import_instagram_posts(company_id: str, request: Request):
                           "done": 0, "total": len(urls), "images": 0, "refs": 0, "handle": handle}
     threading.Thread(target=_snap_import_run, args=(job_id, company_id, urls[:30], handle, count), daemon=True).start()
     return {"job_id": job_id, **_SNAP_JOBS[job_id]}
+
+
+def _brand_identity_view(company_id: str) -> Dict[str, Any]:
+    design = (((company_get(company_id) or {}).get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}
+    typo = design.get("typography") or {}
+    kit = design.get("footer_kit") or {}
+    return {"typography": {k: typo.get(k) for k in ("title", "body", "confidence", "method", "edited", "at", "ranking")}
+            if typo.get("title") else None,
+            "footer": {k: kit.get(k) for k in ("light", "dark", "frac", "n", "of", "enabled", "edited", "at")}
+            if (kit.get("light") or kit.get("dark")) else None}
+
+
+@router.get("/{company_id}/brand-identity")
+async def brand_identity_get(company_id: str, request: Request):
+    """Rodapé original + tipografia original extraídos das artes do cliente."""
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    return _brand_identity_view(company_id)
+
+
+@router.put("/{company_id}/brand-identity")
+async def brand_identity_put(company_id: str, request: Request):
+    """{title:{family,weight,caps}, body:{family,weight}} ajusta a fonte (Google Fonts) e trava contra redetecção;
+    {footer_enabled: bool} liga/desliga o rodapé original; {redetect: "footer"|"typography"|"all"} refaz do zero."""
+    import asyncio as _aio
+    err = _api_key_required(request)
+    if err:
+        return err
+    denied = _company_scope_required(request, company_id)
+    if denied:
+        return denied
+    co = company_get(company_id)
+    if not co:
+        return JSONResponse({"detail": "Empresa não encontrada"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    from ..services import brand_fonts as _bfo, brand_footer as _bf
+    design = (((co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {})
+    red = body.get("redetect")
+    if red in ("footer", "all"):
+        _bf.save_kit(company_id, {})
+        await _aio.to_thread(_bf.ensure, company_get(company_id))
+    if red in ("typography", "all"):
+        _bfo.save(company_id, {})
+        await _aio.to_thread(_bfo.ensure, company_get(company_id))
+    if "footer_enabled" in body:
+        kit = dict(design.get("footer_kit") or {})
+        kit.update(enabled=bool(body["footer_enabled"]), edited=True)
+        _bf.save_kit(company_id, kit)
+    if body.get("title") or body.get("body"):
+        typo = dict(((((company_get(company_id) or {}).get("brand_kit") or {}).get("creative_config") or {})
+                     .get("design") or {}).get("typography") or {})
+        d = _bfo._dir()
+        for key, dw in (("title", 800), ("body", 400)):
+            sel = body.get(key) or {}
+            fam = str(sel.get("family") or "").strip()
+            if not fam:
+                continue
+            w = int(sel.get("weight") or dw)
+            path = await _aio.to_thread(_bfo.fetch_ttf, fam, w, d)
+            if not path:
+                return JSONResponse({"detail": f"Não achei a fonte “{fam}” no Google Fonts."}, status_code=422)
+            typo[key] = {"family": fam, "weight": w, "file": path.replace(_bfo.MEDIA_ROOT, "/uploads", 1),
+                         "caps": bool(sel.get("caps", (typo.get(key) or {}).get("caps", False)))}
+        if not typo.get("body") and typo.get("title"):
+            typo["body"] = dict(typo["title"], weight=400)
+        typo.update(edited=True, method="manual", at=datetime.now(timezone.utc).isoformat())
+        _bfo.save(company_id, typo)
+    return _brand_identity_view(company_id)
+
+
+@router.get("/{company_id}/brand-identity/specimen")
+async def brand_identity_specimen(company_id: str, request: Request, family: str = "", weight: int = 800,
+                                  text: str = "Turbine sua oferta"):
+    """Prévia PNG de uma fonte do Google Fonts com um texto (para escolher no cadastro)."""
+    import asyncio as _aio
+    from fastapi.responses import Response
+    err = _api_key_required(request)
+    if err:
+        return err
+    from ..services import brand_fonts as _bfo
+    path = await _aio.to_thread(_bfo.fetch_ttf, family, int(weight), _bfo._dir()) if family else None
+    if not path:
+        return JSONResponse({"detail": "fonte não encontrada"}, status_code=404)
+    png = _bfo.specimen({"title": {"file": path}}, text[:60])
+    return Response(content=png or b"", media_type="image/png")
 
 
 @router.get("/{company_id}/import-instagram-posts/{job_id}")
@@ -2422,7 +2568,7 @@ def _run_company_enrichment(
     instagram_stats: Dict[str, Any] = {"status": "not_applicable", "logo": 0, "refs": 0}
     if instagram:
         try:
-            instagram_stats = _ig_import(company_id, instagram, "own", 4)
+            instagram_stats = _ig_import(company_id, instagram, "own", 10)
             references_added += int(instagram_stats.get("refs") or 0)
             source_results["instagram"] = dict(instagram_stats)
         except Exception as exc:
@@ -2445,7 +2591,7 @@ def _run_company_enrichment(
             source_results["facebook"] = dict(facebook_stats)
     facebook_logo = int(facebook_stats.get("logo") or 0)
     if references_added:
-        _spawn_reference_analysis(company_id)
+        _refs_changed(company_id)
 
     after_logos = list(asset_list_logos(company_id) or [])
     logo_ids = {logo.get("id") for logo in after_logos}

@@ -2267,6 +2267,78 @@ function CompanyLogos({ company, onSaved, onLogosLoaded }) {
   </div>;
 }
 
+// Identidade ORIGINAL extraída das artes do cliente: rodapé (colado idêntico) e tipografia (fonte real).
+const BI_WEIGHTS = [400, 500, 600, 700, 800, 900];
+function useGoogleFont(family, weight) {
+  React.useEffect(() => {
+    if (!family) return;
+    const id = 'gf-' + family.replace(/\s+/g, '-') + '-' + weight;
+    if (document.getElementById(id)) return;
+    const l = document.createElement('link');
+    l.id = id; l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(family).replace(/%20/g, '+') + ':wght@' + weight + '&display=swap';
+    document.head.appendChild(l);
+  }, [family, weight]);
+}
+function BrandIdentityCard({ company, refreshKey }) {
+  const [bi, setBi] = React.useState(null);
+  const [edit, setEdit] = React.useState(null);
+  const [busy, setBusy] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const load = React.useCallback(() => window.mpApi.brandIdentity(company.id).then(setBi).catch(() => setBi({})), [company.id]);
+  React.useEffect(() => { load(); }, [load, refreshKey]);
+  const t = bi?.typography?.title, b = bi?.typography?.body, f = bi?.footer;
+  const cur = edit || { tf: t?.family || '', tw: t?.weight || 800, bf: b?.family || '', bw: b?.weight || 400 };
+  useGoogleFont(cur.tf, cur.tw); useGoogleFont(cur.bf, cur.bw);
+  async function save(payload, label) {
+    setBusy(label); setErr('');
+    try { setBi(await window.mpApi.saveBrandIdentity(company.id, payload)); setEdit(null); }
+    catch (e) { setErr(e.message); } finally { setBusy(''); }
+  }
+  if (!bi) return null;
+  return <div className="card stack" style={{ padding: 12, gap: 10 }}>
+    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+      <div style={{ fontWeight: 700 }}>Identidade original da marca</div>
+      <button className="btn sm" disabled={!!busy} onClick={() => save({ redetect: 'all' }, 'redetect')}>{busy === 'redetect' ? 'Analisando…' : 'Detectar de novo'}</button>
+    </div>
+    <span className="hint">Tirada das artes que o cliente já publica. O Estúdio IA cola este rodapé idêntico em todas as artes e escreve os títulos nesta fonte.</span>
+    <div className="stack" style={{ gap: 6 }}>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>Rodapé</div>
+      {f ? <>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {f.light && <img src={f.light.url} style={{ maxWidth: 360, width: '100%', background: '#f4f4f4', borderRadius: 6, border: '1px solid var(--line)' }} />}
+          {f.dark && <img src={f.dark.url} style={{ maxWidth: 360, width: '100%', background: '#161616', borderRadius: 6 }} />}
+        </div>
+        <label className="row" style={{ gap: 6, alignItems: 'center' }}>
+          <input type="checkbox" checked={f.enabled !== false} disabled={!!busy} onChange={e => save({ footer_enabled: e.target.checked }, 'footer')} />
+          <span className="hint">Aplicar este rodapé nas artes (achado igual em {f.n} de {f.of} artes)</span>
+        </label>
+      </> : <span className="hint">Nenhum rodapé repetido nas artes importadas. Fica o rodapé de contato padrão.</span>}
+    </div>
+    <div className="stack" style={{ gap: 6 }}>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>Tipografia {bi.typography?.edited ? <span className="hint">(ajustada à mão)</span> : bi.typography ? <span className="hint">(detectada automaticamente, confira)</span> : null}</div>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="hint" style={{ width: 60 }}>Títulos</span>
+        <input className="inp" style={{ maxWidth: 190 }} placeholder="ex.: Exo 2" value={cur.tf} onChange={e => setEdit({ ...cur, tf: e.target.value })} />
+        <select className="inp" style={{ maxWidth: 90 }} value={cur.tw} onChange={e => setEdit({ ...cur, tw: +e.target.value })}>{BI_WEIGHTS.map(w => <option key={w} value={w}>{w}</option>)}</select>
+        <span style={{ fontFamily: `'${cur.tf}', sans-serif`, fontWeight: cur.tw, fontSize: 24 }}>Turbine sua oferta</span>
+      </div>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="hint" style={{ width: 60 }}>Texto</span>
+        <input className="inp" style={{ maxWidth: 190 }} placeholder="ex.: Exo 2" value={cur.bf} onChange={e => setEdit({ ...cur, bf: e.target.value })} />
+        <select className="inp" style={{ maxWidth: 90 }} value={cur.bw} onChange={e => setEdit({ ...cur, bw: +e.target.value })}>{BI_WEIGHTS.map(w => <option key={w} value={w}>{w}</option>)}</select>
+        <span style={{ fontFamily: `'${cur.bf}', sans-serif`, fontWeight: cur.bw, fontSize: 16 }}>de todo o Brasil já estão turbinando</span>
+      </div>
+      {edit && <div className="row" style={{ gap: 6 }}>
+        <button className="btn sm pri" disabled={!!busy || !cur.tf.trim()} onClick={() => save({ title: { family: cur.tf.trim(), weight: cur.tw }, body: { family: (cur.bf || cur.tf).trim(), weight: cur.bw } }, 'font')}>{busy === 'font' ? 'Salvando…' : 'Usar esta fonte'}</button>
+        <button className="btn sm" onClick={() => setEdit(null)}>Cancelar</button>
+      </div>}
+      <span className="hint">Nome exatamente como no Google Fonts. A prévia ao lado mostra como fica.</span>
+    </div>
+    {err && <div className="hint" style={{ color: 'var(--red)' }}>{err}</div>}
+  </div>;
+}
+
 function CompanyVisual({ company, onSaved }) {
   const bk = company.brand_kit || {};
   const colors = bk.colors || {};
@@ -2292,8 +2364,8 @@ function CompanyVisual({ company, onSaved }) {
   async function importIg() {
     setIgBusy(true); setMsg('');
     try {
-      const r = await window.mpApi.importInstagramPosts(company.id, { handle: igHandle, urls: igLinks, count: 24 },
-        j => setMsg(j.total ? `Baixando posts… ${j.done || 0}/${j.total} (${j.images || 0} imagem(ns))` : 'Procurando posts do perfil…'));
+      const r = await window.mpApi.importInstagramPosts(company.id, { handle: igHandle.trim() || (company.socials || {}).instagram || '', urls: igLinks, count: 10 },
+        j => setMsg(j.total ? `Baixando posts… ${j.done || 0}/${j.total} (${j.images || 0} imagem(ns))` : 'Abrindo o perfil e baixando as artes…'));
       setMsg(`✓ ${r.refs} arte(s) nova(s) importada(s)${r.images > r.refs ? ` (${r.images - r.refs} já existiam)` : ''}. O DNA visual será refeito com elas.`); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setIgBusy(false); }
@@ -2491,13 +2563,17 @@ function CompanyVisual({ company, onSaved }) {
           <span key={i} title={c} style={{ width: 24, height: 24, borderRadius: 6, background: c, border: '1px solid var(--line)' }} />)}
       </div>}
     </div>}
+    <BrandIdentityCard company={company} refreshKey={(company.references || []).length} />
     <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-      <input className="inp" style={{ maxWidth: 240 }} placeholder="@perfil de referência" value={igHandle} onChange={e => setIgHandle(e.target.value)} />
-      <button className="btn sm pri" disabled={igBusy || (!igHandle.trim() && !igLinks.trim())} onClick={importIg}>{igBusy ? 'Importando…' : 'Importar artes'}</button>
+      <input className="inp" style={{ maxWidth: 240 }} placeholder={'@' + ((company.socials || {}).instagram || 'perfil').replace(/^@/, '').split('/').filter(Boolean).pop()} value={igHandle} onChange={e => setIgHandle(e.target.value)} />
+      <button className="btn sm pri" disabled={igBusy || (!igHandle.trim() && !igLinks.trim() && !(company.socials || {}).instagram)} onClick={importIg}>{igBusy ? 'Importando…' : 'Importar artes do Instagram'}</button>
+      <span className="hint">Só o @: o Caripost abre o perfil público, baixa as 10 artes mais recentes em qualidade original e refaz o DNA, o rodapé e a tipografia da marca. Ninguém precisa fazer login.</span>
     </div>
-    <textarea className="inp" rows={3} placeholder={'Links dos posts (um por linha) — no Instagram: ⋯ → Copiar link\nhttps://www.instagram.com/p/…'}
-      value={igLinks} onChange={e => setIgLinks(e.target.value)} />
-    <span className="hint">Baixa as artes em qualidade original, sem login de ninguém (carrossel traz todas as telas; vídeo é ignorado). Com links colados você escolhe as artes; só com o @ o Caripost tenta achar os posts sozinho.</span>
+    <details>
+      <summary className="hint" style={{ cursor: 'pointer' }}>Escolher posts específicos (opcional)</summary>
+      <textarea className="inp" rows={3} style={{ marginTop: 6 }} placeholder={'Links dos posts (um por linha) — no Instagram: ⋯ → Copiar link\nhttps://www.instagram.com/p/…'}
+        value={igLinks} onChange={e => setIgLinks(e.target.value)} />
+    </details>
     <input type="file" accept="image/*" onChange={e => e.target.files[0] && doUploadRef(e.target.files[0])} />
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 12 }}>
       {refs.map(r => {

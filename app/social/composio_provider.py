@@ -600,7 +600,7 @@ class ComposioSocialProvider:
             # endpoint keeps Composio's same-domain proxy guard intact.
             "endpoint": f"/{graph_version}/{ig_user_id}",
             "method": "GET",
-            "parameters": [{"name": "fields", "value": fields, "in": "query"}],
+            "parameters": [{"name": "fields", "value": fields, "type": "query"}],
         }
         response = await self._request("POST", "/tools/execute/proxy", json=payload)
         status = int(response.get("status") or 200)

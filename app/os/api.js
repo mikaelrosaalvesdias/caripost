@@ -1493,6 +1493,12 @@
     async importInstagram(companyId, payload) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/import-instagram', { method: 'POST', body: JSON.stringify(payload || {}) });
     },
+    async brandIdentity(companyId) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/brand-identity');
+    },
+    async saveBrandIdentity(companyId, payload) {
+      return mpFetch('/api/companies/' + _enc(companyId) + '/brand-identity', { method: 'PUT', body: JSON.stringify(payload || {}) });
+    },
     async importInstagramPosts(companyId, payload, onProgress) {
       const base = '/api/companies/' + _enc(companyId) + '/import-instagram-posts';
       let job = await mpFetch(base, { method: 'POST', body: JSON.stringify(payload || {}) });
