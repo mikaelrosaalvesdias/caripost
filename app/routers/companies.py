@@ -1873,7 +1873,9 @@ def _instagram_research_import(
         ):
             result["logo"] = 1
     for item in profile.get("media") or []:
-        media_url = item.get("media_url") if item.get("media_type") == "IMAGE" else item.get("thumbnail_url")
+        # IMAGE e CAROUSEL_ALBUM trazem media_url (1ª tela do carrossel); VIDEO/REELS só thumbnail_url
+        media_url = (item.get("media_url") if item.get("media_type") in ("IMAGE", "CAROUSEL_ALBUM")
+                     else item.get("thumbnail_url")) or item.get("media_url")
         media_id = str(item.get("id") or "")
         if not media_url or not media_id:
             continue
@@ -2235,7 +2237,7 @@ async def import_instagram(company_id: str, request: Request):
     handle = (body.get("handle") or (company_get(company_id).get("socials") or {}).get("instagram") or "").strip()
     kind = (body.get("kind") or "reference").strip()
     import asyncio as _aio
-    res = await _aio.to_thread(_ig_import, company_id, handle, kind, int(body.get("count") or 4))
+    res = await _aio.to_thread(_ig_import, company_id, handle, kind, min(30, int(body.get("count") or 24)))
     if res.get("status") in ("action_required", "not_available"):
         return JSONResponse({
             "detail": res.get("detail") or "Este perfil não está disponível pela pesquisa oficial da Meta.",
@@ -2244,6 +2246,14 @@ async def import_instagram(company_id: str, request: Request):
         }, status_code=422)
     if res.get("refs"):
         _spawn_reference_analysis(company_id)
+        try:   # artes novas → DNA visual refeito no próximo render (a menos que tenha sido editado à mão)
+            from ..services import visual_dna as _vd
+            _co = company_get(company_id) or {}
+            _old = (((_co.get("brand_kit") or {}).get("creative_config") or {}).get("design") or {}).get("visual_dna") or {}
+            if not _old.get("edited"):
+                _vd.save(company_id, {})
+        except Exception:
+            pass
     return res
 
 

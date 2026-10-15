@@ -586,7 +586,7 @@ class ComposioSocialProvider:
                 detail={"reason": reason, "eligible_pages": len(candidates)},
             )
         ig_user_id = str(candidates[0][1]["id"])
-        media_limit = max(1, min(int(media_limit or 6), 12))
+        media_limit = max(1, min(int(media_limit or 6), 30))
         fields = (
             f"business_discovery.username({clean_handle})"
             "{id,username,name,biography,website,profile_picture_url,followers_count,media_count,"
@@ -667,7 +667,7 @@ class ComposioSocialProvider:
         if isinstance(profile.get("data"), dict) and not profile.get("id"):
             profile = profile["data"]
         ig_user_id = str(profile.get("id") or profile.get("ig_user_id") or "me")
-        media_limit = max(1, min(int(media_limit or 6), 12))
+        media_limit = max(1, min(int(media_limit or 6), 30))
         fields = (
             "id,caption,media_type,media_product_type,media_url,thumbnail_url,"
             "permalink,timestamp,username,children{media_url,media_type,thumbnail_url}"

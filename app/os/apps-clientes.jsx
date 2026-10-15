@@ -2291,7 +2291,7 @@ function CompanyVisual({ company, onSaved }) {
   async function importIg() {
     setIgBusy(true); setMsg('');
     try {
-      const r = await window.mpApi.importInstagram(company.id, { handle: igHandle, kind: 'reference', count: 4 });
+      const r = await window.mpApi.importInstagram(company.id, { handle: igHandle, kind: 'reference', count: 24 });
       setMsg(`✓ ${r.refs} referência(s) encontrada(s) em @${r.handle}. Aprove abaixo as que devem orientar a IA.`); onSaved();
     } catch (e) { setMsg('Erro: ' + e.message); }
     finally { setIgBusy(false); }
