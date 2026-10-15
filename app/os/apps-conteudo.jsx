@@ -912,7 +912,7 @@ function StepBriefing({ company }) {
         sub={`Escreva a ideia e a IA monta o plano de conteúdo para ${company.name}.`}
         right={<Segmented value={mode} onChange={m => { setMode(m); persist({ briefingMode: m }); }}
           options={[['auto', 'Automático'], ['manual', 'Manual']]} />} />
-      {mode === 'auto' && <IdeaInput value={idea} onChange={v => { setIdea(v); persist({ idea: v }); }}
+      {mode === 'auto' && <IdeaInput companyId={company.id} value={idea} onChange={v => { setIdea(v); persist({ idea: v }); }}
         onGenerate={gerarAuto} busy={busy}
         seeds={['foco em família', 'tom leve', 'destacar o preço', 'urgência', 'prova social']} />}
       {mode === 'auto' && <Field label="Assunto / pauta (foca a IA no tema — opcional)">

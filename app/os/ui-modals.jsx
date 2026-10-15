@@ -388,9 +388,59 @@ function FlowHead({ icon, title, sub, right }) {
    e a IA transforma em briefing estruturado.
    props: value, onChange, onGenerate, busy, seeds[], max, label, sub
    ───────────────────────────────────────────────────────────── */
-function IdeaInput({ value = '', onChange, onGenerate, busy, seeds = [], max = 600,
-                     label = 'Qual é a ideia?', sub = 'Escreva com suas palavras — a IA transforma em briefing.' }) {
+// Microfone: grava no navegador e transcreve no servidor (Whisper local, PT-BR). Clique para começar, clique para parar.
+function MicButton({ onText, disabled, companyId }) {
+  const [st, setSt] = React.useState('idle');      // idle | rec | busy
+  const [sec, setSec] = React.useState(0);
+  const [err, setErr] = React.useState('');
+  const rec = React.useRef(null);
+  const timer = React.useRef(null);
+  React.useEffect(() => () => { clearInterval(timer.current); try { rec.current && rec.current.stream.getTracks().forEach(t => t.stop()); } catch (e) {} }, []);
+  async function start() {
+    setErr('');
+    if (!navigator.mediaDevices || !window.MediaRecorder) { setErr('Este navegador não grava áudio.'); return; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { setErr('Libere o microfone no navegador (ícone de cadeado na barra de endereço).'); return; }
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find(m => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks = [];
+    mr.ondataavailable = e => e.data && e.data.size && chunks.push(e.data);
+    mr.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      clearInterval(timer.current);
+      const blob = new Blob(chunks, { type: mr.mimeType || mime || 'audio/webm' });
+      setSt('busy');
+      try {
+        const r = await window.mpApi.transcribeVoice(blob, companyId);
+        if ((r.text || '').trim()) onText(r.text.trim()); else setErr('Não entendi o áudio — tente falar mais perto.');
+      } catch (e) { setErr(e.message); }
+      finally { setSt('idle'); }
+    };
+    rec.current = mr;
+    mr.start();
+    setSec(0); setSt('rec');
+    timer.current = setInterval(() => setSec(s => { if (s + 1 >= 300) { try { mr.stop(); } catch (e) {} } return s + 1; }), 1000);
+  }
+  function stop() { try { rec.current && rec.current.state === 'recording' && rec.current.stop(); } catch (e) {} }
+  const label = st === 'rec' ? `Parar · ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : st === 'busy' ? 'Transcrevendo…' : 'Falar';
+  return <span className="row" style={{ gap: 6, alignItems: 'center' }}>
+    <button type="button" className={'btn sm' + (st === 'rec' ? ' pri' : ' ghost')} disabled={disabled || st === 'busy'}
+      onClick={st === 'rec' ? stop : start} title="Dite a ideia — o texto entra na caixa"
+      style={st === 'rec' ? { animation: 'pulse 1.2s ease-in-out infinite' } : null}>
+      <Icon name="mic" />{label}
+    </button>
+    {err && <small className="hint" style={{ color: 'var(--red)' }}>{err}</small>}
+  </span>;
+}
+
+function IdeaInput({ value = '', onChange, onGenerate, busy, seeds = [], max = 1500, companyId,
+                     label = 'Qual é a ideia?', sub = 'Escreva ou fale com suas palavras — a IA transforma em briefing.' }) {
   const ref = React.useRef(null);
+  function addSpoken(t) {
+    const next = value ? value.replace(/\s*$/, '') + ' ' + t : t;
+    onChange && onChange(next.slice(0, max));
+  }
   function seed(t) {
     const next = value ? value.replace(/\s*$/, '') + ' ' + t : t;
     onChange && onChange(next.slice(0, max));
@@ -412,6 +462,7 @@ function IdeaInput({ value = '', onChange, onGenerate, busy, seeds = [], max = 6
         <button className="btn pri" disabled={busy || !value.trim()} onClick={onGenerate}>
           <Icon name="sparkles" />{busy ? 'Escrevendo…' : 'Transformar em briefing'}
         </button>
+        <MicButton onText={addSpoken} disabled={busy} companyId={companyId} />
         {value && <button className="btn ghost sm" disabled={busy} onClick={() => onChange && onChange('')}>Limpar</button>}
         <span className="cnt">{value.length}/{max}</span>
       </div>
@@ -422,7 +473,7 @@ function IdeaInput({ value = '', onChange, onGenerate, busy, seeds = [], max = 6
 Object.assign(window, {
   RingLoader, ProcessModal, AnalyzeLoadingModal,
   Modal, Confirm, Lightbox, EmptyState, SkeletonRows,
-  Callout, Segmented, CostConfirm, OfferPick, ReviewCard, ArtCard, FlowHead, IdeaInput,
+  Callout, Segmented, CostConfirm, OfferPick, ReviewCard, ArtCard, FlowHead, IdeaInput, MicButton,
   mpFmtSec, mpFmtEta,
 });
 

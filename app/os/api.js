@@ -1493,6 +1493,13 @@
     async importInstagram(companyId, payload) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/import-instagram', { method: 'POST', body: JSON.stringify(payload || {}) });
     },
+    async transcribeVoice(blob, companyId) {
+      const fd = new FormData();
+      if (companyId) fd.append('company_id', companyId);
+      const ext = ((blob.type || '').split('/')[1] || 'webm').split(';')[0];
+      fd.append('audio', blob, 'voz.' + ext);
+      return mpFetch('/api/posts/transcribe-voice', { method: 'POST', body: fd });
+    },
     async brandIdentity(companyId) {
       return mpFetch('/api/companies/' + _enc(companyId) + '/brand-identity');
     },

@@ -319,6 +319,65 @@ def _overlay_logo(image_bytes: bytes, logo_path: str, position: str = "top-right
 router = APIRouter(prefix="/api/posts", tags=["posts"])
 
 
+@router.post("/transcribe-voice")
+async def transcribe_voice(request: Request):
+    """Microfone do Briefing: áudio gravado no navegador (webm/ogg/mp4) → texto em PT-BR.
+    Whisper LOCAL (faster-whisper, CPU, custo zero) — o mesmo modelo já usado na transcrição de vídeos."""
+    import tempfile
+    err = _api_key_required(request)
+    if err:
+        return err
+    form = await request.form()
+    up = form.get("audio")
+    if up is None or not hasattr(up, "read"):
+        return JSONResponse({"detail": "Envie o áudio no campo 'audio'."}, status_code=422)
+    raw = await up.read()
+    if not raw or len(raw) < 800:
+        return JSONResponse({"detail": "Áudio vazio — segure o microfone e fale."}, status_code=422)
+    if len(raw) > 25 * 1024 * 1024:
+        return JSONResponse({"detail": "Áudio longo demais (máx. ~10 min)."}, status_code=413)
+    vocab = ""
+    cid = str(form.get("company_id") or "").strip()
+    if cid and not __cad__(request, cid):
+        try:          # nomes da empresa e dos produtos → o Whisper escreve "Zapping", "ExitLag"… certo
+            from ..db_companies import company_get as _cg, product_list as _pl
+            names = [(_cg(cid) or {}).get("name") or ""] + [(p.get("name") or "") for p in (_pl(cid) or [])]
+            vocab = ", ".join(n for n in names if n)[:400]
+        except Exception:
+            vocab = ""
+    suffix = "." + ((getattr(up, "filename", "") or "a.webm").rsplit(".", 1)[-1] or "webm")[:5]
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, dir="/media/_tmp" if os.path.isdir("/media/_tmp") else None) as f:
+        f.write(raw)
+        path = f.name
+
+    def _run() -> str:
+        import subprocess
+        import numpy as np
+        from .. import main as _m
+        # ffmpeg → PCM 16 kHz mono (o PyAV do container não abre webm/mp3 direto no faster-whisper)
+        pcm = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", path, "-f", "s16le", "-ac", "1",
+                              "-ar", "16000", "-"], capture_output=True, timeout=120).stdout
+        if len(pcm) < 3200:
+            return ""
+        audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+        model = _m._get_local_whisper()
+        segs, _info = model.transcribe(audio, language="pt", vad_filter=True, beam_size=5,
+                                       initial_prompt="Ideia de post para Instagram de uma empresa brasileira."
+                                       + (f" Nomes: {vocab}." if vocab else ""))
+        return " ".join(s.text.strip() for s in segs).strip()
+
+    try:
+        text = await asyncio.to_thread(_run)
+    except Exception as exc:
+        return JSONResponse({"detail": "Não consegui transcrever: " + str(exc)[:200]}, status_code=424)
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+    return {"text": text}
+
+
 def _resolve_offer_refs(request: Request, body: Dict[str, Any], target_company_id: str):
     """Valida e materializa as ofertas escolhidas explicitamente no briefing.
 
